@@ -1,0 +1,38 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 0,
+  "workspaces": {
+    "": {
+      "name": "@kyoso/cli",
+      "dependencies": {
+        "@agentclientprotocol/sdk": "1.0.0",
+        "@modelcontextprotocol/server": "2.0.0-alpha.3",
+        "typescript": "6.0.3",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "prettier": "3.9.1",
+      },
+    },
+  },
+  "packages": {
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.0.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-5FHgLbLZhSAq9F+9SU7AOCXTDzaw/IYx/AvMjrZDs/YFZ9ZPxkdn9ti3fSkny0huHfj2hrqF6pqdns9gN5/Fig=="],
+
+    "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.0.0-alpha.3", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-PYdVDA6x3joCy/rw1mGdMSvqisPKlmt5QN/ILcT8R7efgvmhij14L87lJrWAm4pszaThzwpV49BmBBTZWtlY3A=="],
+
+    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
+
+    "@types/node": ["@types/node@26.0.1", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-fc3KiUoBt6kie0N9bIW3E47vZsuaMf0PM2AaUpLCLT0s/LvX1nxAim6Fc049cNxODPpGm6qRAuUOB86SkRuPQw=="],
+
+    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
+
+    "prettier": ["prettier@3.9.1", "", { "bin": { "prettier": "bin/prettier.cjs" } }, "sha512-ppiDo2CSwexck1eyZUwJHg/N3nf1+6IRCv7W/VJ5vaLnVCmB7+3CdRfMwoCHBBX6xTrREDTksZ4OZl5SSf4zXA=="],
+
+    "typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
+
+    "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
+
+    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+  }
+}

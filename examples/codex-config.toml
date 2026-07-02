@@ -1,0 +1,11 @@
+[mcp_servers.kyoso]
+command = "npx"
+args = ["-y", "@kyoso/cli", "mcp"]
+env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
+startup_timeout_sec = 20
+tool_timeout_sec = 300
+enabled = true
+
+# Bun alternative:
+# command = "bunx"
+# args = ["@kyoso/cli", "mcp"]

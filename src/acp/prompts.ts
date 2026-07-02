@@ -1,6 +1,10 @@
 import type { KyosoReviewRequest, ReviewTool } from "../core/types.js";
 
-export function buildAgentPrompt(tool: ReviewTool, request: KyosoReviewRequest, agent: "codex" | "claude"): string {
+export function buildAgentPrompt(
+  tool: ReviewTool,
+  request: KyosoReviewRequest,
+  agent: "codex" | "claude",
+): string {
   const shared = [
     "You are running as a Kyoso child reviewer.",
     "Do not edit files.",
@@ -9,6 +13,7 @@ export function buildAgentPrompt(tool: ReviewTool, request: KyosoReviewRequest, 
     "Review only the provided context and return structured review output.",
     "If information is insufficient, say so and lower confidence.",
     "Return JSON first, then optional Markdown notes.",
+    "Use empty arrays when no finding, test, risk, or question exists; do not copy the example finding.",
   ].join("\n");
 
   const role =
@@ -22,11 +27,20 @@ export function buildAgentPrompt(tool: ReviewTool, request: KyosoReviewRequest, 
           "Focus on architecture, threat modeling, authn/authz, secrets, privacy, secure defaults, CISA Secure by Design, and edge cases.",
         ].join("\n");
 
+  const cisaInstruction =
+    tool === "security_review"
+      ? [
+          "For security_review, include cisaMapping on each security-relevant finding when applicable.",
+          "Also include cisaSecureByDesign with all four gate dimensions.",
+        ].join("\n")
+      : "For plan_review and diff_review, include cisaMapping and cisaSecureByDesign only when relevant.";
+
   return `${shared}
 
 ${role}
 
 Tool: ${tool}
+${cisaInstruction}
 Review goal:
 ${request.goal}
 
@@ -35,12 +49,38 @@ ${renderRequestContext(request)}
 
 Return JSON matching KyosoAgentOpinion:
 {
-  "summary": "string",
-  "findings": [],
-  "testsToAdd": [],
-  "residualRisks": [],
-  "openQuestions": []
+  "summary": "Concise review summary.",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "maintainability",
+      "title": "Example finding title",
+      "evidence": "Specific evidence from the supplied context.",
+      "recommendation": "Concrete change to make before approval.",
+      "files": [
+        { "path": "src/example.ts", "lineStart": 10, "lineEnd": 12 }
+      ],
+      "confidence": "medium",
+      "cisaMapping": ["governance"]
+    }
+  ],
+  "testsToAdd": ["Specific regression or security test to add."],
+  "residualRisks": ["Known remaining risk after the recommended change."],
+  "openQuestions": ["Question that blocks a higher-confidence review."],
+  "cisaSecureByDesign": {
+    "customerSecurityOutcomes": "pass",
+    "secureByDefault": "warn",
+    "transparencyAndAccountability": "pass",
+    "governance": "warn",
+    "notes": ["Short CISA-specific note."]
+  }
 }
+
+Allowed severity values: critical, high, medium, low, info.
+Allowed category values: architecture, authn, authz, csrf, xss, ssrf, injection, secret, supply_chain, privacy, data_loss, test, maintainability, cisa_secure_by_design, other.
+Allowed confidence values: high, medium, low.
+Allowed cisaMapping values: customer_security_outcomes, secure_by_default, transparency_and_accountability, governance.
+Allowed CISA gate values: pass, warn, fail, not_applicable.
 `;
 }
 
@@ -48,14 +88,23 @@ function renderRequestContext(request: KyosoReviewRequest): string {
   const chunks: string[] = [];
   if (request.repoSummary) chunks.push(`Repo summary:\n${request.repoSummary}`);
   if (request.currentPlan) chunks.push(`Current plan:\n${request.currentPlan}`);
-  if (request.constraints?.length) chunks.push(`Constraints:\n${request.constraints.map((item) => `- ${item}`).join("\n")}`);
-  if (request.diff?.unifiedDiff) chunks.push(`Unified diff:\n${request.diff.unifiedDiff}`);
+  if (request.constraints?.length)
+    chunks.push(
+      `Constraints:\n${request.constraints.map((item) => `- ${item}`).join("\n")}`,
+    );
+  if (request.diff?.unifiedDiff)
+    chunks.push(`Unified diff:\n${request.diff.unifiedDiff}`);
   if (request.selectedFiles?.length) {
     chunks.push(
       `Selected files:\n${request.selectedFiles
-        .map((file) => `--- ${file.path}${file.truncated ? " (truncated)" : ""}\n${file.content}`)
+        .map(
+          (file) =>
+            `--- ${file.path}${file.truncated ? " (truncated)" : ""}\n${file.content}`,
+        )
         .join("\n\n")}`,
     );
   }
-  return chunks.length > 0 ? chunks.join("\n\n") : "Only the goal was provided. Return low-confidence findings if needed.";
+  return chunks.length > 0
+    ? chunks.join("\n\n")
+    : "Only the goal was provided. Return low-confidence findings if needed.";
 }

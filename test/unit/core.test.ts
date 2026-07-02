@@ -1,16 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { aggregateAgentResults } from "../../src/aggregate/aggregateFindings.js";
-import { extractFirstJsonObject, normalizeAgentOutput } from "../../src/acp/normalize.js";
+import { readWorkspaceFile } from "../../src/acp/AcpAgentProcess.js";
+import {
+  extractFirstJsonObject,
+  normalizeAgentOutput,
+} from "../../src/acp/normalize.js";
 import { loadConfig } from "../../src/config/loadConfig.js";
 import { kyosoConfigSchema } from "../../src/config/schema.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
 import { buildContext } from "../../src/context/buildContext.js";
-import { isAllowedPath, isDeniedPath, normalizeRelativePath } from "../../src/context/pathPolicy.js";
+import {
+  isAllowedPath,
+  isDeniedPath,
+  normalizeRelativePath,
+} from "../../src/context/pathPolicy.js";
 import { truncateUtf8 } from "../../src/context/truncate.js";
+import { createTraceWriter } from "../../src/audit/trace.js";
 import { sanitizeForAudit } from "../../src/audit/sanitize.js";
+import { createSnapshot } from "../../src/workspace/createSnapshot.js";
+import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
+import { parseJudgeOutput } from "../../src/judge/prompt.js";
+import { resolveJudgeProvider } from "../../src/judge/provider.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
@@ -39,6 +52,51 @@ export default defineConfig({
   });
 });
 
+describe("judge", () => {
+  test("resolves auto provider from available credentials", () => {
+    expect(resolveJudgeProvider("auto", {})).toBe("deterministic_fallback");
+    expect(
+      resolveJudgeProvider("auto", { ANTHROPIC_API_KEY: "anthropic" }),
+    ).toBe("anthropic");
+    expect(
+      resolveJudgeProvider("auto", {
+        OPENAI_API_KEY: "openai",
+        ANTHROPIC_API_KEY: "anthropic",
+      }),
+    ).toBe("openai");
+    expect(resolveJudgeProvider("none", { OPENAI_API_KEY: "openai" })).toBe(
+      "deterministic_fallback",
+    );
+  });
+
+  test("parses only advisory judge fields", () => {
+    const parsed = parseJudgeOutput(
+      JSON.stringify({
+        summaryMarkdown: "# rewritten",
+        decision: "approve",
+        findings: [],
+        disagreementComments: [
+          {
+            topic: "Highest reported severity",
+            judgeComment: "Prefer the stricter signal.",
+          },
+        ],
+      }),
+      "# fallback",
+    );
+
+    expect(parsed).toEqual({
+      summaryMarkdown: "# rewritten",
+      disagreementComments: [
+        {
+          topic: "Highest reported severity",
+          judgeComment: "Prefer the stricter signal.",
+        },
+      ],
+    });
+  });
+});
+
 describe("path policy", () => {
   test("normalizes relative paths and rejects traversal", () => {
     expect(normalizeRelativePath("src/../src/index.ts")).toBe("src/index.ts");
@@ -46,9 +104,13 @@ describe("path policy", () => {
   });
 
   test("denies credential and dependency paths in nested directories", () => {
-    expect(isDeniedPath("packages/app/.env.local", [".env", ".env.*"])).toBe(true);
+    expect(isDeniedPath("packages/app/.env.local", [".env", ".env.*"])).toBe(
+      true,
+    );
     expect(isDeniedPath("packages/app/.ssh/id_rsa", [".ssh"])).toBe(true);
-    expect(isDeniedPath("packages/app/node_modules/pkg/index.js", ["node_modules"])).toBe(true);
+    expect(
+      isDeniedPath("packages/app/node_modules/pkg/index.js", ["node_modules"]),
+    ).toBe(true);
     expect(isDeniedPath("src/environment.ts", [".env", ".env.*"])).toBe(false);
   });
 
@@ -59,10 +121,76 @@ describe("path policy", () => {
     expect(isAllowedPath("src/public.ts", ["src/*.ts"])).toBe(true);
     expect(isAllowedPath(".env.local", [".env.*"])).toBe(true);
     expect(isAllowedPath("src/secret.ts", ["src/public.ts"])).toBe(false);
-    expect(isAllowedPath("packages/app/src/public.ts", ["src/public.ts"])).toBe(false);
+    expect(isAllowedPath("packages/app/src/public.ts", ["src/public.ts"])).toBe(
+      false,
+    );
     expect(isAllowedPath("packages/app/src/public.ts", ["src"])).toBe(false);
-    expect(isAllowedPath("packages/app/src/public.ts", ["src/*.ts"])).toBe(false);
+    expect(isAllowedPath("packages/app/src/public.ts", ["src/*.ts"])).toBe(
+      false,
+    );
     expect(isAllowedPath("packages/app/.env.local", [".env.*"])).toBe(false);
+  });
+});
+
+describe("workspace snapshot", () => {
+  test("writes selected file manifest and agent instructions without raw manifest content", async () => {
+    const snapshot = await createSnapshot("unit", "plan_review", {
+      goal: "review plan",
+      selectedFiles: [
+        { path: "src/a.ts", language: "ts", content: "export const a = 1;" },
+      ],
+    });
+    try {
+      const manifest = await readFile(
+        join(snapshot.contextDir, "selected_files_manifest.json"),
+        "utf8",
+      );
+      const request = await readFile(
+        join(snapshot.contextDir, "request.json"),
+        "utf8",
+      );
+      const codexInstructions = await readFile(
+        join(snapshot.contextDir, "instructions.codex.md"),
+        "utf8",
+      );
+      const claudeInstructions = await readFile(
+        join(snapshot.contextDir, "instructions.claude.md"),
+        "utf8",
+      );
+
+      expect(JSON.parse(manifest)).toEqual([
+        {
+          path: "src/a.ts",
+          language: "ts",
+          byteCount: "export const a = 1;".length,
+        },
+      ]);
+      expect(request).toContain("bytes omitted from request manifest");
+      expect(request).not.toContain("export const a = 1;");
+      expect(codexInstructions).toContain("Codex implementation reviewer");
+      expect(claudeInstructions).toContain(
+        "Claude architecture and security reviewer",
+      );
+    } finally {
+      await cleanupSnapshot(snapshot.root);
+    }
+  });
+});
+
+describe("ACP workspace reads", () => {
+  test("rejects symlink escapes after realpath resolution", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "kyoso-read-"));
+    const outside = await mkdtemp(join(tmpdir(), "kyoso-outside-"));
+    await mkdir(join(workspace, "repo"), { recursive: true });
+    await writeFile(join(outside, "secret.txt"), "outside", "utf8");
+    await symlink(
+      join(outside, "secret.txt"),
+      join(workspace, "repo/link.txt"),
+    );
+
+    await expect(readWorkspaceFile(workspace, "repo/link.txt")).rejects.toThrow(
+      "Invalid request",
+    );
   });
 });
 
@@ -89,25 +217,39 @@ describe("secret scan", () => {
     const scan = scanAndRedactSecrets({
       goal: "review",
       selectedFiles: [
-        { path: "packages/app/.env.local", content: "PASSWORD=local-dev-password" },
-        { path: "packages/app/.env/production", content: "PASSWORD=production-password" },
+        {
+          path: "packages/app/.env.local",
+          content: "PASSWORD=local-dev-password",
+        },
+        {
+          path: "packages/app/.env/production",
+          content: "PASSWORD=production-password",
+        },
       ],
     });
 
     expect(scan.detected).toBe(true);
-    expect(scan.redactedRequest.selectedFiles?.[0]?.content).toBe("[KYOSO_REDACTED]");
-    expect(scan.redactedRequest.selectedFiles?.[1]?.content).toBe("[KYOSO_REDACTED]");
+    expect(scan.redactedRequest.selectedFiles?.[0]?.content).toBe(
+      "[KYOSO_REDACTED]",
+    );
+    expect(scan.redactedRequest.selectedFiles?.[1]?.content).toBe(
+      "[KYOSO_REDACTED]",
+    );
   });
 
   test("redacts secrets from selected file paths and match locations", () => {
     const leaked = `sk-${"proj"}-${"abcdefghijklmnopqrstuvwxyz123456"}`;
     const scan = scanAndRedactSecrets({
       goal: "review",
-      selectedFiles: [{ path: `src/${leaked}.ts`, content: "export const value = 1;" }],
+      selectedFiles: [
+        { path: `src/${leaked}.ts`, content: "export const value = 1;" },
+      ],
     });
 
     expect(scan.detected).toBe(true);
-    expect(scan.redactedRequest.selectedFiles?.[0]?.path).toBe("src/[KYOSO_REDACTED].ts");
+    expect(scan.redactedRequest.selectedFiles?.[0]?.path).toBe(
+      "src/[KYOSO_REDACTED].ts",
+    );
     expect(JSON.stringify(scan.matches)).not.toContain(leaked);
     expect(scan.matches).toContainEqual({
       kind: "openai_api_key",
@@ -122,14 +264,18 @@ describe("truncate", () => {
     expect(result.truncated).toBe(true);
     expect(result.content).toContain("[KYOSO_TRUNCATED");
     expect(result.bytes).toBeLessThanOrEqual(40);
-    expect(new TextEncoder().encode(result.content).byteLength).toBeLessThanOrEqual(40);
+    expect(
+      new TextEncoder().encode(result.content).byteLength,
+    ).toBeLessThanOrEqual(40);
   });
 
   test("keeps tiny truncation budgets hard-capped", () => {
     const result = truncateUtf8("abcdef", 3);
     expect(result.truncated).toBe(true);
     expect(result.bytes).toBeLessThanOrEqual(3);
-    expect(new TextEncoder().encode(result.content).byteLength).toBeLessThanOrEqual(3);
+    expect(
+      new TextEncoder().encode(result.content).byteLength,
+    ).toBeLessThanOrEqual(3);
   });
 });
 
@@ -169,12 +315,18 @@ describe("context budget", () => {
 
 describe("agent JSON extraction", () => {
   test("extracts first object from Markdown wrapped output", () => {
-    const json = extractFirstJsonObject("before\n```json\n{\"summary\":\"ok\"}\n```");
-    expect(json).toBe("{\"summary\":\"ok\"}");
+    const json = extractFirstJsonObject(
+      'before\n```json\n{"summary":"ok"}\n```',
+    );
+    expect(json).toBe('{"summary":"ok"}');
   });
 
   test("normalizes malformed output as parse finding", () => {
-    const opinion = normalizeAgentOutput("codex", "implementation_reviewer", "not-json");
+    const opinion = normalizeAgentOutput(
+      "codex",
+      "implementation_reviewer",
+      "not-json",
+    );
     expect(opinion.findings[0]?.title).toBe("Agent output could not be parsed");
   });
 
@@ -246,7 +398,9 @@ describe("agent JSON extraction", () => {
     expect(opinion.findings[0]?.files).toEqual([
       { path: "src/[KYOSO_REDACTED].ts", lineStart: 12 },
     ]);
-    expect(opinion.cisaSecureByDesign?.notes).toEqual(["note [KYOSO_REDACTED]"]);
+    expect(opinion.cisaSecureByDesign?.notes).toEqual([
+      "note [KYOSO_REDACTED]",
+    ]);
   });
 });
 
@@ -293,6 +447,22 @@ describe("CISA gate and decision", () => {
 });
 
 describe("audit sanitize", () => {
+  test("keeps unsafe audit directories inside the repository", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-audit-"));
+    const trace = createTraceWriter({
+      enabled: true,
+      directory: "safe/../outside",
+      traceId: "trace",
+      cwd,
+    });
+    await trace.write({ type: "test" });
+
+    expect(trace.tracePath).toContain(join(cwd, ".kyoso/traces"));
+    expect(trace.warnings).toContain(
+      "Unsafe audit directory ignored: safe/../outside",
+    );
+  });
+
   test("removes raw/content/env fields and token-like values", () => {
     const sanitized = sanitizeForAudit({
       token: "sk-proj-abcdefghijklmnop",
@@ -307,16 +477,25 @@ describe("audit sanitize", () => {
   });
 });
 
-function completed(agent: "codex" | "claude", severity: "medium" | "high"): AgentRunResult {
+function completed(
+  agent: "codex" | "claude",
+  severity: "medium" | "high",
+): AgentRunResult {
   return {
     agent,
-    role: agent === "codex" ? "implementation_reviewer" : "architecture_security_reviewer",
+    role:
+      agent === "codex"
+        ? "implementation_reviewer"
+        : "architecture_security_reviewer",
     status: "completed",
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     normalized: {
       agent,
-      role: agent === "codex" ? "implementation_reviewer" : "architecture_security_reviewer",
+      role:
+        agent === "codex"
+          ? "implementation_reviewer"
+          : "architecture_security_reviewer",
       summary: "ok",
       findings: [
         {

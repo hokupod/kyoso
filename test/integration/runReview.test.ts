@@ -1,12 +1,36 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SubprocessAcpAgentManager } from "../../src/acp/AcpAgentProcess.js";
-import { FakeAgentManager, type FakeAgentScenario } from "../../src/acp/FakeAgentManager.js";
+import {
+  FakeAgentManager,
+  type FakeAgentScenario,
+} from "../../src/acp/FakeAgentManager.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
-import { type KyosoConfig, kyosoConfigSchema } from "../../src/config/schema.js";
+import {
+  type KyosoConfig,
+  kyosoConfigSchema,
+} from "../../src/config/schema.js";
 import { runReview } from "../../src/core/runReview.js";
+
+const originalJudgeEnv = {
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  CODEX_API_KEY: process.env.CODEX_API_KEY,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+};
+
+beforeAll(() => {
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.CODEX_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+});
+
+afterAll(() => {
+  restoreEnv("OPENAI_API_KEY", originalJudgeEnv.OPENAI_API_KEY);
+  restoreEnv("CODEX_API_KEY", originalJudgeEnv.CODEX_API_KEY);
+  restoreEnv("ANTHROPIC_API_KEY", originalJudgeEnv.ANTHROPIC_API_KEY);
+});
 
 describe("runReview", () => {
   test("secret detection blocks before agents run", async () => {
@@ -19,11 +43,16 @@ describe("runReview", () => {
         selectedFiles: [
           {
             path: "src/config.ts",
-            content: "export const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';",
+            content:
+              "export const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';",
           },
         ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
     expect(result.decision).toBe("block");
     expect(result.findings[0]?.category).toBe("secret");
@@ -38,9 +67,15 @@ describe("runReview", () => {
       "plan_review",
       {
         goal: "review",
-        selectedFiles: [{ path: `src/${leaked}.ts`, content: "export const value = 1;" }],
+        selectedFiles: [
+          { path: `src/${leaked}.ts`, content: "export const value = 1;" },
+        ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
 
     expect(result.decision).toBe("block");
@@ -59,9 +94,15 @@ describe("runReview", () => {
         constraints: ["api_key = sk-proj-abcdefghijklmnopqrstuvwxyz123456"],
         options: { allowSecretRedaction: true },
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
-    const secretFinding = result.findings.find((finding) => finding.category === "secret");
+    const secretFinding = result.findings.find(
+      (finding) => finding.category === "secret",
+    );
 
     expect(manager.calls).toHaveLength(2);
     expect(result.audit.redactionsApplied).toBe(1);
@@ -82,7 +123,9 @@ describe("runReview", () => {
       "plan_review",
       {
         goal: "review",
-        selectedFiles: [{ path: ".env/production", content: "PASSWORD=local-dev-password" }],
+        selectedFiles: [
+          { path: ".env/production", content: "PASSWORD=local-dev-password" },
+        ],
         options: { allowSecretRedaction: true },
       },
       { cwd, config, agentManager: manager },
@@ -101,9 +144,18 @@ describe("runReview", () => {
       "plan_review",
       {
         goal: "review plan",
-        selectedFiles: [{ path: "packages/app/.codex/config.toml", content: "mcp_servers = ['kyoso']" }],
+        selectedFiles: [
+          {
+            path: "packages/app/.codex/config.toml",
+            content: "mcp_servers = ['kyoso']",
+          },
+        ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
     expect(result.decision).toBe("approve");
     expect(manager.calls[0]?.prompt).not.toContain("mcp_servers");
@@ -118,9 +170,15 @@ describe("runReview", () => {
       {
         goal: "review plan",
         workspace: { denyRead: ["src/secret.ts"] },
-        selectedFiles: [{ path: "src/secret.ts", content: "const hidden = 1;" }],
+        selectedFiles: [
+          { path: "src/secret.ts", content: "const hidden = 1;" },
+        ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
 
     expect(result.decision).toBe("approve");
@@ -141,13 +199,19 @@ describe("runReview", () => {
           { path: "src/secret.ts", content: "const hidden = 1;" },
         ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
 
     expect(result.decision).toBe("approve");
     expect(manager.calls[0]?.prompt).toContain("export const visible = 1");
     expect(manager.calls[0]?.prompt).not.toContain("const hidden = 1");
-    expect(result.audit.warnings?.join("\n")).toContain("outside workspace allow policy");
+    expect(result.audit.warnings?.join("\n")).toContain(
+      "outside workspace allow policy",
+    );
   });
 
   test("request workspace allowRead anchors single-segment paths at workspace root", async () => {
@@ -163,13 +227,19 @@ describe("runReview", () => {
           { path: "packages/app/src/secret.ts", content: "const hidden = 1;" },
         ],
       },
-      { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+      },
     );
 
     expect(result.decision).toBe("approve");
     expect(manager.calls[0]?.prompt).toContain("export const visible = 1");
     expect(manager.calls[0]?.prompt).not.toContain("const hidden = 1");
-    expect(result.audit.warnings?.join("\n")).toContain("outside workspace allow policy");
+    expect(result.audit.warnings?.join("\n")).toContain(
+      "outside workspace allow policy",
+    );
   });
 
   test("untrusted request workspace root is rejected before agents run", async () => {
@@ -182,11 +252,39 @@ describe("runReview", () => {
         {
           goal: "review plan",
           workspace: { root: "../untrusted" },
-          selectedFiles: [{ path: "src/public.ts", content: "export const visible = 1;" }],
+          selectedFiles: [
+            { path: "src/public.ts", content: "export const visible = 1;" },
+          ],
         },
-        { cwd, config: kyosoConfigSchema.parse(defaultConfig), agentManager: manager },
+        {
+          cwd,
+          config: kyosoConfigSchema.parse(defaultConfig),
+          agentManager: manager,
+        },
       ),
     ).rejects.toThrow("workspace.root is not trusted");
+    expect(manager.calls).toHaveLength(0);
+  });
+
+  test("MCP network cap rejects unrestricted requests before agents run", async () => {
+    const cwd = await tempCwd();
+    const manager = new FakeAgentManager();
+
+    await expect(
+      runReview(
+        "plan_review",
+        {
+          goal: "review plan",
+          options: { network: "unrestricted" },
+        },
+        {
+          cwd,
+          config: kyosoConfigSchema.parse(defaultConfig),
+          agentManager: manager,
+          mcpNetworkMode: "model_only",
+        },
+      ),
+    ).rejects.toThrow("MCP --network model_only");
     expect(manager.calls).toHaveLength(0);
   });
 
@@ -240,6 +338,75 @@ describe("runReview", () => {
     expect(result.agentOpinions[0]?.summary).toBe("raw cisa failure");
   });
 
+  test("judge can rewrite summary without mutating policy fields or seeing raw agent output", async () => {
+    const cwd = await tempCwd();
+    const rawOnlyMarker = "RAW_AGENT_ONLY_MARKER";
+    const rawText = `${JSON.stringify({
+      summary: "agent summary",
+      findings: [
+        {
+          severity: "critical",
+          category: "authz",
+          title: "Tenant boundary bypass",
+          evidence: "tenant id is trusted from client input",
+          recommendation: "derive tenant id from the authenticated session",
+          confidence: "high",
+        },
+      ],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    })}\n${rawOnlyMarker}`;
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+    };
+    const originalFetch = globalThis.fetch;
+    let requestBody = "";
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summaryMarkdown: "# Judge rewritten summary",
+                  decision: "approve",
+                  findings: [],
+                  disagreementComments: [],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await runReview(
+        "plan_review",
+        { goal: "review plan" },
+        {
+          cwd,
+          config,
+          agentManager: rawTextAgentManager(rawText),
+          env: { OPENAI_API_KEY: "test-key" },
+        },
+      );
+
+      expect(result.summaryMarkdown).toBe("# Judge rewritten summary");
+      expect(result.decision).toBe("block");
+      expect(result.findings).toHaveLength(1);
+      expect(result.findings[0]?.title).toBe("Tenant boundary bypass");
+      expect(requestBody).not.toContain(rawOnlyMarker);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("fake ACP markdown JSON output is normalized by the core pipeline", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
@@ -248,7 +415,10 @@ describe("runReview", () => {
       {
         cwd,
         config: kyosoConfigSchema.parse(defaultConfig),
-        agentManager: new FakeAgentManager({ codex: "markdown_json", claude: "markdown_json" }),
+        agentManager: new FakeAgentManager({
+          codex: "markdown_json",
+          claude: "markdown_json",
+        }),
       },
     );
 
@@ -257,8 +427,12 @@ describe("runReview", () => {
       "codex reviewed plan_review",
       "claude reviewed plan_review",
     ]);
-    expect(result.testsToAdd).toContain("codex: add regression coverage for plan_review");
-    expect(result.testsToAdd).toContain("claude: add regression coverage for plan_review");
+    expect(result.testsToAdd).toContain(
+      "codex: add regression coverage for plan_review",
+    );
+    expect(result.testsToAdd).toContain(
+      "claude: add regression coverage for plan_review",
+    );
   });
 
   test("fake ACP malformed output remains a structured parse finding", async () => {
@@ -274,8 +448,15 @@ describe("runReview", () => {
     );
 
     expect(result.degraded).toBe(false);
-    expect(result.findings.some((finding) => finding.title === "Agent output could not be parsed")).toBe(true);
-    expect(result.agentOpinions.find((opinion) => opinion.agent === "codex")?.summary).toContain("No JSON object found");
+    expect(
+      result.findings.some(
+        (finding) => finding.title === "Agent output could not be parsed",
+      ),
+    ).toBe(true);
+    expect(
+      result.agentOpinions.find((opinion) => opinion.agent === "codex")
+        ?.summary,
+    ).toContain("No JSON object found");
   });
 
   test("one backend timeout returns degraded result", async () => {
@@ -284,7 +465,9 @@ describe("runReview", () => {
       "diff_review",
       {
         goal: "review diff",
-        diff: { unifiedDiff: "diff --git a/a.ts b/a.ts\n+export const a = 1;\n" },
+        diff: {
+          unifiedDiff: "diff --git a/a.ts b/a.ts\n+export const a = 1;\n",
+        },
       },
       {
         cwd,
@@ -293,7 +476,10 @@ describe("runReview", () => {
       },
     );
     expect(result.degraded).toBe(true);
-    expect(result.agentOpinions.find((opinion) => opinion.agent === "claude")?.status).toBe("timeout");
+    expect(
+      result.agentOpinions.find((opinion) => opinion.agent === "claude")
+        ?.status,
+    ).toBe("timeout");
   });
 
   test("fake ACP policy and auth failures stay degraded with explicit error codes", async () => {
@@ -317,7 +503,10 @@ describe("runReview", () => {
 
       expect(result.degraded).toBe(true);
       expect(result.decision).toBe("approve");
-      expect(result.agentOpinions.find((opinion) => opinion.agent === "codex")?.errorCode).toBe(code);
+      expect(
+        result.agentOpinions.find((opinion) => opinion.agent === "codex")
+          ?.errorCode,
+      ).toBe(code);
     }
   });
 
@@ -329,11 +518,18 @@ describe("runReview", () => {
       {
         cwd,
         config: kyosoConfigSchema.parse(defaultConfig),
-        agentManager: new FakeAgentManager({ codex: "auth_failure", claude: "timeout" }),
+        agentManager: new FakeAgentManager({
+          codex: "auth_failure",
+          claude: "timeout",
+        }),
       },
     );
     expect(result.decision).toBe("block");
-    expect(result.findings.some((finding) => finding.title === "All backend agents failed")).toBe(true);
+    expect(
+      result.findings.some(
+        (finding) => finding.title === "All backend agents failed",
+      ),
+    ).toBe(true);
   });
 
   test("recursion guard blocks child invocation", async () => {
@@ -417,7 +613,9 @@ export default {};
       {
         goal: "review plan",
         currentPlan: "do it",
-        selectedFiles: [{ path: "src/foo.ts", content: "export const foo = 1;" }],
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
         options: { maxAgentTimeoutMs: 5_000 },
       },
       {
@@ -427,9 +625,56 @@ export default {};
       },
     );
     expect(result.decision).toBe("approve");
-    expect(result.agentOpinions[0]?.summary).toContain("read snapshot context and selected file");
+    expect(result.agentOpinions[0]?.summary).toContain(
+      "read snapshot context and selected file",
+    );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("subprocess timeout escalates from SIGTERM to SIGKILL", async () => {
+    const cwd = await tempCwd();
+    const scriptPath = join(cwd, "ignore-term.js");
+    const pidPath = join(cwd, "pid.txt");
+    await writeFile(
+      scriptPath,
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: [scriptPath],
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          enabled: false,
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", options: { maxAgentTimeoutMs: 100 } },
+      {
+        cwd,
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+    const pid = Number(await readFile(pidPath, "utf8"));
+
+    expect(result.agentOpinions[0]?.status).toBe("timeout");
+    await Bun.sleep(2_500);
+    expect(isProcessAlive(pid)).toBe(false);
   });
 
   test("subprocess ACP failures do not expose raw stderr secrets", async () => {
@@ -461,7 +706,11 @@ process.exit(1);
 
     const result = await runReview(
       "plan_review",
-      { goal: "review plan", currentPlan: "do it", options: { maxAgentTimeoutMs: 5_000 } },
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
       {
         cwd,
         config,
@@ -485,7 +734,9 @@ async function tempCwd(): Promise<string> {
 
 function rawTextAgentManager(rawText: string) {
   return {
-    async runAgent(input: Parameters<SubprocessAcpAgentManager["runAgent"]>[0]) {
+    async runAgent(
+      input: Parameters<SubprocessAcpAgentManager["runAgent"]>[0],
+    ) {
       return {
         agent: input.agent,
         role: input.role,
@@ -495,8 +746,27 @@ function rawTextAgentManager(rawText: string) {
         completedAt: new Date().toISOString(),
       };
     },
-    async runAll(inputs: Parameters<SubprocessAcpAgentManager["runAgent"]>[0][]) {
+    async runAll(
+      inputs: Parameters<SubprocessAcpAgentManager["runAgent"]>[0][],
+    ) {
       return Promise.all(inputs.map((input) => this.runAgent(input)));
     },
   };
+}
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

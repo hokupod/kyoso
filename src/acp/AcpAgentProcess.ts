@@ -2,9 +2,18 @@ import { spawn } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
-import { client, methods, ndJsonStream, RequestError } from "@agentclientprotocol/sdk";
+import {
+  client,
+  methods,
+  ndJsonStream,
+  RequestError,
+} from "@agentclientprotocol/sdk";
 import type { KyosoConfig } from "../config/schema.js";
-import type { AgentName, AgentRunInput, AgentRunResult } from "../core/types.js";
+import type {
+  AgentName,
+  AgentRunInput,
+  AgentRunResult,
+} from "../core/types.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import { buildChildEnv } from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
@@ -39,7 +48,11 @@ async function runSubprocessAgent(
   input: AgentRunInput,
 ): Promise<AgentRunResult> {
   const startedAt = new Date().toISOString();
-  const env = buildChildEnv(process.env, agentConfig.auth.envWhitelist, agentConfig.env);
+  const env = buildChildEnv(
+    process.env,
+    agentConfig.auth.envWhitelist,
+    agentConfig.env,
+  );
 
   return new Promise((resolveResult) => {
     const child = spawn(agentConfig.command, agentConfig.args, {
@@ -62,15 +75,17 @@ async function runSubprocessAgent(
 
     const timeout = setTimeout(() => {
       abortController.abort(new Error("Kyoso agent timeout"));
-      child.kill("SIGTERM");
+      terminateChild(child);
       resolveOnce({
         agent,
         role: input.role,
         status: "timeout",
-        rawText: stdout,
         startedAt,
         completedAt: new Date().toISOString(),
-        error: { code: "AGENT_TIMEOUT", message: `Agent timed out after ${input.timeoutMs}ms` },
+        error: {
+          code: "AGENT_TIMEOUT",
+          message: `Agent timed out after ${input.timeoutMs}ms`,
+        },
       });
     }, input.timeoutMs);
 
@@ -78,7 +93,10 @@ async function runSubprocessAgent(
       stderr += chunk.toString("utf8");
     });
     child.on("error", (error) => {
-      const failure = buildAgentFailure(error.message, "Agent process could not be started.");
+      const failure = buildAgentFailure(
+        error.message,
+        "Agent process could not be started.",
+      );
       resolveOnce({
         agent,
         role: input.role,
@@ -117,7 +135,7 @@ async function runSubprocessAgent(
         });
       })
       .finally(() => {
-        child.kill("SIGTERM");
+        terminateChild(child);
       });
 
     child.on("close", (code) => {
@@ -146,27 +164,42 @@ async function runAcpClientWorkflow(
   }
 
   const output = Writable.toWeb(child.stdin) as WritableStream<Uint8Array>;
-  const inputStream = Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>;
+  const inputStream = Readable.toWeb(
+    child.stdout,
+  ) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(output, inputStream);
   const app = client({ name: "kyoso" })
     .onRequest(methods.client.session.requestPermission, () => ({
       outcome: { outcome: "cancelled" },
     }))
     .onRequest(methods.client.fs.readTextFile, async (ctx) => ({
-      content: await readWorkspaceFile(input.workspaceDir, ctx.params.path, ctx.params.line, ctx.params.limit),
+      content: await readWorkspaceFile(
+        input.workspaceDir,
+        ctx.params.path,
+        ctx.params.line,
+        ctx.params.limit,
+      ),
     }))
     .onRequest(methods.client.fs.writeTextFile, () => {
-      throw RequestError.invalidRequest({ policy: "Kyoso denies ACP file writes." });
+      throw RequestError.invalidRequest({
+        policy: "Kyoso denies ACP file writes.",
+      });
     })
     .onRequest(methods.client.terminal.create, () => {
-      throw RequestError.invalidRequest({ policy: "Kyoso denies ACP terminal execution." });
+      throw RequestError.invalidRequest({
+        policy: "Kyoso denies ACP terminal execution.",
+      });
     })
     .onRequest(methods.client.terminal.output, () => {
-      throw RequestError.invalidRequest({ policy: "Kyoso does not create terminals." });
+      throw RequestError.invalidRequest({
+        policy: "Kyoso does not create terminals.",
+      });
     })
     .onRequest(methods.client.terminal.release, () => ({}))
     .onRequest(methods.client.terminal.waitForExit, () => {
-      throw RequestError.invalidRequest({ policy: "Kyoso does not create terminals." });
+      throw RequestError.invalidRequest({
+        policy: "Kyoso does not create terminals.",
+      });
     })
     .onRequest(methods.client.terminal.kill, () => ({}));
 
@@ -183,7 +216,9 @@ async function runAcpClientWorkflow(
         },
       })
       .withSession(async (session) => {
-        const promptResponse = session.prompt(input.prompt, { cancellationSignal: signal });
+        const promptResponse = session.prompt(input.prompt, {
+          cancellationSignal: signal,
+        });
         const text = await session.readText();
         await promptResponse;
         return text;
@@ -191,7 +226,7 @@ async function runAcpClientWorkflow(
   );
 }
 
-async function readWorkspaceFile(
+export async function readWorkspaceFile(
   workspaceDir: string,
   requestedPath: string,
   line?: number | null,
@@ -202,7 +237,9 @@ async function readWorkspaceFile(
 
   let content: string | undefined;
   for (const absolute of candidates) {
-    content = await readFile(absolute, "utf8").catch(() => undefined);
+    const readablePath = await resolveReadableFile(workspaceRoot, absolute);
+    if (!readablePath) continue;
+    content = await readFile(readablePath, "utf8").catch(() => undefined);
     if (content !== undefined) break;
   }
   if (content === undefined) throw RequestError.resourceNotFound(requestedPath);
@@ -212,7 +249,23 @@ async function readWorkspaceFile(
   return lines.slice(start, end).join("\n");
 }
 
-function resolveReadablePaths(workspaceRoot: string, requestedPath: string): string[] {
+async function resolveReadableFile(
+  workspaceRoot: string,
+  absolute: string,
+): Promise<string | undefined> {
+  const realPath = await realpath(absolute).catch((error: unknown) => {
+    if (isMissingPathError(error)) return undefined;
+    throw error;
+  });
+  if (!realPath) return undefined;
+  assertWithinWorkspace(workspaceRoot, realPath);
+  return realPath;
+}
+
+function resolveReadablePaths(
+  workspaceRoot: string,
+  requestedPath: string,
+): string[] {
   const primary = resolve(workspaceRoot, requestedPath);
   assertWithinWorkspace(workspaceRoot, primary);
 
@@ -228,17 +281,48 @@ function resolveReadablePaths(workspaceRoot: string, requestedPath: string): str
 
 function assertWithinWorkspace(workspaceRoot: string, absolute: string): void {
   const relativePath = relative(workspaceRoot, absolute);
-  if (relativePath.startsWith("..") || relativePath === "" || relativePath.startsWith("/")) {
-    throw RequestError.invalidRequest({ policy: "Kyoso only allows reads from the temporary snapshot." });
+  if (
+    relativePath.startsWith("..") ||
+    relativePath === "" ||
+    relativePath.startsWith("/")
+  ) {
+    throw RequestError.invalidRequest({
+      policy: "Kyoso only allows reads from the temporary snapshot.",
+    });
   }
 }
 
-function buildAgentFailure(rawDetail: string, fallbackMessage: string): { code: string; message: string } {
+function terminateChild(child: ReturnType<typeof spawn>): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  const killTimer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+  }, 2_000);
+  killTimer.unref();
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}
+
+function buildAgentFailure(
+  rawDetail: string,
+  fallbackMessage: string,
+): { code: string; message: string } {
   const code = classifyAgentFailure(rawDetail);
   return { code, message: safeAgentFailureMessage(code, fallbackMessage) };
 }
 
-function safeAgentFailureMessage(code: string, fallbackMessage: string): string {
+function safeAgentFailureMessage(
+  code: string,
+  fallbackMessage: string,
+): string {
   if (code === "AUTH_FAILED") {
     return "Agent authentication failed. Run kyoso doctor and check configured credentials.";
   }
@@ -254,6 +338,7 @@ function safeAgentFailureMessage(code: string, fallbackMessage: string): string 
 function classifyAgentFailure(stderr: string): string {
   if (/spawn/i.test(stderr)) return "AGENT_SPAWN_FAILED";
   if (/auth|api key|login|credential/i.test(stderr)) return "AUTH_FAILED";
-  if (/permission|policy|write|terminal/i.test(stderr)) return "PERMISSION_DENIED";
+  if (/permission|policy|write|terminal/i.test(stderr))
+    return "PERMISSION_DENIED";
   return "AGENT_FAILED";
 }

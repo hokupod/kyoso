@@ -1,5 +1,6 @@
 import { mkdir, appendFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { normalizeRelativePath } from "../context/pathPolicy.js";
 import { sanitizeForAudit } from "./sanitize.js";
 
 export type TraceWriter = {
@@ -24,17 +25,41 @@ export function createTraceWriter(options: {
     };
   }
   const date = new Date().toISOString().slice(0, 10);
-  const tracePath = join(options.cwd, options.directory, date, `${options.traceId}.jsonl`);
+  const directory = validateAuditDirectory(options.directory, warnings);
+  const tracePath = join(
+    options.cwd,
+    directory,
+    date,
+    `${options.traceId}.jsonl`,
+  );
   return {
     tracePath,
     warnings,
     async write(event) {
       try {
         await mkdir(dirname(tracePath), { recursive: true });
-        await appendFile(tracePath, `${JSON.stringify(sanitizeForAudit(event))}\n`, "utf8");
+        await appendFile(
+          tracePath,
+          `${JSON.stringify(sanitizeForAudit(event))}\n`,
+          "utf8",
+        );
       } catch (error) {
-        warnings.push(`Audit write failed: ${error instanceof Error ? error.message : String(error)}`);
+        warnings.push(
+          `Audit write failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     },
   };
+}
+
+function validateAuditDirectory(directory: string, warnings: string[]): string {
+  try {
+    if (isAbsolute(directory) || directory.split(/[\\/]+/).includes("..")) {
+      throw new Error("unsafe path");
+    }
+    return normalizeRelativePath(directory);
+  } catch {
+    warnings.push(`Unsafe audit directory ignored: ${directory}`);
+    return ".kyoso/traces";
+  }
 }

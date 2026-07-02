@@ -207,6 +207,8 @@ MVP must never apply file changes to the user’s repository. It may produce rec
 
 Use a single package for MVP. Keep boundaries clear enough to split later.
 
+The file tree below is a reference structure. Implementations may consolidate files when the module boundary intent is preserved and the implementation traceability table in §32 stays current.
+
 ```text
 kyoso/
   package.json
@@ -1517,6 +1519,10 @@ Files: `src/auth/callback.ts:42-60`
 
 - ...
 
+## Residual Risks
+
+- ...
+
 ## Agent Opinions
 
 ### Codex
@@ -1926,3 +1932,30 @@ MVP is considered complete when all of the following pass:
 13. `kyoso doctor` reports Codex and Claude adapter readiness.
 14. Unit tests cover decision policy and CISA gate.
 15. README includes honest limitations and usage examples.
+
+---
+
+## 32. Design item to implementation traceability
+
+| Design item | Implementation files |
+|---|---|
+| §6 CLI entrypoints | `src/cli/main.ts`, `src/cli/args.ts`, `src/cli/io.ts`, `src/cli/doctor.ts`, `src/cli/init.ts` |
+| §7 MCP server and tools | `src/mcp/server.ts`, `src/mcp/schemas.ts`, `src/mcp/formatMcpResponse.ts` |
+| §8 Tool contracts and request schema | `src/core/types.ts`, `src/core/validateRequest.ts`, `src/mcp/schemas.ts` |
+| §10 Config loading | `src/config/schema.ts`, `src/config/defaultConfig.ts`, `src/config/loadConfig.ts`, `src/config/defineConfig.ts`, `src/config/tsConfigLoader.ts` |
+| §11 Review pipeline | `src/core/runReview.ts` |
+| §12 Context and snapshot | `src/context/buildContext.ts`, `src/context/truncate.ts`, `src/context/pathPolicy.ts`, `src/workspace/createSnapshot.ts`, `src/workspace/cleanup.ts` |
+| §13.2 Env allowlist | `src/utils/env.ts` (`buildChildEnv`) |
+| §13.3 Recursion guard | `src/security/recursionGuard.ts` |
+| §13.4 Permission denial | `src/acp/AcpAgentProcess.ts` (`runAcpClientWorkflow` request handlers) |
+| §14 Agent prompts and normalization | `src/acp/prompts.ts`, `src/acp/normalize.ts`, `src/acp/AcpAgentManager.ts`, `src/acp/AcpAgentProcess.ts`, `src/acp/FakeAgentManager.ts` |
+| §15.1 Deterministic aggregation | `src/aggregate/aggregateFindings.ts`, `src/aggregate/severity.ts` |
+| §15.2-15.3 Judge LLM | `src/judge/provider.ts`, `src/judge/prompt.ts`, `src/judge/openai.ts`, `src/judge/anthropic.ts`, `src/judge/deterministicFallback.ts` |
+| §15.4 Final decision | `src/security/decision.ts` |
+| §16 CISA gate | `src/security/cisaGate.ts` |
+| §17 Secrets and redaction | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts` |
+| §18 Network policy | `src/core/runReview.ts`, `src/cli/main.ts` |
+| §20 Audit trace | `src/audit/trace.ts`, `src/audit/sanitize.ts` |
+| §21 Markdown output | `src/output/markdown.ts` |
+| §22 Packaged skill | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml` |
+| §25 Test strategy | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts` |

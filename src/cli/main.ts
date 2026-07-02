@@ -15,7 +15,18 @@ async function main(): Promise<void> {
   const ignoreConfig = booleanFlag(parsed.flags, "ignore-config");
 
   if (parsed.command === "mcp") {
-    await startMcpServer({ cwd, configPath, ignoreConfig });
+    const network = stringFlag(parsed.flags, "network");
+    await startMcpServer({
+      cwd,
+      configPath,
+      ignoreConfig,
+      mcpNetworkMode:
+        network === "unrestricted"
+          ? "unrestricted"
+          : network
+            ? "model_only"
+            : undefined,
+    });
     return;
   }
 
@@ -25,15 +36,29 @@ async function main(): Promise<void> {
   }
 
   if (parsed.command === "init") {
-    console.log(await runInit({ cwd, force: booleanFlag(parsed.flags, "force") }));
+    console.log(
+      await runInit({ cwd, force: booleanFlag(parsed.flags, "force") }),
+    );
     return;
   }
 
-  if (parsed.command === "plan" || parsed.command === "security" || parsed.command === "diff") {
+  if (
+    parsed.command === "plan" ||
+    parsed.command === "security" ||
+    parsed.command === "diff"
+  ) {
     const tool = commandToTool(parsed.command);
     const request = await buildReviewRequest(tool, parsed.flags);
-    const result = await runReview(tool, request, { cwd, configPath, ignoreConfig });
-    console.log(booleanFlag(parsed.flags, "json") ? JSON.stringify(result, null, 2) : result.summaryMarkdown);
+    const result = await runReview(tool, request, {
+      cwd,
+      configPath,
+      ignoreConfig,
+    });
+    console.log(
+      booleanFlag(parsed.flags, "json")
+        ? JSON.stringify(result, null, 2)
+        : result.summaryMarkdown,
+    );
     return;
   }
 
@@ -54,7 +79,8 @@ async function buildReviewRequest(
     allowSecretRedaction: booleanFlag(flags, "allow-secret-redaction"),
   };
   if (network) {
-    options.network = network === "unrestricted" ? "unrestricted" : "model_only";
+    options.network =
+      network === "unrestricted" ? "unrestricted" : "model_only";
   }
   return {
     goal,
@@ -98,14 +124,15 @@ function commandToTool(command: string): ReviewTool {
 
 function defaultGoal(tool: ReviewTool): string {
   if (tool === "plan_review") return "Review the supplied implementation plan.";
-  if (tool === "security_review") return "Review the supplied context with CISA Secure by Design criteria.";
+  if (tool === "security_review")
+    return "Review the supplied context with CISA Secure by Design criteria.";
   return "Review the supplied unified diff.";
 }
 
 const HELP = `Kyoso
 
 Usage:
-  kyoso mcp [--config kyoso.config.ts] [--ignore-config]
+  kyoso mcp [--config kyoso.config.ts] [--ignore-config] [--network model_only|unrestricted]
   kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json]
   kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction]
   kyoso diff --base main --head HEAD [--json]

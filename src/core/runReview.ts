@@ -18,11 +18,13 @@ import type {
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
+  NetworkMode,
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
 import { validateReviewRequest } from "./validateRequest.js";
 import { renderMarkdownResult } from "../output/markdown.js";
+import { runJudge } from "../judge/provider.js";
 import { assertNotChildAgent } from "../security/recursionGuard.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import { scanAndRedactSecrets } from "../security/secretScan.js";
@@ -37,6 +39,7 @@ export type RunReviewOptions = LoadConfigOptions & {
   configHash?: string;
   agentManager?: AcpAgentManager;
   env?: NodeJS.ProcessEnv;
+  mcpNetworkMode?: NetworkMode;
 };
 
 export async function runReview(
@@ -60,7 +63,12 @@ export async function runReview(
         traceId,
         cwd,
       });
-      await trace.write({ type: "request_received", traceId, tool, timestamp: new Date().toISOString() });
+      await trace.write({
+        type: "request_received",
+        traceId,
+        tool,
+        timestamp: new Date().toISOString(),
+      });
       return await buildPolicyBlockResult({
         tool,
         trace,
@@ -74,7 +82,8 @@ export async function runReview(
           category: "other",
           title: "Recursive Kyoso invocation blocked",
           evidence: error.message,
-          recommendation: "Do not expose Kyoso MCP tools to Kyoso child agents.",
+          recommendation:
+            "Do not expose Kyoso MCP tools to Kyoso child agents.",
           sourceAgents: ["kyoso_policy"],
           confidence: "high",
         },
@@ -86,8 +95,16 @@ export async function runReview(
 
   const loaded =
     options.config !== undefined
-      ? { config: options.config, configHash: options.configHash, warnings: [] as string[] }
-      : await loadConfig({ cwd, configPath: options.configPath, ignoreConfig: options.ignoreConfig });
+      ? {
+          config: options.config,
+          configHash: options.configHash,
+          warnings: [] as string[],
+        }
+      : await loadConfig({
+          cwd,
+          configPath: options.configPath,
+          ignoreConfig: options.ignoreConfig,
+        });
 
   const trace = createTraceWriter({
     enabled: loaded.config.audit.enabled,
@@ -99,7 +116,12 @@ export async function runReview(
   const warnings: string[] = [...loaded.warnings, ...trace.warnings];
 
   try {
-    await trace.write({ type: "request_received", traceId, tool, timestamp: new Date().toISOString() });
+    await trace.write({
+      type: "request_received",
+      traceId,
+      tool,
+      timestamp: new Date().toISOString(),
+    });
     await trace.write({
       type: "config_loaded",
       traceId,
@@ -108,13 +130,32 @@ export async function runReview(
     });
 
     validateReviewRequest(tool, request);
-    assertTrustedWorkspaceRoot(request.workspace?.root, loaded.config.workspace.root, cwd);
-    const networkMode = request.options?.network ?? loaded.config.network.defaultMode;
-    if (networkMode === "unrestricted" && !loaded.config.network.allowUnrestricted) {
-      throw new KyosoRequestError("unrestricted network mode is disabled by config", "NETWORK_MODE_DISABLED");
+    assertTrustedWorkspaceRoot(
+      request.workspace?.root,
+      loaded.config.workspace.root,
+      cwd,
+    );
+    const networkMode = resolveNetworkMode(
+      request.options?.network,
+      loaded.config.network.defaultMode,
+      options.mcpNetworkMode,
+    );
+    if (
+      networkMode === "unrestricted" &&
+      !loaded.config.network.allowUnrestricted
+    ) {
+      throw new KyosoRequestError(
+        "unrestricted network mode is disabled by config",
+        "NETWORK_MODE_DISABLED",
+      );
     }
-    if (networkMode === "unrestricted" && loaded.config.network.warnOnUnrestricted) {
-      warnings.push("Network mode is unrestricted; write policy remains denied.");
+    if (
+      networkMode === "unrestricted" &&
+      loaded.config.network.warnOnUnrestricted
+    ) {
+      warnings.push(
+        "Network mode is unrestricted; write policy remains denied.",
+      );
     }
 
     const secretScan = scanAndRedactSecrets(request);
@@ -127,8 +168,13 @@ export async function runReview(
     });
 
     const allowSecretOverride =
-      loaded.config.secrets.allowOverride && request.options?.allowSecretRedaction === true;
-    if (secretScan.detected && loaded.config.secrets.blockOnDetectedSecret && !allowSecretOverride) {
+      loaded.config.secrets.allowOverride &&
+      request.options?.allowSecretRedaction === true;
+    if (
+      secretScan.detected &&
+      loaded.config.secrets.blockOnDetectedSecret &&
+      !allowSecretOverride
+    ) {
       return await buildSecretBlockResult({
         tool,
         trace,
@@ -154,7 +200,10 @@ export async function runReview(
     });
     warnings.push(...built.warnings);
 
-    snapshot = await createSnapshot(traceId, built.request, { denyPatterns, allowPatterns });
+    snapshot = await createSnapshot(traceId, tool, built.request, {
+      denyPatterns,
+      allowPatterns,
+    });
     await trace.write({
       type: "snapshot_created",
       traceId,
@@ -175,7 +224,9 @@ export async function runReview(
     });
 
     const normalizedAgentResults = agentResults.map(normalizeAgentRunResult);
-    const completed = normalizedAgentResults.filter((result) => result.status === "completed");
+    const completed = normalizedAgentResults.filter(
+      (result) => result.status === "completed",
+    );
     const degraded = completed.length !== agentResults.length;
     let aggregate = aggregateAgentResults(normalizedAgentResults);
 
@@ -202,8 +253,14 @@ export async function runReview(
             severity: "critical",
             category: "other",
             title: "All backend agents failed",
-            evidence: normalizedAgentResults.map((result) => `${result.agent}: ${result.error?.code ?? result.status}`).join("; "),
-            recommendation: "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
+            evidence: normalizedAgentResults
+              .map(
+                (result) =>
+                  `${result.agent}: ${result.error?.code ?? result.status}`,
+              )
+              .join("; "),
+            recommendation:
+              "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
             sourceAgents: ["kyoso_policy"],
             confidence: "high",
           },
@@ -217,16 +274,11 @@ export async function runReview(
       findingCount: aggregate.findings.length,
       timestamp: new Date().toISOString(),
     });
-    await trace.write({
-      type: "judge_completed",
-      traceId,
-      provider: loaded.config.judge.provider,
-      status: "deterministic_fallback",
-      timestamp: new Date().toISOString(),
-    });
 
     const cisa =
-      tool === "security_review" ? computeCisaGate(aggregate.findings, normalizedAgentResults) : undefined;
+      tool === "security_review"
+        ? computeCisaGate(aggregate.findings, normalizedAgentResults)
+        : undefined;
     const decision = decide({
       tool,
       findings: aggregate.findings,
@@ -248,7 +300,9 @@ export async function runReview(
           : aggregate.testsToAdd,
       residualRisks:
         tool === "security_review" && aggregate.residualRisks.length === 0
-          ? ["No residual risks were reported by completed agents; verify security assumptions before release."]
+          ? [
+              "No residual risks were reported by completed agents; verify security assumptions before release.",
+            ]
           : aggregate.residualRisks,
       agentOpinions: normalizedAgentResults.map(agentOpinionSummary),
       audit: {
@@ -260,16 +314,54 @@ export async function runReview(
         networkMode,
         workspaceMode: "temp_snapshot",
         configHash: loaded.configHash,
-        warnings: [...warnings, ...trace.warnings],
+        warnings: Array.from(new Set([...warnings, ...trace.warnings])),
       },
     };
     const result: KyosoResult = {
       ...resultWithoutMarkdown,
       summaryMarkdown: renderMarkdownResult(tool, resultWithoutMarkdown),
     };
+    const judge = await runJudge({
+      tool,
+      result,
+      config: loaded.config.judge,
+      requestedProvider: request.options?.judgeProvider,
+      env: options.env ?? process.env,
+    });
+    const judgeComments = new Map(
+      judge.output.disagreementComments.map((comment) => [
+        comment.topic,
+        comment.judgeComment,
+      ]),
+    );
+    result.summaryMarkdown = judge.output.summaryMarkdown;
+    result.disagreements = result.disagreements.map((disagreement) => ({
+      ...disagreement,
+      judgeComment:
+        judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
+    }));
+    const judgeEvent: Record<string, unknown> = {
+      type: "judge_completed",
+      traceId,
+      provider: judge.provider,
+      status: judge.status,
+      timestamp: new Date().toISOString(),
+    };
+    if (judge.error) judgeEvent.error = judge.error;
+    await trace.write(judgeEvent);
+    result.audit.completedAt = new Date().toISOString();
 
-    await trace.write({ type: "decision_completed", traceId, decision, timestamp: new Date().toISOString() });
-    await trace.write({ type: "response_sent", traceId, timestamp: new Date().toISOString() });
+    await trace.write({
+      type: "decision_completed",
+      traceId,
+      decision,
+      timestamp: new Date().toISOString(),
+    });
+    await trace.write({
+      type: "response_sent",
+      traceId,
+      timestamp: new Date().toISOString(),
+    });
     return result;
   } finally {
     if (snapshot) await cleanupSnapshot(snapshot.root);
@@ -295,7 +387,10 @@ async function runAgents(input: {
       tool: input.tool,
       prompt: buildAgentPrompt(input.tool, input.request, agent),
       workspaceDir: input.workspaceDir,
-      timeoutMs: input.request.options?.maxAgentTimeoutMs ?? input.config.agents[agent].timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+      timeoutMs:
+        input.request.options?.maxAgentTimeoutMs ??
+        input.config.agents[agent].timeoutMs ??
+        DEFAULT_AGENT_TIMEOUT_MS,
       networkMode: input.networkMode,
     }));
 
@@ -331,16 +426,27 @@ function defaultAgentManager(config: KyosoConfig): AcpAgentManager {
 
 function normalizeAgentRunResult(result: AgentRunResult): AgentRunResult {
   if (result.status === "completed" && result.rawText && !result.normalized) {
-    return { ...result, normalized: normalizeAgentOutput(result.agent, result.role, result.rawText) };
+    return {
+      ...result,
+      normalized: normalizeAgentOutput(
+        result.agent,
+        result.role,
+        result.rawText,
+      ),
+    };
   }
   return result;
 }
 
-function agentOpinionSummary(result: AgentRunResult): KyosoResult["agentOpinions"][number] {
+function agentOpinionSummary(
+  result: AgentRunResult,
+): KyosoResult["agentOpinions"][number] {
   return {
     agent: result.agent,
     role: result.role,
-    summary: result.normalized?.summary ?? sanitizeTextForDisplay(result.error?.message ?? result.status),
+    summary:
+      result.normalized?.summary ??
+      sanitizeTextForDisplay(result.error?.message ?? result.status),
     status: result.status,
     errorCode: result.error?.code,
   };
@@ -356,9 +462,14 @@ async function buildSecretBlockResult(input: {
   secretScan: SecretScanResult;
   warnings: string[];
 }): Promise<KyosoResult> {
-  const finding = buildSecretFinding(input.secretScan, { id: "KYOSO-1", blocked: true });
+  const finding = buildSecretFinding(input.secretScan, {
+    id: "KYOSO-1",
+    blocked: true,
+  });
   const cisa: CisaSecureByDesignResult | undefined =
-    input.tool === "security_review" ? computeCisaGate([finding], []) : undefined;
+    input.tool === "security_review"
+      ? computeCisaGate([finding], [])
+      : undefined;
   const completedAt = new Date().toISOString();
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
@@ -366,14 +477,31 @@ async function buildSecretBlockResult(input: {
     findings: [finding],
     cisaSecureByDesign: cisa,
     disagreements: [],
-    testsToAdd: input.tool === "security_review" ? ["Add coverage that prevents secrets from being accepted in review input."] : [],
+    testsToAdd:
+      input.tool === "security_review"
+        ? [
+            "Add coverage that prevents secrets from being accepted in review input.",
+          ]
+        : [],
     residualRisks:
       input.tool === "security_review"
-        ? ["Secret material was detected in review input; rotate affected credentials if they may have been exposed."]
+        ? [
+            "Secret material was detected in review input; rotate affected credentials if they may have been exposed.",
+          ]
         : [],
     agentOpinions: [
-      { agent: "codex", role: "implementation_reviewer", summary: "Skipped because Kyoso blocked detected secrets.", status: "skipped" },
-      { agent: "claude", role: "architecture_security_reviewer", summary: "Skipped because Kyoso blocked detected secrets.", status: "skipped" },
+      {
+        agent: "codex",
+        role: "implementation_reviewer",
+        summary: "Skipped because Kyoso blocked detected secrets.",
+        status: "skipped",
+      },
+      {
+        agent: "claude",
+        role: "architecture_security_reviewer",
+        summary: "Skipped because Kyoso blocked detected secrets.",
+        status: "skipped",
+      },
     ],
     audit: {
       traceId: input.traceId,
@@ -397,7 +525,11 @@ async function buildSecretBlockResult(input: {
     decision: "block",
     timestamp: new Date().toISOString(),
   });
-  await input.trace.write({ type: "response_sent", traceId: input.traceId, timestamp: new Date().toISOString() });
+  await input.trace.write({
+    type: "response_sent",
+    traceId: input.traceId,
+    timestamp: new Date().toISOString(),
+  });
   return result;
 }
 
@@ -412,18 +544,27 @@ function buildSecretFinding(
     title: options.blocked
       ? "Secret detected in review input"
       : "Secret detected and redacted in review input",
-    evidence: secretScan.matches.map((match) => `${match.kind} at ${match.location}`).join("; "),
+    evidence: secretScan.matches
+      .map((match) => `${match.kind} at ${match.location}`)
+      .join("; "),
     recommendation: options.blocked
       ? "Remove the secret from the request or source file, rotate it if exposed, then retry with redacted input."
       : "Remove the secret from source input and rotate it if it was exposed; Kyoso continued only with redacted content.",
     sourceAgents: ["kyoso_policy"],
     confidence: "high",
-    cisaMapping: ["customer_security_outcomes", "secure_by_default", "governance"],
+    cisaMapping: [
+      "customer_security_outcomes",
+      "secure_by_default",
+      "governance",
+    ],
   };
 }
 
 function reindexFindings(findings: KyosoFinding[]): KyosoFinding[] {
-  return findings.map((finding, index) => ({ ...finding, id: `KYOSO-${index + 1}` }));
+  return findings.map((finding, index) => ({
+    ...finding,
+    id: `KYOSO-${index + 1}`,
+  }));
 }
 
 async function buildPolicyBlockResult(input: {
@@ -442,9 +583,15 @@ async function buildPolicyBlockResult(input: {
     decision: "block",
     degraded: false,
     findings: [input.finding],
-    cisaSecureByDesign: input.tool === "security_review" ? computeCisaGate([input.finding], []) : undefined,
+    cisaSecureByDesign:
+      input.tool === "security_review"
+        ? computeCisaGate([input.finding], [])
+        : undefined,
     disagreements: [],
-    testsToAdd: input.tool === "security_review" ? ["Add coverage for this Kyoso policy block path."] : [],
+    testsToAdd:
+      input.tool === "security_review"
+        ? ["Add coverage for this Kyoso policy block path."]
+        : [],
     residualRisks: input.tool === "security_review" ? [input.warning] : [],
     agentOpinions: [],
     audit: {
@@ -469,17 +616,45 @@ async function buildPolicyBlockResult(input: {
     decision: "block",
     timestamp: new Date().toISOString(),
   });
-  await input.trace.write({ type: "response_sent", traceId: input.traceId, timestamp: new Date().toISOString() });
+  await input.trace.write({
+    type: "response_sent",
+    traceId: input.traceId,
+    timestamp: new Date().toISOString(),
+  });
   return result;
 }
 
-function mergeDenyPatterns(configDeny: string[], requestDeny: string[] | undefined): string[] {
+function mergeDenyPatterns(
+  configDeny: string[],
+  requestDeny: string[] | undefined,
+): string[] {
   return Array.from(new Set([...configDeny, ...(requestDeny ?? [])]));
 }
 
-function assertTrustedWorkspaceRoot(requestRoot: string | undefined, configRoot: string, cwd: string): void {
+function assertTrustedWorkspaceRoot(
+  requestRoot: string | undefined,
+  configRoot: string,
+  cwd: string,
+): void {
   if (!requestRoot) return;
   if (resolve(cwd, requestRoot) !== resolve(cwd, configRoot)) {
-    throw new KyosoRequestError("workspace.root is not trusted by config", "UNTRUSTED_WORKSPACE_ROOT");
+    throw new KyosoRequestError(
+      "workspace.root is not trusted by config",
+      "UNTRUSTED_WORKSPACE_ROOT",
+    );
   }
+}
+
+function resolveNetworkMode(
+  requested: NetworkMode | undefined,
+  configDefault: NetworkMode,
+  mcpNetworkMode: NetworkMode | undefined,
+): NetworkMode {
+  if (mcpNetworkMode === "model_only" && requested === "unrestricted") {
+    throw new KyosoRequestError(
+      "unrestricted network mode is disabled by MCP --network model_only",
+      "NETWORK_MODE_DISABLED",
+    );
+  }
+  return requested ?? mcpNetworkMode ?? configDefault;
 }

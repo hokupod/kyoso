@@ -38,10 +38,49 @@ kyoso doctor
 kyoso init
 ```
 
+## Usage Examples
+
+Review an implementation plan with selected code:
+
+```bash
+kyoso plan \
+  --goal "Review the OAuth callback implementation plan" \
+  --plan plan.md \
+  --file src/auth/callback.ts
+```
+
+Read the result from the top down: `Decision` is the deterministic gate outcome, `Findings` are the required changes, and `Tests to Add` are the regression checks Kyoso expects before approval.
+
+Run a CISA Secure by Design security review against a patch:
+
+```bash
+kyoso security \
+  --goal "Review auth changes for tenant isolation and secure defaults" \
+  --diff changes.patch \
+  --json
+```
+
+In JSON output, `cisaSecureByDesign` shows the four gate dimensions. A `fail` in customer security outcomes blocks the review; warning-level dimensions usually produce `approve_with_changes`.
+
+Register Kyoso with Codex or Claude Code as an MCP server, then call `plan_review` from the client:
+
+```toml
+# See examples/codex-config.toml
+[mcp_servers.kyoso]
+command = "kyoso"
+args = ["mcp", "--network", "model_only"]
+```
+
+Example client request:
+
+```text
+Use Kyoso plan_review on this plan and the selected auth files. I need a second opinion before implementing.
+```
+
 ## MCP
 
 ```bash
-kyoso mcp
+kyoso mcp --network model_only
 ```
 
 Kyoso exposes exactly these MCP tools:

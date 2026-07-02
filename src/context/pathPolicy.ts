@@ -10,7 +10,10 @@ export function normalizeRelativePath(path: string): string {
     normalized.startsWith("/") ||
     /^[A-Za-z]:\//.test(normalized)
   ) {
-    throw new KyosoRequestError(`Path escapes workspace root: ${path}`, "INVALID_PATH");
+    throw new KyosoRequestError(
+      `Path escapes workspace root: ${path}`,
+      "INVALID_PATH",
+    );
   }
   return normalized;
 }
@@ -24,7 +27,11 @@ export function isAllowedPath(path: string, allowPatterns: string[]): boolean {
   return matchesPathPattern(path, allowPatterns, "allow");
 }
 
-function matchesPathPattern(path: string, patterns: string[], mode: "allow" | "deny"): boolean {
+function matchesPathPattern(
+  path: string,
+  patterns: string[],
+  mode: "allow" | "deny",
+): boolean {
   const normalized = normalizeRelativePath(path);
   const segments = normalized.split("/");
   return patterns.some((pattern) => {
@@ -35,21 +42,34 @@ function matchesPathPattern(path: string, patterns: string[], mode: "allow" | "d
         const firstSegment = segments[0] ?? "";
         return firstSegment === base || firstSegment.startsWith(`${base}.`);
       }
-      return segments.some((segment) => segment === base || segment.startsWith(`${base}.`));
+      return segments.some(
+        (segment) => segment === base || segment.startsWith(`${base}.`),
+      );
     }
     if (normalizedPattern.includes("*")) {
-      const escaped = normalizedPattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
-      const regex = mode === "allow" ? new RegExp(`^${escaped}($|/)`) : new RegExp(`(^|/)${escaped}($|/)`);
+      const escaped = normalizedPattern
+        .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+        .replaceAll("*", ".*");
+      const regex =
+        mode === "allow"
+          ? new RegExp(`^${escaped}($|/)`)
+          : new RegExp(`(^|/)${escaped}($|/)`);
       return regex.test(normalized);
     }
     if (!normalizedPattern.includes("/")) {
       if (mode === "allow") {
-        return normalized === normalizedPattern || normalized.startsWith(`${normalizedPattern}/`);
+        return (
+          normalized === normalizedPattern ||
+          normalized.startsWith(`${normalizedPattern}/`)
+        );
       }
       return segments.includes(normalizedPattern);
     }
     if (mode === "allow") {
-      return normalized === normalizedPattern || normalized.startsWith(`${normalizedPattern}/`);
+      return (
+        normalized === normalizedPattern ||
+        normalized.startsWith(`${normalizedPattern}/`)
+      );
     }
     return (
       normalized === normalizedPattern ||

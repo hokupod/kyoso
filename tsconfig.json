@@ -15,5 +15,10 @@
       "@kyoso/cli": ["./src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "kyoso.config.ts", "examples/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "kyoso.config.ts",
+    "examples/**/*.ts"
+  ]
 }

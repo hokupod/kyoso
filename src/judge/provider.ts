@@ -5,7 +5,7 @@ import { runDeterministicJudge } from "./deterministicFallback.js";
 import { runOpenAiJudge } from "./openai.js";
 
 export type JudgeOutput = {
-  summaryMarkdown: string;
+  summaryText: string;
   disagreementComments: Array<{ topic: string; judgeComment: string }>;
 };
 
@@ -21,7 +21,8 @@ export type JudgeRunResult = {
 
 export type JudgeRunInput = {
   tool: ReviewTool;
-  result: KyosoResult;
+  result: Omit<KyosoResult, "summaryMarkdown">;
+  summaryText: string;
   config: KyosoConfig["judge"];
   requestedProvider?: JudgeProvider;
   env: NodeJS.ProcessEnv;
@@ -41,7 +42,7 @@ export function resolveJudgeProvider(
 }
 
 export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
-  const fallback = runDeterministicJudge(input.result);
+  const fallback = runDeterministicJudge(input.result, input.summaryText);
   if (input.config.mode === "deterministic_only") {
     return {
       provider: "deterministic_fallback",

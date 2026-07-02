@@ -6,7 +6,11 @@ import { runDoctor } from "./doctor.js";
 import { runInit } from "./init.js";
 import { startMcpServer } from "../mcp/server.js";
 import { runReview } from "../core/runReview.js";
-import type { KyosoReviewRequest, ReviewTool } from "../core/types.js";
+import type {
+  KyosoReviewRequest,
+  NetworkMode,
+  ReviewTool,
+} from "../core/types.js";
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -15,17 +19,12 @@ async function main(): Promise<void> {
   const ignoreConfig = booleanFlag(parsed.flags, "ignore-config");
 
   if (parsed.command === "mcp") {
-    const network = stringFlag(parsed.flags, "network");
+    const network = networkFlag(parsed.flags);
     await startMcpServer({
       cwd,
       configPath,
       ignoreConfig,
-      mcpNetworkMode:
-        network === "unrestricted"
-          ? "unrestricted"
-          : network
-            ? "model_only"
-            : undefined,
+      mcpNetworkMode: network,
     });
     return;
   }
@@ -74,13 +73,12 @@ async function buildReviewRequest(
   const currentPlan = await readPathOrText(stringFlag(flags, "plan"));
   const selectedFiles = await readSelectedFiles(stringArrayFlag(flags, "file"));
   const diffInput = await buildDiff(tool, flags);
-  const network = stringFlag(flags, "network");
+  const network = networkFlag(flags);
   const options: NonNullable<KyosoReviewRequest["options"]> = {
     allowSecretRedaction: booleanFlag(flags, "allow-secret-redaction"),
   };
   if (network) {
-    options.network =
-      network === "unrestricted" ? "unrestricted" : "model_only";
+    options.network = network;
   }
   return {
     goal,
@@ -127,6 +125,25 @@ function defaultGoal(tool: ReviewTool): string {
   if (tool === "security_review")
     return "Review the supplied context with CISA Secure by Design criteria.";
   return "Review the supplied unified diff.";
+}
+
+function networkFlag(
+  flags: Record<string, string | boolean | string[]>,
+): NetworkMode | undefined {
+  if (flags.network === true) {
+    throw new Error(
+      "Missing value for --network. Expected model_only or unrestricted.",
+    );
+  }
+  return parseNetworkFlag(stringFlag(flags, "network"));
+}
+
+function parseNetworkFlag(value: string | undefined): NetworkMode | undefined {
+  if (value === undefined) return undefined;
+  if (value === "model_only" || value === "unrestricted") return value;
+  throw new Error(
+    `Invalid --network value "${value}". Expected model_only or unrestricted.`,
+  );
 }
 
 const HELP = `Kyoso

@@ -23,7 +23,14 @@ export async function runAnthropicJudge(
         max_tokens: 4096,
         temperature: 0,
         messages: [
-          { role: "user", content: buildJudgePrompt(input.tool, input.result) },
+          {
+            role: "user",
+            content: buildJudgePrompt(
+              input.tool,
+              input.result,
+              input.summaryText,
+            ),
+          },
         ],
       }),
     },
@@ -40,7 +47,7 @@ export async function runAnthropicJudge(
   )?.text;
   if (!content)
     throw new Error("Anthropic judge response did not include text content.");
-  return parseJudgeOutput(content, input.result.summaryMarkdown);
+  return parseJudgeOutput(content, input.summaryText);
 }
 
 async function fetchWithTimeout(

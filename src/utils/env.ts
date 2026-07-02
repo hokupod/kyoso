@@ -17,6 +17,9 @@ export function buildChildEnv(
   whitelist: string[],
   explicit: Record<string, string>,
 ): NodeJS.ProcessEnv {
+  if (!parentEnv.PATH) {
+    throw new Error("PATH is required to launch ACP child agents.");
+  }
   const env: NodeJS.ProcessEnv = {};
   for (const key of MINIMAL_ENV_KEYS) {
     if (parentEnv[key]) env[key] = parentEnv[key];

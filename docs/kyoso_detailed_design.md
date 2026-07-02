@@ -8,37 +8,37 @@
 
 ## 0. 決定済み事項
 
-| 項目 | 決定 |
-|---|---|
-| Product name | **Kyoso** |
-| README 表記 | **Kyo-so** |
-| 日本語名 | 協奏 |
-| npm package | `@kyoso/cli` |
-| CLI command | `kyoso` |
-| Config file | `kyoso.config.ts` |
-| Local data dir | `.kyoso/` |
-| Trace dir | `.kyoso/traces/` |
-| Env prefix | `KYOSO_` |
-| Child agent guard | `KYOSO_CHILD_AGENT=1` |
-| Runtime | TypeScript + Bun |
-| Primary client | Codex-first |
-| Supported client | Claude Code supported via MCP |
-| Debug / direct usage | CLI |
-| MCP tools | `plan_review`, `security_review`, `diff_review` |
-| Backend agents | Codex ACP + Claude ACP |
-| Agent launch | local subprocess / stdio |
-| Agent workspace | temp snapshot, read-only intent |
-| Agent write permission | disabled for MVP |
-| Agent roles | role-specific prompts |
-| Judge | deterministic aggregator + configurable judge LLM |
-| Security framework | CISA Secure by Design gate |
-| Timeout | 120 seconds per agent |
-| Max context | 500 KB selected file content budget |
-| Secret handling | default block, config extensible |
-| Network | default `model_only`; opt-in `--network unrestricted`; `mediated_web` designed but not MVP |
-| Audit | local JSONL; raw agent output disabled by default |
-| Agent failure | degraded result; do not hard fail if one agent succeeds |
-| Skill invocation | explicit, with recommended conditions |
+| 項目                   | 決定                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| Product name           | **Kyoso**                                                                                  |
+| README 表記            | **Kyo-so**                                                                                 |
+| 日本語名               | 協奏                                                                                       |
+| npm package            | `@kyoso/cli`                                                                               |
+| CLI command            | `kyoso`                                                                                    |
+| Config file            | `kyoso.config.ts`                                                                          |
+| Local data dir         | `.kyoso/`                                                                                  |
+| Trace dir              | `.kyoso/traces/`                                                                           |
+| Env prefix             | `KYOSO_`                                                                                   |
+| Child agent guard      | `KYOSO_CHILD_AGENT=1`                                                                      |
+| Runtime                | TypeScript + Bun                                                                           |
+| Primary client         | Codex-first                                                                                |
+| Supported client       | Claude Code supported via MCP                                                              |
+| Debug / direct usage   | CLI                                                                                        |
+| MCP tools              | `plan_review`, `security_review`, `diff_review`                                            |
+| Backend agents         | Codex ACP + Claude ACP                                                                     |
+| Agent launch           | local subprocess / stdio                                                                   |
+| Agent workspace        | temp snapshot, read-only intent                                                            |
+| Agent write permission | disabled for MVP                                                                           |
+| Agent roles            | role-specific prompts                                                                      |
+| Judge                  | deterministic aggregator + configurable judge LLM                                          |
+| Security framework     | CISA Secure by Design gate                                                                 |
+| Timeout                | 120 seconds per agent                                                                      |
+| Max context            | 500 KB selected file content budget                                                        |
+| Secret handling        | default block, config extensible                                                           |
+| Network                | default `model_only`; opt-in `--network unrestricted`; `mediated_web` designed but not MVP |
+| Audit                  | local JSONL; raw agent output disabled by default                                          |
+| Agent failure          | degraded result; do not hard fail if one agent succeeds                                    |
+| Skill invocation       | explicit, with recommended conditions                                                      |
 
 ---
 
@@ -340,6 +340,8 @@ kyoso mcp
 
 Must not print normal logs to stdout. stdout is reserved for MCP protocol messages. Logs go to stderr or trace files.
 
+`--network` is a request cap, not a default for every MCP request. `model_only` blocks unrestricted requests; `unrestricted` only permits explicit unrestricted requests when config also allows them.
+
 Options:
 
 ```bash
@@ -512,9 +514,12 @@ export type KyosoReviewRequest = {
     maxAgentTimeoutMs?: number;
     includeAgentRawOutputs?: boolean;
     judgeProvider?: "auto" | "openai" | "anthropic" | "none";
+    allowSecretRedaction?: boolean;
   };
 };
 ```
+
+`includeAgentRawOutputs` only affects `KyosoResult.agentOpinions[*].rawText`, and the value is sanitized and display-capped. It never returns pre-redaction secrets.
 
 ### 8.1 Validation rules
 
@@ -545,16 +550,9 @@ export type KyosoReviewRequest = {
 ## 9. Public result schema
 
 ```ts
-export type KyosoDecision =
-  | "approve"
-  | "approve_with_changes"
-  | "block";
+export type KyosoDecision = "approve" | "approve_with_changes" | "block";
 
-export type GateStatus =
-  | "pass"
-  | "warn"
-  | "fail"
-  | "not_applicable";
+export type GateStatus = "pass" | "warn" | "fail" | "not_applicable";
 
 export type KyosoResult = {
   decision: KyosoDecision;
@@ -884,8 +882,7 @@ Kyoso MVP uses a disposable temporary snapshot and policy-level write denial. It
 export type AgentName = "codex" | "claude";
 
 export type AgentRole =
-  | "implementation_reviewer"
-  | "architecture_security_reviewer";
+  "implementation_reviewer" | "architecture_security_reviewer";
 
 export type AgentRunInput = {
   traceId: string;
@@ -968,6 +965,8 @@ Implementation:
 - For `--network unrestricted`, only network policy changes; write policy remains denied.
 
 ### 13.5 Agent-specific default commands
+
+If `npx` is unavailable but `bunx` is available, `kyoso doctor` should suggest replacing `command: "npx"` with `command: "bunx"` in `kyoso.config.ts`. It must not silently rewrite config.
 
 Codex:
 
@@ -1140,12 +1139,13 @@ Before judge LLM:
 1. Normalize severities.
 2. Normalize categories.
 3. Group duplicate findings by semantic title, category, file, and recommendation.
+   - MVP uses deterministic title-token overlap with matching category and file set.
 4. Preserve high/critical single-agent findings.
 5. Merge `sourceAgents`.
 6. Merge `testsToAdd` and deduplicate.
 7. Extract obvious disagreements:
    - one agent says block, another says approve
-   - different recommended architecture
+   - different recommended architecture (judge-assisted; deterministic text comparison is not authoritative)
    - conflicting severity for same issue
 
 ### 15.2 Judge LLM
@@ -1164,11 +1164,17 @@ type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
 
 Do not require judge LLM for MVP to return a result.
 
+Environment overrides:
+
+- `OPENAI_BASE_URL`
+- `KYOSO_OPENAI_JUDGE_MODEL`, default `gpt-4o-mini`
+- `KYOSO_ANTHROPIC_JUDGE_MODEL`, default `claude-3-5-haiku-latest`
+
 ### 15.3 Judge responsibilities
 
 Judge LLM may:
 
-- rewrite summary
+- rewrite the `## Summary` section body only
 - remove duplicate wording
 - explain disagreements
 - improve clarity
@@ -1176,10 +1182,13 @@ Judge LLM may:
 
 Judge LLM must not:
 
+- replace the full Markdown report
 - lower critical/high findings solely because another agent missed them
 - change final decision directly
 - invent file references
 - output a decision that bypasses deterministic policy
+
+The implementation renders the full Markdown report deterministically after Judge runs. Judge output is limited to summary text and disagreement comments.
 
 ### 15.4 Final decision policy
 
@@ -1200,9 +1209,11 @@ function decide(input: AggregatedReview): KyosoDecision {
 
   if (input.cisa?.secureByDefault === "fail") return "approve_with_changes";
 
-  if (input.findings.some((f) => f.severity === "high")) return "approve_with_changes";
+  if (input.findings.some((f) => f.severity === "high"))
+    return "approve_with_changes";
 
-  if (input.findings.some((f) => f.severity === "medium")) return "approve_with_changes";
+  if (input.findings.some((f) => f.severity === "medium"))
+    return "approve_with_changes";
 
   return "approve";
 }
@@ -1444,15 +1455,60 @@ Write these event types:
 
 ```ts
 type TraceEvent =
-  | { type: "request_received"; traceId: string; tool: string; timestamp: string }
-  | { type: "config_loaded"; traceId: string; configPath?: string; configHash?: string; timestamp: string }
-  | { type: "secret_scan_completed"; traceId: string; detected: boolean; redactions: number; timestamp: string }
-  | { type: "snapshot_created"; traceId: string; path: string; fileCount: number; timestamp: string }
+  | {
+      type: "request_received";
+      traceId: string;
+      tool: string;
+      timestamp: string;
+    }
+  | {
+      type: "config_loaded";
+      traceId: string;
+      configPath?: string;
+      configHash?: string;
+      timestamp: string;
+    }
+  | {
+      type: "secret_scan_completed";
+      traceId: string;
+      detected: boolean;
+      redactions: number;
+      timestamp: string;
+    }
+  | {
+      type: "snapshot_created";
+      traceId: string;
+      path: string;
+      fileCount: number;
+      timestamp: string;
+    }
   | { type: "agent_started"; traceId: string; agent: string; timestamp: string }
-  | { type: "agent_completed"; traceId: string; agent: string; status: string; timestamp: string }
-  | { type: "aggregation_completed"; traceId: string; findingCount: number; timestamp: string }
-  | { type: "judge_completed"; traceId: string; provider: string; status: string; timestamp: string }
-  | { type: "decision_completed"; traceId: string; decision: KyosoDecision; timestamp: string }
+  | {
+      type: "agent_completed";
+      traceId: string;
+      agent: string;
+      status: string;
+      timestamp: string;
+    }
+  | {
+      type: "aggregation_completed";
+      traceId: string;
+      findingCount: number;
+      timestamp: string;
+    }
+  | {
+      type: "judge_completed";
+      traceId: string;
+      provider: string;
+      status: string;
+      timestamp: string;
+    }
+  | {
+      type: "decision_completed";
+      traceId: string;
+      decision: KyosoDecision;
+      timestamp: string;
+    }
   | { type: "response_sent"; traceId: string; timestamp: string };
 ```
 
@@ -1475,6 +1531,7 @@ Audit may include:
 - finding metadata
 - redaction count
 - agent status
+- sanitized `rawText` on `agent_completed` events only when `audit.includeRawAgentOutput` is true
 
 ---
 
@@ -1498,12 +1555,12 @@ Template:
 
 ## CISA Secure by Design Gate
 
-| Dimension | Status | Notes |
-|---|---|---|
-| Customer Security Outcomes | warn | ... |
-| Secure by Default | fail | ... |
-| Transparency & Accountability | pass | ... |
-| Governance | warn | ... |
+| Dimension                     | Status | Notes |
+| ----------------------------- | ------ | ----- |
+| Customer Security Outcomes    | warn   | ...   |
+| Secure by Default             | fail   | ...   |
+| Transparency & Accountability | pass   | ...   |
+| Governance                    | warn   | ...   |
 
 ## Findings
 
@@ -1526,9 +1583,11 @@ Files: `src/auth/callback.ts:42-60`
 ## Agent Opinions
 
 ### Codex
+
 ...
 
 ### Claude
+
 ...
 
 ## Disagreements
@@ -1674,13 +1733,7 @@ Initial placeholder:
   "bin": {
     "kyoso": "./dist/bin/kyoso.js"
   },
-  "files": [
-    "dist",
-    "skills",
-    "examples",
-    "README.md",
-    "LICENSE"
-  ],
+  "files": ["dist", "skills", "examples", "README.md", "LICENSE"],
   "scripts": {
     "dev": "bun run src/cli/main.ts",
     "typecheck": "tsc --noEmit",
@@ -1709,9 +1762,17 @@ If Bun-generated output is not Node-compatible, create a small Node launcher:
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 
-const result = spawnSync("bun", ["run", new URL("../kyoso-bun.ts", import.meta.url).pathname, ...process.argv.slice(2)], {
-  stdio: "inherit",
-});
+const result = spawnSync(
+  "bun",
+  [
+    "run",
+    new URL("../kyoso-bun.ts", import.meta.url).pathname,
+    ...process.argv.slice(2),
+  ],
+  {
+    stdio: "inherit",
+  },
+);
 
 process.exit(result.status ?? 1);
 ```
@@ -1855,18 +1916,18 @@ When implementing Kyoso:
 
 ## 28. Known risks and mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Backend agent edits files | Use temp snapshot, deny permissions, read-only mode where supported, discard snapshot |
-| Backend agent recursively calls Kyoso | `KYOSO_CHILD_AGENT=1`, do not pass Kyoso MCP config, recursion guard |
-| Credentials leak to audit | env allowlist, audit sanitizer, raw output disabled |
-| Secret appears in input | detect, redact, block by default |
-| One agent unavailable | degraded result |
-| Judge hallucination | deterministic final decision, preserve source findings |
-| Config executes malicious code | `--ignore-config`, config hash, trust warning |
-| MCP stdout polluted | logs to stderr only |
-| Timeout in client | 120s agent timeout, MCP tool timeout docs recommend 300s |
-| User assumes full sandbox | explicit docs: MVP is temp snapshot, not OS sandbox |
+| Risk                                  | Mitigation                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------- |
+| Backend agent edits files             | Use temp snapshot, deny permissions, read-only mode where supported, discard snapshot |
+| Backend agent recursively calls Kyoso | `KYOSO_CHILD_AGENT=1`, do not pass Kyoso MCP config, recursion guard                  |
+| Credentials leak to audit             | env allowlist, audit sanitizer, raw output disabled                                   |
+| Secret appears in input               | detect, redact, block by default                                                      |
+| One agent unavailable                 | degraded result                                                                       |
+| Judge hallucination                   | deterministic final decision, preserve source findings                                |
+| Config executes malicious code        | `--ignore-config`, config hash, trust warning                                         |
+| MCP stdout polluted                   | logs to stderr only                                                                   |
+| Timeout in client                     | 120s agent timeout, MCP tool timeout docs recommend 300s                              |
+| User assumes full sandbox             | explicit docs: MVP is temp snapshot, not OS sandbox                                   |
 
 ---
 
@@ -1937,25 +1998,25 @@ MVP is considered complete when all of the following pass:
 
 ## 32. Design item to implementation traceability
 
-| Design item | Implementation files |
-|---|---|
-| §6 CLI entrypoints | `src/cli/main.ts`, `src/cli/args.ts`, `src/cli/io.ts`, `src/cli/doctor.ts`, `src/cli/init.ts` |
-| §7 MCP server and tools | `src/mcp/server.ts`, `src/mcp/schemas.ts`, `src/mcp/formatMcpResponse.ts` |
-| §8 Tool contracts and request schema | `src/core/types.ts`, `src/core/validateRequest.ts`, `src/mcp/schemas.ts` |
-| §10 Config loading | `src/config/schema.ts`, `src/config/defaultConfig.ts`, `src/config/loadConfig.ts`, `src/config/defineConfig.ts`, `src/config/tsConfigLoader.ts` |
-| §11 Review pipeline | `src/core/runReview.ts` |
-| §12 Context and snapshot | `src/context/buildContext.ts`, `src/context/truncate.ts`, `src/context/pathPolicy.ts`, `src/workspace/createSnapshot.ts`, `src/workspace/cleanup.ts` |
-| §13.2 Env allowlist | `src/utils/env.ts` (`buildChildEnv`) |
-| §13.3 Recursion guard | `src/security/recursionGuard.ts` |
-| §13.4 Permission denial | `src/acp/AcpAgentProcess.ts` (`runAcpClientWorkflow` request handlers) |
-| §14 Agent prompts and normalization | `src/acp/prompts.ts`, `src/acp/normalize.ts`, `src/acp/AcpAgentManager.ts`, `src/acp/AcpAgentProcess.ts`, `src/acp/FakeAgentManager.ts` |
-| §15.1 Deterministic aggregation | `src/aggregate/aggregateFindings.ts`, `src/aggregate/severity.ts` |
-| §15.2-15.3 Judge LLM | `src/judge/provider.ts`, `src/judge/prompt.ts`, `src/judge/openai.ts`, `src/judge/anthropic.ts`, `src/judge/deterministicFallback.ts` |
-| §15.4 Final decision | `src/security/decision.ts` |
-| §16 CISA gate | `src/security/cisaGate.ts` |
-| §17 Secrets and redaction | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts` |
-| §18 Network policy | `src/core/runReview.ts`, `src/cli/main.ts` |
-| §20 Audit trace | `src/audit/trace.ts`, `src/audit/sanitize.ts` |
-| §21 Markdown output | `src/output/markdown.ts` |
-| §22 Packaged skill | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml` |
-| §25 Test strategy | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts` |
+| Design item                          | Implementation files                                                                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §6 CLI entrypoints                   | `src/cli/main.ts`, `src/cli/args.ts`, `src/cli/io.ts`, `src/cli/doctor.ts`, `src/cli/init.ts`                                                        |
+| §7 MCP server and tools              | `src/mcp/server.ts`, `src/mcp/schemas.ts`, `src/mcp/formatMcpResponse.ts`                                                                            |
+| §8 Tool contracts and request schema | `src/core/types.ts`, `src/core/validateRequest.ts`, `src/mcp/schemas.ts`                                                                             |
+| §10 Config loading                   | `src/config/schema.ts`, `src/config/defaultConfig.ts`, `src/config/loadConfig.ts`, `src/config/defineConfig.ts`, `src/config/tsConfigLoader.ts`      |
+| §11 Review pipeline                  | `src/core/runReview.ts`                                                                                                                              |
+| §12 Context and snapshot             | `src/context/buildContext.ts`, `src/context/truncate.ts`, `src/context/pathPolicy.ts`, `src/workspace/createSnapshot.ts`, `src/workspace/cleanup.ts` |
+| §13.2 Env allowlist                  | `src/utils/env.ts` (`buildChildEnv`)                                                                                                                 |
+| §13.3 Recursion guard                | `src/security/recursionGuard.ts`                                                                                                                     |
+| §13.4 Permission denial              | `src/acp/AcpAgentProcess.ts` (`runAcpClientWorkflow` request handlers)                                                                               |
+| §14 Agent prompts and normalization  | `src/acp/prompts.ts`, `src/acp/normalize.ts`, `src/acp/AcpAgentManager.ts`, `src/acp/AcpAgentProcess.ts`, `src/acp/FakeAgentManager.ts`              |
+| §15.1 Deterministic aggregation      | `src/aggregate/aggregateFindings.ts`, `src/aggregate/severity.ts`                                                                                    |
+| §15.2-15.3 Judge LLM                 | `src/judge/provider.ts`, `src/judge/prompt.ts`, `src/judge/openai.ts`, `src/judge/anthropic.ts`, `src/judge/deterministicFallback.ts`                |
+| §15.4 Final decision                 | `src/security/decision.ts`                                                                                                                           |
+| §16 CISA gate                        | `src/security/cisaGate.ts`                                                                                                                           |
+| §17 Secrets and redaction            | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts`                                                               |
+| §18 Network policy                   | `src/core/runReview.ts`, `src/cli/main.ts`                                                                                                           |
+| §20 Audit trace                      | `src/audit/trace.ts`, `src/audit/sanitize.ts`                                                                                                        |
+| §21 Markdown output                  | `src/output/markdown.ts`                                                                                                                             |
+| §22 Packaged skill                   | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml`                                                             |
+| §25 Test strategy                    | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts`                            |

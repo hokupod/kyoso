@@ -1,6 +1,14 @@
 import type { KyosoResult, ReviewTool } from "../core/types.js";
 
-export function renderMarkdownResult(tool: ReviewTool, result: Omit<KyosoResult, "summaryMarkdown">): string {
+type MarkdownRenderOptions = {
+  summaryText?: string;
+};
+
+export function renderMarkdownResult(
+  tool: ReviewTool,
+  result: Omit<KyosoResult, "summaryMarkdown">,
+  options: MarkdownRenderOptions = {},
+): string {
   const lines: string[] = [
     "# Kyoso Review Result",
     "",
@@ -11,9 +19,7 @@ export function renderMarkdownResult(tool: ReviewTool, result: Omit<KyosoResult,
     "",
     "## Summary",
     "",
-    result.findings.length === 0
-      ? "No blocking findings were detected from the supplied context."
-      : `${result.findings.length} finding(s) require attention.`,
+    options.summaryText ?? defaultSummaryText(result),
   ];
 
   if (result.cisaSecureByDesign) {
@@ -49,20 +55,35 @@ export function renderMarkdownResult(tool: ReviewTool, result: Omit<KyosoResult,
   }
 
   lines.push("", "## Tests to Add", "");
-  lines.push(...(result.testsToAdd.length > 0 ? result.testsToAdd.map((test) => `- ${test}`) : ["- None."]));
+  lines.push(
+    ...(result.testsToAdd.length > 0
+      ? result.testsToAdd.map((test) => `- ${test}`)
+      : ["- None."]),
+  );
 
   lines.push("", "## Residual Risks", "");
-  lines.push(...(result.residualRisks.length > 0 ? result.residualRisks.map((risk) => `- ${risk}`) : ["- None."]));
+  lines.push(
+    ...(result.residualRisks.length > 0
+      ? result.residualRisks.map((risk) => `- ${risk}`)
+      : ["- None."]),
+  );
 
   lines.push("", "## Agent Opinions", "");
   for (const opinion of result.agentOpinions) {
-    lines.push(`### ${title(opinion.agent)}`, "", `${opinion.summary} (${opinion.status})`, "");
+    lines.push(
+      `### ${title(opinion.agent)}`,
+      "",
+      `${opinion.summary} (${opinion.status})`,
+      "",
+    );
   }
 
   lines.push("", "## Disagreements", "");
   lines.push(
     ...(result.disagreements.length > 0
-      ? result.disagreements.map((item) => `- ${item.topic}: ${item.judgeComment}`)
+      ? result.disagreements.map(
+          (item) => `- ${item.topic}: ${item.judgeComment}`,
+        )
       : ["- None."]),
   );
 
@@ -73,9 +94,19 @@ export function renderMarkdownResult(tool: ReviewTool, result: Omit<KyosoResult,
     "Kyoso did not modify files. Review was performed on a temporary snapshot.",
   );
   if (result.audit.networkMode === "unrestricted") {
-    lines.push("Network mode was unrestricted. File modification policy remained denied.");
+    lines.push(
+      "Network mode was unrestricted. File modification policy remained denied.",
+    );
   }
   return lines.join("\n");
+}
+
+export function defaultSummaryText(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+): string {
+  return result.findings.length === 0
+    ? "No blocking findings were detected from the supplied context."
+    : `${result.findings.length} finding(s) require attention.`;
 }
 
 function title(value: string): string {
@@ -88,5 +119,9 @@ function notes(items: string[]): string {
 
 function formatFiles(files: KyosoResult["findings"][number]["files"]): string {
   if (!files?.length) return "n/a";
-  return files.map((file) => `\`${file.path}${file.lineStart ? `:${file.lineStart}` : ""}\``).join(", ");
+  return files
+    .map(
+      (file) => `\`${file.path}${file.lineStart ? `:${file.lineStart}` : ""}\``,
+    )
+    .join(", ");
 }

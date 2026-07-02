@@ -115,6 +115,17 @@ Raw agent output and raw file contents are disabled by default.
 
 TypeScript config files can execute arbitrary code. Do not run Kyoso in untrusted repositories without `--ignore-config`.
 
+Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the OpenAI judge, or `ANTHROPIC_API_KEY` to use the Anthropic judge. Optional overrides:
+
+- `OPENAI_BASE_URL`: OpenAI-compatible API base URL
+- `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-4o-mini`
+- `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-3-5-haiku-latest`
+
+## Development
+
+- `KYOSO_TEST_FAKE_AGENTS=1`: test-only fake ACP agents; do not set in production.
+- `KYOSO_KEEP_TEMP=1`: keep temporary snapshots for local debugging.
+
 ## License
 
 Kyoso is licensed under the GNU Affero General Public License v3.0 or later (`AGPL-3.0-or-later`).

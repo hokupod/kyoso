@@ -1,5 +1,9 @@
 import type { KyosoReviewRequest } from "../core/types.js";
-import { isAllowedPath, isDeniedPath, normalizeRelativePath } from "./pathPolicy.js";
+import {
+  isAllowedPath,
+  isDeniedPath,
+  normalizeRelativePath,
+} from "./pathPolicy.js";
 import { truncateUtf8 } from "./truncate.js";
 
 export type BuiltContext = {
@@ -9,7 +13,12 @@ export type BuiltContext = {
 
 export function buildContext(
   request: KyosoReviewRequest,
-  options: { maxContextBytes: number; maxDiffBytes: number; denyPatterns: string[]; allowPatterns?: string[] },
+  options: {
+    maxContextBytes: number;
+    maxDiffBytes: number;
+    denyPatterns: string[];
+    allowPatterns?: string[];
+  },
 ): BuiltContext {
   const warnings: string[] = [];
   const normalized: KyosoReviewRequest = structuredClone(request);
@@ -29,10 +38,15 @@ export function buildContext(
     );
   }
   if (normalized.constraints) {
-    normalized.constraints = normalized.constraints.flatMap((constraint, index) => {
-      const truncated = truncateContextText(constraint, `Constraint truncated: constraints[${index}]`);
-      return truncated.length > 0 ? [truncated] : [];
-    });
+    normalized.constraints = normalized.constraints.flatMap(
+      (constraint, index) => {
+        const truncated = truncateContextText(
+          constraint,
+          `Constraint truncated: constraints[${index}]`,
+        );
+        return truncated.length > 0 ? [truncated] : [];
+      },
+    );
   }
 
   if (normalized.selectedFiles) {
@@ -48,7 +62,8 @@ export function buildContext(
       }
       const truncated = truncateUtf8(file.content, Math.max(0, remaining));
       remaining -= truncated.bytes;
-      if (truncated.truncated) warnings.push(`Selected file truncated: ${path}`);
+      if (truncated.truncated)
+        warnings.push(`Selected file truncated: ${path}`);
       return [
         {
           ...file,
@@ -61,7 +76,10 @@ export function buildContext(
   }
 
   if (normalized.diff) {
-    const truncated = truncateUtf8(normalized.diff.unifiedDiff, options.maxDiffBytes);
+    const truncated = truncateUtf8(
+      normalized.diff.unifiedDiff,
+      options.maxDiffBytes,
+    );
     if (truncated.truncated) warnings.push("Diff truncated");
     normalized.diff = {
       ...normalized.diff,

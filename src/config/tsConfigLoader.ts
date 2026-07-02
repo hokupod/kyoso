@@ -11,12 +11,17 @@ type ConfigModule = {
   [key: string]: unknown;
 };
 
-export async function loadConfigModule(filePath: string, source: string): Promise<ConfigModule> {
+export async function loadConfigModule(
+  filePath: string,
+  source: string,
+): Promise<ConfigModule> {
   const ext = extname(filePath);
   if (ext === ".ts" || ext === ".tsx") {
     return loadTypeScriptConfig(filePath, source);
   }
-  return (await import(`${pathToFileURL(filePath).href}?t=${Date.now()}`)) as ConfigModule;
+  return (await import(
+    `${pathToFileURL(filePath).href}?t=${Date.now()}`
+  )) as ConfigModule;
 }
 
 function loadTypeScriptConfig(filePath: string, source: string): ConfigModule {
@@ -48,6 +53,13 @@ function loadTypeScriptConfig(filePath: string, source: string): ConfigModule {
     dirname: string,
     defineConfig: typeof localDefineConfig,
   ) => void;
-  runner(module.exports, require, module, filePath, dirname(filePath), localDefineConfig);
+  runner(
+    module.exports,
+    require,
+    module,
+    filePath,
+    dirname(filePath),
+    localDefineConfig,
+  );
   return module.exports;
 }

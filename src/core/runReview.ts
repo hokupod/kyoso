@@ -23,7 +23,10 @@ import type {
   SecretScanResult,
 } from "./types.js";
 import { validateReviewRequest } from "./validateRequest.js";
-import { renderMarkdownResult } from "../output/markdown.js";
+import {
+  defaultSummaryText,
+  renderMarkdownResult,
+} from "../output/markdown.js";
 import { runJudge } from "../judge/provider.js";
 import { assertNotChildAgent } from "../security/recursionGuard.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
@@ -111,6 +114,7 @@ export async function runReview(
     directory: loaded.config.audit.directory,
     traceId,
     cwd,
+    includeRawAgentOutput: loaded.config.audit.includeRawAgentOutput,
   });
 
   const warnings: string[] = [...loaded.warnings, ...trace.warnings];
@@ -304,7 +308,12 @@ export async function runReview(
               "No residual risks were reported by completed agents; verify security assumptions before release.",
             ]
           : aggregate.residualRisks,
-      agentOpinions: normalizedAgentResults.map(agentOpinionSummary),
+      agentOpinions: normalizedAgentResults.map((result) =>
+        agentOpinionSummary(
+          result,
+          request.options?.includeAgentRawOutputs === true,
+        ),
+      ),
       audit: {
         traceId,
         startedAt,
@@ -317,13 +326,11 @@ export async function runReview(
         warnings: Array.from(new Set([...warnings, ...trace.warnings])),
       },
     };
-    const result: KyosoResult = {
-      ...resultWithoutMarkdown,
-      summaryMarkdown: renderMarkdownResult(tool, resultWithoutMarkdown),
-    };
+    const summaryText = defaultSummaryText(resultWithoutMarkdown);
     const judge = await runJudge({
       tool,
-      result,
+      result: resultWithoutMarkdown,
+      summaryText,
       config: loaded.config.judge,
       requestedProvider: request.options?.judgeProvider,
       env: options.env ?? process.env,
@@ -334,12 +341,22 @@ export async function runReview(
         comment.judgeComment,
       ]),
     );
-    result.summaryMarkdown = judge.output.summaryMarkdown;
-    result.disagreements = result.disagreements.map((disagreement) => ({
-      ...disagreement,
-      judgeComment:
-        judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
-    }));
+    const disagreements = resultWithoutMarkdown.disagreements.map(
+      (disagreement) => ({
+        ...disagreement,
+        judgeComment:
+          judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
+      }),
+    );
+    const result: KyosoResult = {
+      ...resultWithoutMarkdown,
+      disagreements,
+      summaryMarkdown: renderMarkdownResult(
+        tool,
+        { ...resultWithoutMarkdown, disagreements },
+        { summaryText: judge.output.summaryText },
+      ),
+    };
     const judgeEvent: Record<string, unknown> = {
       type: "judge_completed",
       traceId,
@@ -406,15 +423,19 @@ async function runAgents(input: {
   );
   const results = await input.manager.runAll(agentInputs);
   await Promise.all(
-    results.map((result) =>
-      input.trace.write({
+    results.map((result) => {
+      const event: Record<string, unknown> = {
         type: "agent_completed",
         traceId: input.traceId,
         agent: result.agent,
         status: result.status,
         timestamp: new Date().toISOString(),
-      }),
-    ),
+      };
+      if (input.config.audit.includeRawAgentOutput && result.rawText) {
+        event.rawText = sanitizeTextForDisplay(result.rawText);
+      }
+      return input.trace.write(event);
+    }),
   );
   return results;
 }
@@ -440,8 +461,9 @@ function normalizeAgentRunResult(result: AgentRunResult): AgentRunResult {
 
 function agentOpinionSummary(
   result: AgentRunResult,
+  includeRawText = false,
 ): KyosoResult["agentOpinions"][number] {
-  return {
+  const opinion: KyosoResult["agentOpinions"][number] = {
     agent: result.agent,
     role: result.role,
     summary:
@@ -450,6 +472,10 @@ function agentOpinionSummary(
     status: result.status,
     errorCode: result.error?.code,
   };
+  if (includeRawText && result.rawText) {
+    opinion.rawText = sanitizeTextForDisplay(result.rawText);
+  }
+  return opinion;
 }
 
 async function buildSecretBlockResult(input: {
@@ -656,5 +682,5 @@ function resolveNetworkMode(
       "NETWORK_MODE_DISABLED",
     );
   }
-  return requested ?? mcpNetworkMode ?? configDefault;
+  return requested ?? configDefault;
 }

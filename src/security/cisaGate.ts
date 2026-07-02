@@ -5,7 +5,10 @@ import type {
   KyosoFinding,
 } from "../core/types.js";
 
-export function computeCisaGate(findings: KyosoFinding[], agentResults: AgentRunResult[]): CisaSecureByDesignResult {
+export function computeCisaGate(
+  findings: KyosoFinding[],
+  agentResults: AgentRunResult[],
+): CisaSecureByDesignResult {
   const gate: CisaSecureByDesignResult = {
     customerSecurityOutcomes: "pass",
     secureByDefault: "pass",
@@ -18,10 +21,16 @@ export function computeCisaGate(findings: KyosoFinding[], agentResults: AgentRun
     const cisa = result.normalized?.cisaSecureByDesign;
     if (!cisa) continue;
     if (cisa.customerSecurityOutcomes) {
-      gate.customerSecurityOutcomes = worstGate(gate.customerSecurityOutcomes, cisa.customerSecurityOutcomes);
+      gate.customerSecurityOutcomes = worstGate(
+        gate.customerSecurityOutcomes,
+        cisa.customerSecurityOutcomes,
+      );
     }
     if (cisa.secureByDefault) {
-      gate.secureByDefault = worstGate(gate.secureByDefault, cisa.secureByDefault);
+      gate.secureByDefault = worstGate(
+        gate.secureByDefault,
+        cisa.secureByDefault,
+      );
     }
     if (cisa.transparencyAndAccountability) {
       gate.transparencyAndAccountability = worstGate(
@@ -29,7 +38,8 @@ export function computeCisaGate(findings: KyosoFinding[], agentResults: AgentRun
         cisa.transparencyAndAccountability,
       );
     }
-    if (cisa.governance) gate.governance = worstGate(gate.governance, cisa.governance);
+    if (cisa.governance)
+      gate.governance = worstGate(gate.governance, cisa.governance);
     gate.notes.push(...(cisa.notes ?? []));
   }
 
@@ -42,37 +52,72 @@ export function computeCisaGate(findings: KyosoFinding[], agentResults: AgentRun
           : "pass";
 
     if (finding.category === "secret") {
-      gate.customerSecurityOutcomes = worstGate(gate.customerSecurityOutcomes, status);
-      gate.secureByDefault = worstGate(gate.secureByDefault, status === "fail" ? "warn" : status);
+      gate.customerSecurityOutcomes = worstGate(
+        gate.customerSecurityOutcomes,
+        status,
+      );
+      gate.secureByDefault = worstGate(
+        gate.secureByDefault,
+        status === "fail" ? "warn" : status,
+      );
       gate.notes.push(
         status === "fail"
           ? "Detected secret material was redacted and blocked before agent execution."
           : "Detected secret material was redacted before agent execution continued.",
       );
     }
-    if (["authn", "authz", "csrf", "xss", "ssrf", "injection", "privacy", "data_loss"].includes(finding.category)) {
-      gate.customerSecurityOutcomes = worstGate(gate.customerSecurityOutcomes, status);
+    if (
+      [
+        "authn",
+        "authz",
+        "csrf",
+        "xss",
+        "ssrf",
+        "injection",
+        "privacy",
+        "data_loss",
+      ].includes(finding.category)
+    ) {
+      gate.customerSecurityOutcomes = worstGate(
+        gate.customerSecurityOutcomes,
+        status,
+      );
       gate.secureByDefault = worstGate(gate.secureByDefault, status);
     }
-    if (finding.category === "test" || finding.category === "cisa_secure_by_design") {
-      gate.governance = worstGate(gate.governance, status === "fail" ? "warn" : status);
+    if (
+      finding.category === "test" ||
+      finding.category === "cisa_secure_by_design"
+    ) {
+      gate.governance = worstGate(
+        gate.governance,
+        status === "fail" ? "warn" : status,
+      );
     }
     for (const mapping of finding.cisaMapping ?? []) {
       if (mapping === "customer_security_outcomes") {
-        gate.customerSecurityOutcomes = worstGate(gate.customerSecurityOutcomes, status);
+        gate.customerSecurityOutcomes = worstGate(
+          gate.customerSecurityOutcomes,
+          status,
+        );
       }
       if (mapping === "secure_by_default") {
         gate.secureByDefault = worstGate(gate.secureByDefault, status);
       }
       if (mapping === "transparency_and_accountability") {
-        gate.transparencyAndAccountability = worstGate(gate.transparencyAndAccountability, status);
+        gate.transparencyAndAccountability = worstGate(
+          gate.transparencyAndAccountability,
+          status,
+        );
       }
-      if (mapping === "governance") gate.governance = worstGate(gate.governance, status);
+      if (mapping === "governance")
+        gate.governance = worstGate(gate.governance, status);
     }
   }
 
   if (gate.notes.length === 0) {
-    gate.notes.push("No CISA Secure by Design gate failures were detected from the supplied context.");
+    gate.notes.push(
+      "No CISA Secure by Design gate failures were detected from the supplied context.",
+    );
   }
   gate.notes = Array.from(new Set(gate.notes));
   return gate;

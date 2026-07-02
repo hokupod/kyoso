@@ -9,19 +9,35 @@ type SecretPattern = {
 const SECRET_PATTERNS: SecretPattern[] = [
   { kind: "openai_api_key", pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g },
   { kind: "anthropic_api_key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g },
-  { kind: "github_token", pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g },
+  {
+    kind: "github_token",
+    pattern: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g,
+  },
   { kind: "aws_access_key", pattern: /\bAKIA[0-9A-Z]{16}\b/g },
-  { kind: "google_private_key", pattern: /"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----[^"]+"/g },
-  { kind: "private_key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
+  {
+    kind: "google_private_key",
+    pattern: /"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----[^"]+"/g,
+  },
+  {
+    kind: "private_key",
+    pattern:
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  },
   { kind: "slack_token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g },
-  { kind: "stripe_secret_key", pattern: /\bsk_(?:live|test)_[A-Za-z0-9]{20,}\b/g },
+  {
+    kind: "stripe_secret_key",
+    pattern: /\bsk_(?:live|test)_[A-Za-z0-9]{20,}\b/g,
+  },
   {
     kind: "high_entropy_assignment",
-    pattern: /\b(?:api[_-]?key|secret|token|password)\b\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{32,}["']?/gi,
+    pattern:
+      /\b(?:api[_-]?key|secret|token|password)\b\s*[:=]\s*["']?[A-Za-z0-9_./+=-]{32,}["']?/gi,
   },
 ];
 
-export function scanAndRedactSecrets(request: KyosoReviewRequest): SecretScanResult {
+export function scanAndRedactSecrets(
+  request: KyosoReviewRequest,
+): SecretScanResult {
   const cloned = structuredClone(request);
   const matches: SecretScanResult["matches"] = [];
   let redactions = 0;
@@ -39,26 +55,37 @@ export function scanAndRedactSecrets(request: KyosoReviewRequest): SecretScanRes
   };
 
   cloned.goal = redactText(cloned.goal, "goal");
-  if (cloned.repoSummary) cloned.repoSummary = redactText(cloned.repoSummary, "repoSummary");
-  if (cloned.currentPlan) cloned.currentPlan = redactText(cloned.currentPlan, "currentPlan");
+  if (cloned.repoSummary)
+    cloned.repoSummary = redactText(cloned.repoSummary, "repoSummary");
+  if (cloned.currentPlan)
+    cloned.currentPlan = redactText(cloned.currentPlan, "currentPlan");
   if (cloned.constraints) {
     cloned.constraints = cloned.constraints.map((constraint, index) =>
       redactText(constraint, `constraints[${index}]`),
     );
   }
-  if (cloned.diff) cloned.diff.unifiedDiff = redactText(cloned.diff.unifiedDiff, "diff.unifiedDiff");
+  if (cloned.diff)
+    cloned.diff.unifiedDiff = redactText(
+      cloned.diff.unifiedDiff,
+      "diff.unifiedDiff",
+    );
   if (cloned.selectedFiles) {
     cloned.selectedFiles = cloned.selectedFiles.map((file, index) => {
       const path = redactText(file.path, `selectedFiles[${index}].path`);
       const pathSecret = isCredentialPath(path);
       if (pathSecret) {
         redactions += 1;
-        matches.push({ kind: ".env_or_credential_path", location: `selectedFiles:${path}` });
+        matches.push({
+          kind: ".env_or_credential_path",
+          location: `selectedFiles:${path}`,
+        });
       }
       return {
         ...file,
         path,
-        content: pathSecret ? REDACTION : redactText(file.content, `selectedFiles:${path}`),
+        content: pathSecret
+          ? REDACTION
+          : redactText(file.content, `selectedFiles:${path}`),
       };
     });
   }

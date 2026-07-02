@@ -3,13 +3,17 @@ import { dirname, extname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-export async function readPathOrText(value: string | undefined): Promise<string | undefined> {
+export async function readPathOrText(
+  value: string | undefined,
+): Promise<string | undefined> {
   if (!value) return undefined;
   if (await exists(value)) return readFile(value, "utf8");
   return value;
 }
 
-export async function readSelectedFiles(paths: string[]): Promise<Array<{ path: string; language?: string; content: string }>> {
+export async function readSelectedFiles(
+  paths: string[],
+): Promise<Array<{ path: string; language?: string; content: string }>> {
   return Promise.all(
     paths.map(async (path) => {
       const content = await readFile(path, "utf8");
@@ -19,9 +23,16 @@ export async function readSelectedFiles(paths: string[]): Promise<Array<{ path: 
   );
 }
 
-export async function writeFileWithOverwritePrompt(path: string, content: string, force: boolean): Promise<"created" | "skipped"> {
+export async function writeFileWithOverwritePrompt(
+  path: string,
+  content: string,
+  force: boolean,
+): Promise<"created" | "skipped"> {
   if ((await exists(path)) && !force) {
-    if (!process.stdin.isTTY) throw new Error(`Refusing to overwrite ${path}; pass --force in non-interactive mode.`);
+    if (!process.stdin.isTTY)
+      throw new Error(
+        `Refusing to overwrite ${path}; pass --force in non-interactive mode.`,
+      );
     const rl = createInterface({ input, output });
     const answer = await rl.question(`Overwrite ${path}? [y/N] `);
     rl.close();

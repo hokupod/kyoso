@@ -288,6 +288,24 @@ describe("runReview", () => {
     expect(manager.calls).toHaveLength(0);
   });
 
+  test("MCP unrestricted cap does not become the default request network mode", async () => {
+    const cwd = await tempCwd();
+    const manager = new FakeAgentManager();
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: manager,
+        mcpNetworkMode: "unrestricted",
+      },
+    );
+
+    expect(result.audit.networkMode).toBe("model_only");
+    expect(manager.calls[0]?.networkMode).toBe("model_only");
+  });
+
   test("security review includes CISA gate and tests", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
@@ -338,7 +356,7 @@ describe("runReview", () => {
     expect(result.agentOpinions[0]?.summary).toBe("raw cisa failure");
   });
 
-  test("judge can rewrite summary without mutating policy fields or seeing raw agent output", async () => {
+  test("judge can rewrite only summary text without mutating the rendered report or seeing raw agent output", async () => {
     const cwd = await tempCwd();
     const rawOnlyMarker = "RAW_AGENT_ONLY_MARKER";
     const rawText = `${JSON.stringify({
@@ -372,7 +390,7 @@ describe("runReview", () => {
             {
               message: {
                 content: JSON.stringify({
-                  summaryMarkdown: "# Judge rewritten summary",
+                  summaryText: "Judge rewritten summary",
                   decision: "approve",
                   findings: [],
                   disagreementComments: [],
@@ -397,14 +415,156 @@ describe("runReview", () => {
         },
       );
 
-      expect(result.summaryMarkdown).toBe("# Judge rewritten summary");
+      expect(result.summaryMarkdown).toContain("# Kyoso Review Result");
+      expect(result.summaryMarkdown).toContain("**Decision:** block");
+      expect(result.summaryMarkdown).toContain("## Findings");
+      expect(result.summaryMarkdown).toContain("Judge rewritten summary");
       expect(result.decision).toBe("block");
       expect(result.findings).toHaveLength(1);
       expect(result.findings[0]?.title).toBe("Tenant boundary bypass");
       expect(requestBody).not.toContain(rawOnlyMarker);
+      expect(requestBody).not.toContain("summaryMarkdown");
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("raw agent output is returned only when requested and remains sanitized", async () => {
+    const cwd = await tempCwd();
+    const leaked = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const rawText = JSON.stringify({
+      summary: `summary ${leaked}`,
+      findings: [],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    });
+
+    const withoutRaw = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: rawTextAgentManager(rawText),
+      },
+    );
+    const withRaw = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        options: { includeAgentRawOutputs: true },
+      },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: rawTextAgentManager(rawText),
+      },
+    );
+
+    expect(withoutRaw.agentOpinions[0]?.rawText).toBeUndefined();
+    expect(withRaw.agentOpinions[0]?.rawText).toContain("[KYOSO_REDACTED]");
+    expect(JSON.stringify(withRaw)).not.toContain(leaked);
+  });
+
+  test("judge prompt excludes raw agent output even when result raw output is requested", async () => {
+    const cwd = await tempCwd();
+    const rawOnlyMarker = "RAW_AGENT_ONLY_MARKER";
+    const rawText = JSON.stringify({
+      summary: "agent summary",
+      findings: [],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+      rawOnlyMarker,
+    });
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+    };
+    const originalFetch = globalThis.fetch;
+    let requestBody = "";
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summaryText: "Judge summary",
+                  disagreementComments: [],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await runReview(
+        "plan_review",
+        {
+          goal: "review plan",
+          options: { includeAgentRawOutputs: true },
+        },
+        {
+          cwd,
+          config,
+          agentManager: rawTextAgentManager(rawText),
+          env: { OPENAI_API_KEY: "test-key" },
+        },
+      );
+
+      expect(result.agentOpinions[0]?.rawText).toContain(rawOnlyMarker);
+      expect(requestBody).not.toContain(rawOnlyMarker);
+      expect(requestBody).not.toContain("rawText");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("audit trace includes sanitized raw agent output only when configured", async () => {
+    const cwd = await tempCwd();
+    const leaked = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const rawText = JSON.stringify({
+      summary: `summary ${leaked}`,
+      findings: [],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    });
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      audit: { ...baseConfig.audit, includeRawAgentOutput: true },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        config,
+        agentManager: rawTextAgentManager(rawText),
+      },
+    );
+    const traceText = await readFile(
+      join(
+        cwd,
+        config.audit.directory,
+        result.audit.startedAt.slice(0, 10),
+        `${result.audit.traceId}.jsonl`,
+      ),
+      "utf8",
+    );
+
+    expect(traceText).toContain('"rawText"');
+    expect(traceText).toContain("[KYOSO_REDACTED]");
+    expect(traceText).not.toContain(leaked);
   });
 
   test("fake ACP markdown JSON output is normalized by the core pipeline", async () => {

@@ -1,6 +1,11 @@
 import { Readable, Writable } from "node:stream";
 import { join } from "node:path";
-import { agent, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import {
+  agent,
+  methods,
+  ndJsonStream,
+  PROTOCOL_VERSION,
+} from "@agentclientprotocol/sdk";
 
 const app = agent({ name: "kyoso-fake-acp-agent" })
   .onRequest(methods.agent.initialize, () => ({
@@ -16,14 +21,19 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       sessionId: ctx.params.sessionId,
       path: "context/request.json",
     });
-    const selectedFile = await ctx.client.request(methods.client.fs.readTextFile, {
-      sessionId: ctx.params.sessionId,
-      path: join(process.cwd(), "src/foo.ts"),
-    });
+    const selectedFile = await ctx.client.request(
+      methods.client.fs.readTextFile,
+      {
+        sessionId: ctx.params.sessionId,
+        path: join(process.cwd(), "src/foo.ts"),
+      },
+    );
     const opinion = {
-      summary: manifest.content.includes("review plan") && selectedFile.content.includes("export const foo = 1")
-        ? "fake ACP subprocess read snapshot context and selected file"
-        : "fake ACP subprocess reviewed the prompt",
+      summary:
+        manifest.content.includes("review plan") &&
+        selectedFile.content.includes("export const foo = 1")
+          ? "fake ACP subprocess read snapshot context and selected file"
+          : "fake ACP subprocess reviewed the prompt",
       findings: [],
       testsToAdd: ["fake ACP subprocess test"],
       residualRisks: ["fake ACP subprocess residual risk"],

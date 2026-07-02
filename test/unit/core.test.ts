@@ -27,7 +27,12 @@ import { resolveJudgeProvider } from "../../src/judge/provider.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
-import type { AgentRunResult, KyosoFinding } from "../../src/core/types.js";
+import { buildChildEnv } from "../../src/utils/env.js";
+import type {
+  AgentRunResult,
+  KyosoFinding,
+  Severity,
+} from "../../src/core/types.js";
 
 describe("config", () => {
   test("default config validates", () => {
@@ -72,7 +77,7 @@ describe("judge", () => {
   test("parses only advisory judge fields", () => {
     const parsed = parseJudgeOutput(
       JSON.stringify({
-        summaryMarkdown: "# rewritten",
+        summaryText: "rewritten summary",
         decision: "approve",
         findings: [],
         disagreementComments: [
@@ -86,7 +91,7 @@ describe("judge", () => {
     );
 
     expect(parsed).toEqual({
-      summaryMarkdown: "# rewritten",
+      summaryText: "rewritten summary",
       disagreementComments: [
         {
           topic: "Highest reported severity",
@@ -415,6 +420,104 @@ describe("aggregation", () => {
     expect(aggregated.findings[0]?.severity).toBe("high");
     expect(aggregated.findings[0]?.sourceAgents).toEqual(["codex", "claude"]);
   });
+
+  test("deduplicates same-file same-category findings with similar titles", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "medium", {
+        title: "Tenant boundary bypass",
+        recommendation: "Derive tenant from the session.",
+        files: [{ path: "src/auth.ts" }],
+      }),
+      completed("claude", "high", {
+        title: "Bypass of tenant authorization boundary",
+        recommendation: "Use session tenant id for authorization.",
+        files: [{ path: "src/auth.ts" }],
+      }),
+    ]);
+
+    expect(aggregated.findings).toHaveLength(1);
+    expect(aggregated.findings[0]?.severity).toBe("high");
+    expect(aggregated.findings[0]?.title).toBe(
+      "Bypass of tenant authorization boundary",
+    );
+    expect(aggregated.findings[0]?.sourceAgents).toEqual(["codex", "claude"]);
+  });
+
+  test("extracts disagreements for same issue severity differences", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "low", {
+        title: "Tenant boundary bypass",
+        files: [{ path: "src/auth.ts" }],
+      }),
+      completed("claude", "high", {
+        title: "Tenant boundary bypass",
+        files: [{ path: "src/auth.ts" }],
+      }),
+    ]);
+
+    expect(
+      aggregated.disagreements.some((item) =>
+        item.topic.startsWith("Severity disagreement: Tenant boundary bypass"),
+      ),
+    ).toBe(true);
+  });
+
+  test("extracts risk assessment gaps for high findings without peer high severity", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "high", {
+        title: "Tenant boundary bypass",
+        category: "authz",
+        files: [{ path: "src/auth.ts" }],
+      }),
+      completed("claude", "low", {
+        title: "Authz code style concern",
+        category: "authz",
+        files: [{ path: "src/auth.ts" }],
+      }),
+    ]);
+
+    expect(
+      aggregated.disagreements.some((item) =>
+        item.topic.startsWith("Risk assessment gap: Tenant boundary bypass"),
+      ),
+    ).toBe(true);
+  });
+
+  test("preserves high single-agent findings during fuzzy deduplication", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "high", {
+        title: "Unauthenticated admin access",
+        files: [{ path: "src/admin.ts" }],
+      }),
+      completed("claude", "low", {
+        title: "Admin page needs clearer test coverage",
+        files: [{ path: "src/admin.ts" }],
+      }),
+    ]);
+
+    expect(
+      aggregated.findings.some(
+        (finding) =>
+          finding.title === "Unauthenticated admin access" &&
+          finding.severity === "high",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not merge unrelated non-ASCII titles as empty normalized titles", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "medium", {
+        title: "認証境界の迂回",
+        files: [{ path: "src/auth.ts" }],
+      }),
+      completed("claude", "medium", {
+        title: "監査ログの不足",
+        files: [{ path: "src/auth.ts" }],
+      }),
+    ]);
+
+    expect(aggregated.findings).toHaveLength(2);
+  });
 });
 
 describe("CISA gate and decision", () => {
@@ -475,11 +578,35 @@ describe("audit sanitize", () => {
     expect(sanitized.rawText).toBeUndefined();
     expect(sanitized.nested).toEqual({});
   });
+
+  test("allows sanitized rawText only when raw agent output is enabled", () => {
+    const sanitized = sanitizeForAudit(
+      {
+        rawText: `token=sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`,
+        content: "file body",
+      },
+      { includeRawAgentOutput: true },
+    ) as Record<string, unknown>;
+
+    expect(sanitized.rawText).toBe("token=[KYOSO_REDACTED]");
+    expect(sanitized.content).toBeUndefined();
+  });
+});
+
+describe("child env", () => {
+  test("requires PATH for ACP child agents", () => {
+    expect(() => buildChildEnv({}, [], {})).toThrow(
+      "PATH is required to launch ACP child agents",
+    );
+  });
 });
 
 function completed(
   agent: "codex" | "claude",
-  severity: "medium" | "high",
+  severity: Severity,
+  overrides: Partial<
+    NonNullable<AgentRunResult["normalized"]>["findings"][number]
+  > = {},
 ): AgentRunResult {
   return {
     agent,
@@ -504,7 +631,9 @@ function completed(
           title: "Same issue",
           evidence: "same evidence",
           recommendation: "same fix",
+          files: undefined,
           confidence: "medium",
+          ...overrides,
         },
       ],
       testsToAdd: ["add test"],

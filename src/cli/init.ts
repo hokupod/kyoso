@@ -1,12 +1,26 @@
 import { join } from "node:path";
 import { writeFileWithOverwritePrompt } from "./io.js";
 
-export async function runInit(options: { cwd: string; force: boolean }): Promise<string> {
+export async function runInit(options: {
+  cwd: string;
+  force: boolean;
+}): Promise<string> {
   const configPath = join(options.cwd, "kyoso.config.ts");
   const skillPath = join(options.cwd, ".agents/skills/kyoso-review/SKILL.md");
-  const configResult = await writeFileWithOverwritePrompt(configPath, CONFIG_TEMPLATE, options.force);
-  const skillResult = await writeFileWithOverwritePrompt(skillPath, SKILL_TEMPLATE, options.force);
-  return [`kyoso.config.ts: ${configResult}`, `.agents/skills/kyoso-review/SKILL.md: ${skillResult}`].join("\n");
+  const configResult = await writeFileWithOverwritePrompt(
+    configPath,
+    CONFIG_TEMPLATE,
+    options.force,
+  );
+  const skillResult = await writeFileWithOverwritePrompt(
+    skillPath,
+    SKILL_TEMPLATE,
+    options.force,
+  );
+  return [
+    `kyoso.config.ts: ${configResult}`,
+    `.agents/skills/kyoso-review/SKILL.md: ${skillResult}`,
+  ].join("\n");
 }
 
 const CONFIG_TEMPLATE = `import { defineConfig } from "@kyoso/cli";

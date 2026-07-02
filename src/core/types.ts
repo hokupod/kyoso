@@ -91,8 +91,7 @@ export type CisaSecureByDesignResult = {
 export type AgentName = "codex" | "claude";
 
 export type AgentRole =
-  | "implementation_reviewer"
-  | "architecture_security_reviewer";
+  "implementation_reviewer" | "architecture_security_reviewer";
 
 export type NormalizedAgentOpinion = {
   agent: AgentName;
@@ -161,6 +160,7 @@ export type KyosoResult = {
     summary: string;
     status: "completed" | "failed" | "timeout" | "skipped";
     errorCode?: string;
+    rawText?: string;
   }>;
   audit: {
     traceId: string;

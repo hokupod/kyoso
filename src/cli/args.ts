@@ -26,7 +26,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
   return { command, flags };
 }
 
-export function stringFlag(flags: ParsedArgs["flags"], key: string): string | undefined {
+export function stringFlag(
+  flags: ParsedArgs["flags"],
+  key: string,
+): string | undefined {
   const value = flags[key];
   if (Array.isArray(value)) return value.at(-1);
   return typeof value === "string" ? value : undefined;
@@ -36,7 +39,10 @@ export function booleanFlag(flags: ParsedArgs["flags"], key: string): boolean {
   return flags[key] === true;
 }
 
-export function stringArrayFlag(flags: ParsedArgs["flags"], key: string): string[] {
+export function stringArrayFlag(
+  flags: ParsedArgs["flags"],
+  key: string,
+): string[] {
   const value = flags[key];
   if (Array.isArray(value)) return value;
   if (typeof value === "string") return [value];

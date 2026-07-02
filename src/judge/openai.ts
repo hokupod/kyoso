@@ -20,7 +20,14 @@ export async function runOpenAiJudge(
         model: input.env.KYOSO_OPENAI_JUDGE_MODEL ?? "gpt-4o-mini",
         response_format: { type: "json_object" },
         messages: [
-          { role: "user", content: buildJudgePrompt(input.tool, input.result) },
+          {
+            role: "user",
+            content: buildJudgePrompt(
+              input.tool,
+              input.result,
+              input.summaryText,
+            ),
+          },
         ],
         temperature: 0,
       }),
@@ -36,7 +43,7 @@ export async function runOpenAiJudge(
   const content = payload.choices?.[0]?.message?.content;
   if (!content)
     throw new Error("OpenAI judge response did not include content.");
-  return parseJudgeOutput(content, input.result.summaryMarkdown);
+  return parseJudgeOutput(content, input.summaryText);
 }
 
 async function fetchWithTimeout(

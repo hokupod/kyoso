@@ -14,6 +14,7 @@ export function createTraceWriter(options: {
   directory: string;
   traceId: string;
   cwd: string;
+  includeRawAgentOutput?: boolean;
 }): TraceWriter {
   const warnings: string[] = [];
   if (!options.enabled) {
@@ -40,7 +41,11 @@ export function createTraceWriter(options: {
         await mkdir(dirname(tracePath), { recursive: true });
         await appendFile(
           tracePath,
-          `${JSON.stringify(sanitizeForAudit(event))}\n`,
+          `${JSON.stringify(
+            sanitizeForAudit(event, {
+              includeRawAgentOutput: options.includeRawAgentOutput,
+            }),
+          )}\n`,
           "utf8",
         );
       } catch (error) {

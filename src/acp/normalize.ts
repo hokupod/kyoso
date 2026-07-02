@@ -35,7 +35,12 @@ export function normalizeAgentOutput(
   rawText: string,
 ): NormalizedAgentOpinion {
   const json = extractFirstJsonObject(rawText);
-  if (!json) return parseFailureOpinion(agent, role, "No JSON object found in agent output.");
+  if (!json)
+    return parseFailureOpinion(
+      agent,
+      role,
+      "No JSON object found in agent output.",
+    );
 
   try {
     const parsed = JSON.parse(json) as Partial<NormalizedAgentOpinion>;
@@ -52,18 +57,28 @@ export function normalizeAgentOutput(
             category: isCategory(finding.category) ? finding.category : "other",
             title: asString(finding.title, "Untitled finding"),
             evidence: asString(finding.evidence, "No evidence provided."),
-            recommendation: asString(finding.recommendation, "Review manually."),
+            recommendation: asString(
+              finding.recommendation,
+              "Review manually.",
+            ),
             files: normalizeFindingFiles(finding.files),
-            confidence: isConfidence(finding.confidence) ? finding.confidence : "low",
+            confidence: isConfidence(finding.confidence)
+              ? finding.confidence
+              : "low",
             cisaMapping: normalizeStringList(finding.cisaMapping),
           }))
         : [],
       testsToAdd: normalizeStringList(parsed.testsToAdd),
       residualRisks: Array.from(
-        new Set([...normalizeStringList(parsed.residualRisks), ...normalizeStringList(parsed.openQuestions)]),
+        new Set([
+          ...normalizeStringList(parsed.residualRisks),
+          ...normalizeStringList(parsed.openQuestions),
+        ]),
       ),
       openQuestions: normalizeStringList(parsed.openQuestions),
-      cisaSecureByDesign: normalizeCisaSecureByDesign(parsed.cisaSecureByDesign),
+      cisaSecureByDesign: normalizeCisaSecureByDesign(
+        parsed.cisaSecureByDesign,
+      ),
     };
   } catch (error) {
     return parseFailureOpinion(
@@ -103,7 +118,11 @@ export function extractFirstJsonObject(text: string): string | undefined {
   return undefined;
 }
 
-function parseFailureOpinion(agent: AgentName, role: AgentRole, message: string): NormalizedAgentOpinion {
+function parseFailureOpinion(
+  agent: AgentName,
+  role: AgentRole,
+  message: string,
+): NormalizedAgentOpinion {
   const sanitizedMessage = sanitizeText(message);
   return {
     agent,
@@ -115,7 +134,8 @@ function parseFailureOpinion(agent: AgentName, role: AgentRole, message: string)
         category: "other",
         title: "Agent output could not be parsed",
         evidence: sanitizedMessage,
-        recommendation: "Inspect the agent output and retry with stricter instructions.",
+        recommendation:
+          "Inspect the agent output and retry with stricter instructions.",
         confidence: "low",
       },
     ],
@@ -129,18 +149,26 @@ function isSeverity(value: unknown): value is Severity {
   return typeof value === "string" && severities.includes(value as Severity);
 }
 
-function normalizeCisaSecureByDesign(value: unknown): Partial<CisaSecureByDesignResult> | undefined {
+function normalizeCisaSecureByDesign(
+  value: unknown,
+): Partial<CisaSecureByDesignResult> | undefined {
   if (!isRecord(value)) return undefined;
   const normalized: Partial<CisaSecureByDesignResult> = {};
 
-  const customerSecurityOutcomes = normalizeGateStatus(value.customerSecurityOutcomes);
-  if (customerSecurityOutcomes) normalized.customerSecurityOutcomes = customerSecurityOutcomes;
+  const customerSecurityOutcomes = normalizeGateStatus(
+    value.customerSecurityOutcomes,
+  );
+  if (customerSecurityOutcomes)
+    normalized.customerSecurityOutcomes = customerSecurityOutcomes;
 
   const secureByDefault = normalizeGateStatus(value.secureByDefault);
   if (secureByDefault) normalized.secureByDefault = secureByDefault;
 
-  const transparencyAndAccountability = normalizeGateStatus(value.transparencyAndAccountability);
-  if (transparencyAndAccountability) normalized.transparencyAndAccountability = transparencyAndAccountability;
+  const transparencyAndAccountability = normalizeGateStatus(
+    value.transparencyAndAccountability,
+  );
+  if (transparencyAndAccountability)
+    normalized.transparencyAndAccountability = transparencyAndAccountability;
 
   const governance = normalizeGateStatus(value.governance);
   if (governance) normalized.governance = governance;
@@ -160,7 +188,9 @@ function normalizeGateStatus(value: unknown): GateStatus | undefined {
 }
 
 function isCategory(value: unknown): value is FindingCategory {
-  return typeof value === "string" && categories.includes(value as FindingCategory);
+  return (
+    typeof value === "string" && categories.includes(value as FindingCategory)
+  );
 }
 
 function isConfidence(value: unknown): value is "high" | "medium" | "low" {
@@ -176,7 +206,9 @@ function normalizeStringList(value: unknown): string[] {
 }
 
 function asString(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim().length > 0 ? sanitizeText(value) : fallback;
+  return typeof value === "string" && value.trim().length > 0
+    ? sanitizeText(value)
+    : fallback;
 }
 
 function normalizeFindingFiles(
@@ -185,10 +217,16 @@ function normalizeFindingFiles(
   if (!Array.isArray(value)) return undefined;
 
   const files = value.flatMap((item) => {
-    if (!isRecord(item) || typeof item.path !== "string" || item.path.trim().length === 0) {
+    if (
+      !isRecord(item) ||
+      typeof item.path !== "string" ||
+      item.path.trim().length === 0
+    ) {
       return [];
     }
-    const file: NonNullable<NormalizedAgentOpinion["findings"][number]["files"]>[number] = {
+    const file: NonNullable<
+      NormalizedAgentOpinion["findings"][number]["files"]
+    >[number] = {
       path: sanitizeText(item.path),
     };
     const lineStart = normalizeLineNumber(item.lineStart);

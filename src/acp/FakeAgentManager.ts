@@ -1,4 +1,8 @@
-import type { AgentRunInput, AgentRunResult, NormalizedAgentOpinion } from "../core/types.js";
+import type {
+  AgentRunInput,
+  AgentRunResult,
+  NormalizedAgentOpinion,
+} from "../core/types.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
 
 export type FakeAgentScenario =
@@ -14,7 +18,9 @@ export class FakeAgentManager extends BaseAcpAgentManager {
   readonly calls: AgentRunInput[] = [];
 
   constructor(
-    private readonly scenarios: Partial<Record<"codex" | "claude", FakeAgentScenario>> = {},
+    private readonly scenarios: Partial<
+      Record<"codex" | "claude", FakeAgentScenario>
+    > = {},
   ) {
     super();
   }
@@ -52,7 +58,10 @@ export class FakeAgentManager extends BaseAcpAgentManager {
         startedAt,
         completedAt: new Date().toISOString(),
         error: {
-          code: scenario === "permission_request" ? "PERMISSION_DENIED" : "WRITE_ATTEMPT_DENIED",
+          code:
+            scenario === "permission_request"
+              ? "PERMISSION_DENIED"
+              : "WRITE_ATTEMPT_DENIED",
           message: "Fake policy denial",
         },
       };
@@ -104,7 +113,10 @@ function buildOpinion(
     summary: `${agent} reviewed ${tool}`,
     findings: securityFinding,
     testsToAdd: [`${agent}: add regression coverage for ${tool}`],
-    residualRisks: tool === "security_review" ? [`${agent}: verify residual security risk for ${tool}`] : [],
+    residualRisks:
+      tool === "security_review"
+        ? [`${agent}: verify residual security risk for ${tool}`]
+        : [],
     openQuestions: [],
     cisaSecureByDesign:
       tool === "security_review"

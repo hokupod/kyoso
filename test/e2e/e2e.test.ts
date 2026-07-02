@@ -23,6 +23,20 @@ describe("e2e surfaces", () => {
     expect(output).toContain("raw agent output: disabled");
   });
 
+  test("doctor suggests bunx when npx is unavailable", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-bunx-"));
+    await writeFile(join(cwd, "bunx"), "", "utf8");
+    const output = await runDoctor({
+      cwd,
+      ignoreConfig: true,
+      env: { PATH: cwd },
+    });
+
+    expect(output).toContain(
+      'hint: replace command "npx" with "bunx" in kyoso.config.ts',
+    );
+  });
+
   test("MCP stdio starts and lists tools without stdout pollution", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-"));
     const proc = spawn(
@@ -205,6 +219,79 @@ export default defineConfig({
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout).audit.networkMode).toBe("unrestricted");
+  });
+
+  test("CLI rejects unknown network mode values", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-network-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review",
+        "--network",
+        "typo",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+          KYOSO_TEST_FAKE_AGENTS: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stdout).toBe("");
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain('Invalid --network value "typo"');
+  });
+
+  test("CLI rejects missing network mode values", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-network-missing-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review",
+        "--network",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+          KYOSO_TEST_FAKE_AGENTS: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stdout).toBe("");
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Missing value for --network");
   });
 });
 

@@ -3,14 +3,16 @@ import { sanitizeText } from "../security/sanitizeText.js";
 
 export function buildJudgePrompt(
   tool: ReviewTool,
-  result: KyosoResult,
+  result: Omit<KyosoResult, "summaryMarkdown">,
+  summaryText: string,
 ): string {
   return [
     "You are the Kyoso advisory judge.",
-    "Rewrite only the Markdown summary and add concise disagreement comments.",
+    "Rewrite only the Summary section body and add concise disagreement comments.",
+    "Do not return or replace the full Markdown report.",
     "Do not change the decision, findings, CISA gate, file references, severities, tests, residual risks, or agent status.",
     "Return only JSON matching this schema:",
-    `{"summaryMarkdown":"string","disagreementComments":[{"topic":"string","judgeComment":"string"}]}`,
+    `{"summaryText":"string","disagreementComments":[{"topic":"string","judgeComment":"string"}]}`,
     "",
     "Input:",
     JSON.stringify(
@@ -18,13 +20,19 @@ export function buildJudgePrompt(
         tool,
         decision: result.decision,
         degraded: result.degraded,
-        summaryMarkdown: result.summaryMarkdown,
+        summaryText,
         findings: result.findings,
         cisaSecureByDesign: result.cisaSecureByDesign,
         disagreements: result.disagreements,
         testsToAdd: result.testsToAdd,
         residualRisks: result.residualRisks,
-        agentOpinions: result.agentOpinions,
+        agentOpinions: result.agentOpinions.map((opinion) => ({
+          agent: opinion.agent,
+          role: opinion.role,
+          summary: opinion.summary,
+          status: opinion.status,
+          errorCode: opinion.errorCode,
+        })),
       },
       null,
       2,
@@ -34,23 +42,23 @@ export function buildJudgePrompt(
 
 export function parseJudgeOutput(
   text: string,
-  fallbackSummary: string,
+  fallbackSummaryText: string,
 ): {
-  summaryMarkdown: string;
+  summaryText: string;
   disagreementComments: Array<{ topic: string; judgeComment: string }>;
 } {
   const json = extractFirstJsonObject(text);
   if (!json) throw new Error("Judge output did not contain a JSON object.");
 
   const parsed = JSON.parse(json) as Partial<{
-    summaryMarkdown: unknown;
+    summaryText: unknown;
     disagreementComments: unknown;
   }>;
-  const summaryMarkdown =
-    typeof parsed.summaryMarkdown === "string" &&
-    parsed.summaryMarkdown.trim().length > 0
-      ? sanitizeText(parsed.summaryMarkdown)
-      : fallbackSummary;
+  const summaryText =
+    typeof parsed.summaryText === "string" &&
+    parsed.summaryText.trim().length > 0
+      ? sanitizeText(parsed.summaryText)
+      : fallbackSummaryText;
   const disagreementComments = Array.isArray(parsed.disagreementComments)
     ? parsed.disagreementComments.flatMap((item) => {
         if (
@@ -69,7 +77,7 @@ export function parseJudgeOutput(
       })
     : [];
 
-  return { summaryMarkdown, disagreementComments };
+  return { summaryText, disagreementComments };
 }
 
 function extractFirstJsonObject(text: string): string | undefined {

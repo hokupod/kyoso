@@ -2,7 +2,10 @@ import type { KyosoReviewRequest, ReviewTool } from "./types.js";
 import { KyosoRequestError } from "./errors.js";
 import { normalizeRelativePath } from "../context/pathPolicy.js";
 
-export function validateReviewRequest(tool: ReviewTool, request: KyosoReviewRequest): void {
+export function validateReviewRequest(
+  tool: ReviewTool,
+  request: KyosoReviewRequest,
+): void {
   if (!request.goal || request.goal.trim().length === 0) {
     throw new KyosoRequestError("goal is required", "VALIDATION_ERROR");
   }

@@ -4,7 +4,10 @@ export type TruncationResult = {
   bytes: number;
 };
 
-export function truncateUtf8(input: string, maxBytes: number): TruncationResult {
+export function truncateUtf8(
+  input: string,
+  maxBytes: number,
+): TruncationResult {
   const encoder = new TextEncoder();
   const encoded = encoder.encode(input);
   const budget = Math.max(0, maxBytes);
@@ -16,7 +19,11 @@ export function truncateUtf8(input: string, maxBytes: number): TruncationResult 
   const markerBytes = encoder.encode(marker);
   if (markerBytes.byteLength >= budget) {
     const content = decodeUtf8Prefix(encoded, budget);
-    return { content, truncated: true, bytes: encoder.encode(content).byteLength };
+    return {
+      content,
+      truncated: true,
+      bytes: encoder.encode(content).byteLength,
+    };
   }
 
   const sliced = decodeUtf8Prefix(encoded, budget - markerBytes.byteLength);

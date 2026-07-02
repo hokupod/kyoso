@@ -1,9 +1,12 @@
 import type { KyosoResult } from "../core/types.js";
 import type { JudgeOutput } from "./provider.js";
 
-export function runDeterministicJudge(result: KyosoResult): JudgeOutput {
+export function runDeterministicJudge(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+  summaryText: string,
+): JudgeOutput {
   return {
-    summaryMarkdown: result.summaryMarkdown,
+    summaryText,
     disagreementComments: result.disagreements.map((disagreement) => ({
       topic: disagreement.topic,
       judgeComment: disagreement.judgeComment,

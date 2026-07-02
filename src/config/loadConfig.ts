@@ -18,7 +18,9 @@ export type LoadedConfig = {
   warnings: string[];
 };
 
-export async function loadConfig(options: LoadConfigOptions = {}): Promise<LoadedConfig> {
+export async function loadConfig(
+  options: LoadConfigOptions = {},
+): Promise<LoadedConfig> {
   const cwd = options.cwd ?? process.cwd();
   const warnings: string[] = [];
   let userConfig: unknown = {};

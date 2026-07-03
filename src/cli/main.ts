@@ -17,6 +17,7 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
   const configPath = stringFlag(parsed.flags, "config");
   const ignoreConfig = booleanFlag(parsed.flags, "ignore-config");
+  const trustConfig = booleanFlag(parsed.flags, "trust-config");
 
   if (parsed.command === "mcp") {
     const network = networkFlag(parsed.flags);
@@ -24,13 +25,22 @@ async function main(): Promise<void> {
       cwd,
       configPath,
       ignoreConfig,
+      trustConfig,
       mcpNetworkMode: network,
     });
     return;
   }
 
   if (parsed.command === "doctor") {
-    console.log(await runDoctor({ cwd, configPath, ignoreConfig }));
+    console.log(
+      await runDoctor({
+        cwd,
+        configPath,
+        ignoreConfig,
+        trustConfig,
+        promptForTrust: canPromptForConfigTrust(),
+      }),
+    );
     return;
   }
 
@@ -52,6 +62,8 @@ async function main(): Promise<void> {
       cwd,
       configPath,
       ignoreConfig,
+      trustConfig,
+      promptForTrust: canPromptForConfigTrust(),
     });
     console.log(
       booleanFlag(parsed.flags, "json")
@@ -146,14 +158,18 @@ function parseNetworkFlag(value: string | undefined): NetworkMode | undefined {
   );
 }
 
+function canPromptForConfigTrust(): boolean {
+  return process.stdin.isTTY === true && process.stderr.isTTY === true;
+}
+
 const HELP = `Kyoso
 
 Usage:
-  kyoso mcp [--config kyoso.config.ts] [--ignore-config] [--network model_only|unrestricted]
-  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction]
-  kyoso diff --base main --head HEAD [--json]
-  kyoso doctor
+  kyoso mcp [--config kyoso.config.ts] [--ignore-config] [--trust-config] [--network model_only|unrestricted]
+  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config]
+  kyoso diff --base main --head HEAD [--json] [--trust-config]
+  kyoso doctor [--trust-config]
   kyoso init [--force]
 `;
 

@@ -75,7 +75,7 @@ describe("e2e surfaces", () => {
     });
 
     expect(output).toContain(
-      "warning: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set; the adapter may prefer the API key (pay-per-token billing)",
+      "auth policy: Kyoso forwards only CLAUDE_CODE_OAUTH_TOKEN; set agents.claude.auth.preferApiKey to true to use ANTHROPIC_API_KEY",
     );
     expect(output).toContain("provider: anthropic");
     expect(output).toContain(
@@ -242,6 +242,7 @@ export default defineConfig({
         "repo",
         "--config",
         configPath,
+        "--trust-config",
         "--json",
       ],
       {
@@ -252,6 +253,7 @@ export default defineConfig({
           CODEX_API_KEY: "",
           ANTHROPIC_API_KEY: "",
           KYOSO_TEST_FAKE_AGENTS: "1",
+          KYOSO_TRUST_STORE_PATH: join(cwd, "trusted-configs.json"),
         },
         stdout: "pipe",
         stderr: "pipe",

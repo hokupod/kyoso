@@ -104,12 +104,17 @@ export async function runReview(
       ? {
           config: options.config,
           configHash: options.configHash,
+          configTrustStatus: "trusted" as const,
           warnings: [] as string[],
         }
       : await loadConfig({
           cwd,
           configPath: options.configPath,
           ignoreConfig: options.ignoreConfig,
+          trustConfig: options.trustConfig,
+          promptForTrust: options.promptForTrust,
+          trustStorePath: options.trustStorePath,
+          trustPrompt: options.trustPrompt,
         });
 
   const trace = createTraceWriter({
@@ -133,6 +138,8 @@ export async function runReview(
       type: "config_loaded",
       traceId,
       configHash: loaded.configHash,
+      configPath: loaded.configPath,
+      configTrustStatus: loaded.configTrustStatus,
       timestamp: new Date().toISOString(),
     });
 

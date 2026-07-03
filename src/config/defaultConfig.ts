@@ -23,6 +23,7 @@ export const defaultConfig: KyosoConfigInput = {
       auth: {
         mode: "passthrough",
         preferExistingLogin: true,
+        preferApiKey: false,
         recommendedEnv: [],
         envWhitelist: [
           "CODEX_API_KEY",
@@ -38,13 +39,14 @@ export const defaultConfig: KyosoConfigInput = {
       command: "npx",
       args: ["-y", "@agentclientprotocol/claude-agent-acp"],
       role: "architecture_security_reviewer",
-      timeoutMs: 120_000,
+      timeoutMs: 240_000,
       env: {
         KYOSO_CHILD_AGENT: "1",
       },
       auth: {
         mode: "passthrough",
         preferExistingLogin: true,
+        preferApiKey: false,
         recommendedEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         envWhitelist: [
           "ANTHROPIC_API_KEY",

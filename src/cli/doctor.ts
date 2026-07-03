@@ -7,6 +7,9 @@ export async function runDoctor(options: {
   cwd: string;
   configPath?: string;
   ignoreConfig?: boolean;
+  trustConfig?: boolean;
+  promptForTrust?: boolean;
+  trustStorePath?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   const env = options.env ?? process.env;
@@ -24,7 +27,7 @@ export async function runDoctor(options: {
     `  kyoso.config.ts: ${loaded.configPath ? `found ${loaded.configPath}` : "not found; using defaults"}`,
   );
   lines.push(
-    `  trusted config: ${options.ignoreConfig ? "ignored" : "local default trust"}`,
+    `  trusted config: ${formatTrustStatus(loaded.configTrustStatus)}`,
   );
   if (loaded.configHash) lines.push(`  config hash: ${loaded.configHash}`);
   for (const warning of loaded.warnings) lines.push(`  warning: ${warning}`);
@@ -53,9 +56,7 @@ export async function runDoctor(options: {
         );
       } else if (hasApiKey && hasOAuthToken) {
         lines.push("    auth: detected");
-        lines.push(
-          "    warning: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set; the adapter may prefer the API key (pay-per-token billing)",
-        );
+        lines.push(formatClaudeDualAuthWarning(config.auth.preferApiKey));
       } else if (hasOAuthToken) {
         lines.push("    auth: detected Claude Code OAuth token");
       } else {
@@ -92,6 +93,21 @@ export async function runDoctor(options: {
   );
 
   return lines.join("\n");
+}
+
+function formatTrustStatus(status: string): string {
+  if (status === "trusted_by_flag") return "trusted by --trust-config";
+  if (status === "trusted_interactively") return "trusted interactively";
+  if (status === "untrusted_skipped") return "untrusted; skipped";
+  if (status === "not_found") return "not found";
+  return status;
+}
+
+function formatClaudeDualAuthWarning(preferApiKey: boolean): string {
+  if (preferApiKey) {
+    return "    auth policy: Kyoso forwards only ANTHROPIC_API_KEY because agents.claude.auth.preferApiKey is true";
+  }
+  return "    auth policy: Kyoso forwards only CLAUDE_CODE_OAUTH_TOKEN; set agents.claude.auth.preferApiKey to true to use ANTHROPIC_API_KEY";
 }
 
 function hasEnv(env: NodeJS.ProcessEnv, key: string): boolean {

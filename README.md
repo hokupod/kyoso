@@ -83,6 +83,8 @@ Use Kyoso plan_review on this plan and the selected auth files. I need a second 
 kyoso mcp --network model_only
 ```
 
+When `--network` is omitted, Kyoso uses `model_only`. This means Kyoso expects only model-provider traffic from backend agents. It is a policy-level constraint, not OS-level network isolation.
+
 Kyoso exposes exactly these MCP tools:
 
 - `plan_review`
@@ -99,6 +101,8 @@ Secret detection is best-effort. If Kyoso detects a likely secret in the request
 
 Kyoso does not store provider credentials. Child agent environment variables are allowlisted.
 
+Repository content, plans, diffs, and selected files are treated as untrusted data in backend prompts. Kyoso wraps them in `<untrusted-content>` tags and tells agents not to follow instructions found inside. Final decisions are derived from schema-constrained findings; agents cannot write files or run commands, and the judge cannot change the deterministic decision.
+
 ## Agent Auth
 
 Codex uses the local `codex` login when available. No API key is required for the default subscription-backed path.
@@ -108,7 +112,16 @@ Claude supports two auth paths:
 - `ANTHROPIC_API_KEY`: direct Anthropic API billing
 - `CLAUDE_CODE_OAUTH_TOKEN`: subscription auth from `claude setup-token`
 
-If both Claude credentials are set, the adapter may prefer `ANTHROPIC_API_KEY`.
+If both Claude credentials are set, Kyoso forwards only `CLAUDE_CODE_OAUTH_TOKEN` to the Claude child agent by default. Set `agents.claude.auth.preferApiKey: true` to forward only `ANTHROPIC_API_KEY`.
+
+Default child-agent env allowlist:
+
+| Agent  | Provider env                                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex  | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, `CODEX_ACCESS_TOKEN`                                                                                                     |
+| Claude | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` |
+
+Kyoso also forwards minimal runtime env needed to launch subprocesses: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, and `SystemRoot`.
 
 ## Audit
 
@@ -120,11 +133,15 @@ Audit traces are written to:
 
 Raw agent output and raw file contents are disabled by default.
 
+Keep `.kyoso/traces/` out of Git. `kyoso init` adds `.kyoso/` to `.gitignore`, and this repository does the same. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces regularly according to your local retention policy.
+
 ## Config
 
-`kyoso.config.ts` is loaded from the current directory unless `--ignore-config` is passed.
+`kyoso.config.ts` is loaded only after trust-on-first-use approval. Trusted hashes are stored in `~/.kyoso/trusted-configs.json`.
 
-TypeScript config files can execute arbitrary code. Do not run Kyoso in untrusted repositories without `--ignore-config`.
+TypeScript config files can execute arbitrary code. In a TTY, Kyoso prompts before executing an untrusted config. In non-interactive mode such as MCP or CI, untrusted config is skipped and defaults are used. Pass `--trust-config` to explicitly trust the current config hash, or `--ignore-config` to always use defaults.
+
+Default agent timeouts are Codex 120 seconds and Claude 240 seconds. MCP clients should allow at least 360 seconds for tool calls.
 
 Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the OpenAI judge, or `ANTHROPIC_API_KEY` to use the Anthropic judge. Optional overrides:
 

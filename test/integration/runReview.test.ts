@@ -312,6 +312,45 @@ describe("runReview", () => {
     expect(manager.calls[0]?.networkMode).toBe("model_only");
   });
 
+  test("untrusted local config is skipped and reported in result warnings", async () => {
+    const cwd = await tempCwd();
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `throw new Error("config should not execute without trust");
+export default {};
+`,
+      "utf8",
+    );
+    const manager = new FakeAgentManager();
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        trustStorePath: join(cwd, "trusted-configs.json"),
+        agentManager: manager,
+      },
+    );
+
+    expect(result.audit.networkMode).toBe("model_only");
+    expect(result.audit.warnings?.join("\n")).toContain(
+      "untrusted config was not executed",
+    );
+    expect(manager.calls).toHaveLength(2);
+
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const traceText = await readFile(
+      join(
+        cwd,
+        config.audit.directory,
+        result.audit.startedAt.slice(0, 10),
+        `${result.audit.traceId}.jsonl`,
+      ),
+      "utf8",
+    );
+    expect(traceText).toContain('"configTrustStatus":"untrusted_skipped"');
+  });
+
   test("security review includes CISA gate and tests", async () => {
     const cwd = await tempCwd();
     const result = await runReview(

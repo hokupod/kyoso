@@ -1,3 +1,4 @@
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileWithOverwritePrompt } from "./io.js";
 
@@ -7,6 +8,7 @@ export async function runInit(options: {
 }): Promise<string> {
   const configPath = join(options.cwd, "kyoso.config.ts");
   const skillPath = join(options.cwd, ".agents/skills/kyoso-review/SKILL.md");
+  const gitignorePath = join(options.cwd, ".gitignore");
   const configResult = await writeFileWithOverwritePrompt(
     configPath,
     CONFIG_TEMPLATE,
@@ -17,10 +19,40 @@ export async function runInit(options: {
     SKILL_TEMPLATE,
     options.force,
   );
+  const gitignoreResult = await ensureGitignoreEntry(gitignorePath, ".kyoso/");
   return [
     `kyoso.config.ts: ${configResult}`,
     `.agents/skills/kyoso-review/SKILL.md: ${skillResult}`,
+    `.gitignore .kyoso/: ${gitignoreResult}`,
   ].join("\n");
+}
+
+async function ensureGitignoreEntry(
+  path: string,
+  entry: string,
+): Promise<"created" | "updated" | "already present"> {
+  let content = "";
+  try {
+    content = await readFile(path, "utf8");
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    await writeFile(path, `${entry}\n`, "utf8");
+    return "created";
+  }
+  const lines = content.split(/\r?\n/);
+  if (lines.includes(entry)) return "already present";
+  const separator = content.length > 0 && !content.endsWith("\n") ? "\n" : "";
+  await writeFile(path, `${content}${separator}${entry}\n`, "utf8");
+  return "updated";
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 const CONFIG_TEMPLATE = `import { defineConfig } from "@kyoso/cli";

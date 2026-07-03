@@ -17,6 +17,7 @@ const agentSchema = z.object({
   auth: z.object({
     mode: z.literal("passthrough").default("passthrough"),
     preferExistingLogin: z.boolean().default(true),
+    preferApiKey: z.boolean().default(false),
     recommendedEnv: z.array(z.string()),
     envWhitelist: z.array(z.string()),
   }),

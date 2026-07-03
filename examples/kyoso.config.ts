@@ -5,4 +5,12 @@ export default defineConfig({
     defaultMode: "model_only",
     allowUnrestricted: true,
   },
+  agents: {
+    claude: {
+      timeoutMs: 240_000,
+      auth: {
+        preferApiKey: false,
+      },
+    },
+  },
 });

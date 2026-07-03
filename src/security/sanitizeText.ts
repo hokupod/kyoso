@@ -1,4 +1,5 @@
 import { REDACTION } from "./redact.js";
+import { RAW_OUTPUT_MAX_CHARS } from "../core/constants.js";
 
 const SENSITIVE_TEXT_PATTERNS = [
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/g,
@@ -21,4 +22,16 @@ export function sanitizeTextForDisplay(value: string, maxChars = 240): string {
   const compact = sanitizeText(value).replace(/\s+/g, " ").trim();
   if (compact.length <= maxChars) return compact;
   return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+export function sanitizeTextForRawOutput(
+  value: string,
+  maxChars = RAW_OUTPUT_MAX_CHARS,
+): string {
+  const sanitized = sanitizeText(value);
+  const limit = Math.max(0, maxChars);
+  if (sanitized.length <= limit) return sanitized;
+  return `${sanitized.slice(0, limit)}\n[KYOSO_TRUNCATED: ${
+    sanitized.length - limit
+  } chars omitted]`;
 }

@@ -20,10 +20,12 @@ import {
 import { truncateUtf8 } from "../../src/context/truncate.js";
 import { createTraceWriter } from "../../src/audit/trace.js";
 import { sanitizeForAudit } from "../../src/audit/sanitize.js";
+import { RAW_OUTPUT_MAX_CHARS } from "../../src/core/constants.js";
 import { createSnapshot } from "../../src/workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
 import { parseJudgeOutput } from "../../src/judge/prompt.js";
 import { resolveJudgeProvider } from "../../src/judge/provider.js";
+import { sanitizeTextForRawOutput } from "../../src/security/sanitizeText.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
@@ -590,6 +592,36 @@ describe("audit sanitize", () => {
 
     expect(sanitized.rawText).toBe("token=[KYOSO_REDACTED]");
     expect(sanitized.content).toBeUndefined();
+  });
+});
+
+describe("raw output sanitize", () => {
+  test("preserves whitespace below the raw output cap", () => {
+    const rawText = '{\n  "summary": "ok",\n  "findings": []\n}';
+
+    expect(sanitizeTextForRawOutput(rawText)).toBe(rawText);
+  });
+
+  test("redacts token-like values before exposing raw output", () => {
+    const leaked = `sk-ant-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const sanitized = sanitizeTextForRawOutput(`token: ${leaked}`);
+
+    expect(sanitized).toBe("token: [KYOSO_REDACTED]");
+    expect(sanitized).not.toContain(leaked);
+  });
+
+  test("truncates raw output above the raw output cap with a marker", () => {
+    const rawText = "x".repeat(RAW_OUTPUT_MAX_CHARS + 5);
+    const sanitized = sanitizeTextForRawOutput(rawText);
+
+    expect(sanitized.startsWith("x".repeat(RAW_OUTPUT_MAX_CHARS))).toBe(true);
+    expect(sanitized.endsWith("[KYOSO_TRUNCATED: 5 chars omitted]")).toBe(true);
+  });
+
+  test("does not leak content when raw output cap is invalid", () => {
+    expect(sanitizeTextForRawOutput("abcdef", -1)).toBe(
+      "\n[KYOSO_TRUNCATED: 6 chars omitted]",
+    );
   });
 });
 

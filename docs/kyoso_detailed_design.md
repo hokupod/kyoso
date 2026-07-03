@@ -519,7 +519,7 @@ export type KyosoReviewRequest = {
 };
 ```
 
-`includeAgentRawOutputs` only affects `KyosoResult.agentOpinions[*].rawText`, and the value is sanitized and display-capped. It never returns pre-redaction secrets.
+`includeAgentRawOutputs` only affects `KyosoResult.agentOpinions[*].rawText`, and the value is sanitized and truncated to 16,384 characters with an explicit truncation marker, preserving whitespace. It never returns pre-redaction secrets.
 
 ### 8.1 Validation rules
 
@@ -1531,7 +1531,7 @@ Audit may include:
 - finding metadata
 - redaction count
 - agent status
-- sanitized `rawText` on `agent_completed` events only when `audit.includeRawAgentOutput` is true
+- sanitized `rawText` on `agent_completed` events only when `audit.includeRawAgentOutput` is true; rawText is capped at 16,384 characters with an explicit truncation marker and preserves whitespace
 
 ---
 

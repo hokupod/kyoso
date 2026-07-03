@@ -432,13 +432,13 @@ describe("runReview", () => {
   test("raw agent output is returned only when requested and remains sanitized", async () => {
     const cwd = await tempCwd();
     const leaked = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
-    const rawText = JSON.stringify({
-      summary: `summary ${leaked}`,
-      findings: [],
-      testsToAdd: [],
-      residualRisks: [],
-      openQuestions: [],
-    });
+    const rawText = `{
+  "summary": "summary ${leaked}",
+  "findings": [],
+  "testsToAdd": [],
+  "residualRisks": [],
+  "openQuestions": []
+}`;
 
     const withoutRaw = await runReview(
       "plan_review",
@@ -464,6 +464,7 @@ describe("runReview", () => {
 
     expect(withoutRaw.agentOpinions[0]?.rawText).toBeUndefined();
     expect(withRaw.agentOpinions[0]?.rawText).toContain("[KYOSO_REDACTED]");
+    expect(withRaw.agentOpinions[0]?.rawText).toContain('\n  "findings"');
     expect(JSON.stringify(withRaw)).not.toContain(leaked);
   });
 
@@ -530,13 +531,13 @@ describe("runReview", () => {
   test("audit trace includes sanitized raw agent output only when configured", async () => {
     const cwd = await tempCwd();
     const leaked = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
-    const rawText = JSON.stringify({
-      summary: `summary ${leaked}`,
-      findings: [],
-      testsToAdd: [],
-      residualRisks: [],
-      openQuestions: [],
-    });
+    const rawText = `{
+  "summary": "summary ${leaked}",
+  "findings": [],
+  "testsToAdd": [],
+  "residualRisks": [],
+  "openQuestions": []
+}`;
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
@@ -565,6 +566,20 @@ describe("runReview", () => {
     expect(traceText).toContain('"rawText"');
     expect(traceText).toContain("[KYOSO_REDACTED]");
     expect(traceText).not.toContain(leaked);
+
+    const lines = traceText.trimEnd().split("\n");
+    const events = lines.map((line) => JSON.parse(line) as { type?: string });
+    const rawEventLines = lines.filter((line) =>
+      line.includes('"type":"agent_completed"'),
+    );
+
+    expect(
+      events.filter((event) => event.type === "agent_completed"),
+    ).toHaveLength(2);
+    expect(rawEventLines).toHaveLength(2);
+    expect(
+      rawEventLines.every((line) => line.includes('\\n  \\"findings\\"')),
+    ).toBe(true);
   });
 
   test("fake ACP markdown JSON output is normalized by the core pipeline", async () => {

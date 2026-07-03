@@ -29,7 +29,10 @@ import {
 } from "../output/markdown.js";
 import { runJudge } from "../judge/provider.js";
 import { assertNotChildAgent } from "../security/recursionGuard.js";
-import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
+import {
+  sanitizeTextForDisplay,
+  sanitizeTextForRawOutput,
+} from "../security/sanitizeText.js";
 import { scanAndRedactSecrets } from "../security/secretScan.js";
 import { computeCisaGate } from "../security/cisaGate.js";
 import { decide } from "../security/decision.js";
@@ -432,7 +435,7 @@ async function runAgents(input: {
         timestamp: new Date().toISOString(),
       };
       if (input.config.audit.includeRawAgentOutput && result.rawText) {
-        event.rawText = sanitizeTextForDisplay(result.rawText);
+        event.rawText = sanitizeTextForRawOutput(result.rawText);
       }
       return input.trace.write(event);
     }),
@@ -473,7 +476,7 @@ function agentOpinionSummary(
     errorCode: result.error?.code,
   };
   if (includeRawText && result.rawText) {
-    opinion.rawText = sanitizeTextForDisplay(result.rawText);
+    opinion.rawText = sanitizeTextForRawOutput(result.rawText);
   }
   return opinion;
 }

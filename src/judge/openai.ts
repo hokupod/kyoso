@@ -17,7 +17,7 @@ export async function runOpenAiJudge(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: input.env.KYOSO_OPENAI_JUDGE_MODEL ?? "gpt-4o-mini",
+        model: input.env.KYOSO_OPENAI_JUDGE_MODEL ?? "gpt-5.4-mini",
         response_format: { type: "json_object" },
         messages: [
           {

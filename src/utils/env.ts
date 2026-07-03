@@ -16,7 +16,11 @@ export function buildChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   whitelist: string[],
   explicit: Record<string, string>,
-  options: { agent?: "codex" | "claude"; preferApiKey?: boolean } = {},
+  options: {
+    agent?: "codex" | "claude";
+    model?: string;
+    preferApiKey?: boolean;
+  } = {},
 ): NodeJS.ProcessEnv {
   if (!parentEnv.PATH) {
     throw new Error("PATH is required to launch ACP child agents.");
@@ -31,11 +35,27 @@ export function buildChildEnv(
   for (const [key, value] of Object.entries(explicit)) {
     env[key] = value;
   }
+  applyModelConfig(env, options.agent, options.model);
   env.KYOSO_CHILD_AGENT = "1";
   if (options.agent === "claude") {
     applyClaudeAuthPreference(env, options.preferApiKey === true);
   }
   return env;
+}
+
+function applyModelConfig(
+  env: NodeJS.ProcessEnv,
+  agent: "codex" | "claude" | undefined,
+  model: string | undefined,
+): void {
+  if (!model) return;
+  if (agent === "claude" && !env.ANTHROPIC_MODEL) {
+    env.ANTHROPIC_MODEL = model;
+    return;
+  }
+  if (agent === "codex" && !env.CODEX_CONFIG) {
+    env.CODEX_CONFIG = JSON.stringify({ model });
+  }
 }
 
 function applyClaudeAuthPreference(

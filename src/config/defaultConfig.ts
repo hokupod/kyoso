@@ -51,6 +51,7 @@ export const defaultConfig: KyosoConfigInput = {
         envWhitelist: [
           "ANTHROPIC_API_KEY",
           "CLAUDE_CODE_OAUTH_TOKEN",
+          "ANTHROPIC_MODEL",
           "ANTHROPIC_BASE_URL",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_USE_BEDROCK",

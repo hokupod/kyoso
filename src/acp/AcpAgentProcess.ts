@@ -53,7 +53,11 @@ async function runSubprocessAgent(
     process.env,
     agentConfig.auth.envWhitelist,
     agentConfig.env,
-    { agent, preferApiKey: agentConfig.auth.preferApiKey },
+    {
+      agent,
+      model: agentConfig.model,
+      preferApiKey: agentConfig.auth.preferApiKey,
+    },
   );
 
   return new Promise((resolveResult) => {

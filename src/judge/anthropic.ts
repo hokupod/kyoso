@@ -18,8 +18,7 @@ export async function runAnthropicJudge(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model:
-          input.env.KYOSO_ANTHROPIC_JUDGE_MODEL ?? "claude-3-5-haiku-latest",
+        model: input.env.KYOSO_ANTHROPIC_JUDGE_MODEL ?? "claude-haiku-4-5",
         max_tokens: 4096,
         temperature: 0,
         messages: [

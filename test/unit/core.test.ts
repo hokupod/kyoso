@@ -41,15 +41,37 @@ describe("config", () => {
   test("default config validates", () => {
     const parsed = kyosoConfigSchema.parse(defaultConfig);
     expect(parsed.agents.codex.command).toBe("npx");
+    expect(parsed.agents.codex.model).toBeUndefined();
     expect(parsed.agents.claude.auth.recommendedEnv).toContain(
       "CLAUDE_CODE_OAUTH_TOKEN",
     );
     expect(parsed.agents.claude.auth.envWhitelist).toContain(
       "CLAUDE_CODE_OAUTH_TOKEN",
     );
+    expect(parsed.agents.claude.auth.envWhitelist).toContain("ANTHROPIC_MODEL");
     expect(parsed.agents.claude.auth.preferApiKey).toBe(false);
     expect(parsed.agents.claude.timeoutMs).toBe(240_000);
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
+  });
+
+  test("accepts optional per-agent model pins", () => {
+    const parsed = kyosoConfigSchema.parse({
+      ...defaultConfig,
+      agents: {
+        ...defaultConfig.agents,
+        codex: {
+          ...defaultConfig.agents?.codex,
+          model: "gpt-5.5",
+        },
+        claude: {
+          ...defaultConfig.agents?.claude,
+          model: "claude-sonnet-5",
+        },
+      },
+    });
+
+    expect(parsed.agents.codex.model).toBe("gpt-5.5");
+    expect(parsed.agents.claude.model).toBe("claude-sonnet-5");
   });
 
   test("skips untrusted kyoso.config.ts without executing it", async () => {
@@ -755,6 +777,51 @@ describe("child env", () => {
 
     expect(env.ANTHROPIC_API_KEY).toBe("api-key");
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  test("leaves model env unset when no agent model is configured", () => {
+    const env = buildChildEnv({ PATH: "/bin" }, [], {}, { agent: "claude" });
+
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.CODEX_CONFIG).toBeUndefined();
+  });
+
+  test("sets Claude model without overriding explicit env", () => {
+    const injected = buildChildEnv(
+      { PATH: "/bin" },
+      [],
+      {},
+      { agent: "claude", model: "claude-sonnet-5" },
+    );
+    const explicit = buildChildEnv(
+      { PATH: "/bin" },
+      [],
+      { ANTHROPIC_MODEL: "claude-opus-4-8" },
+      { agent: "claude", model: "claude-sonnet-5" },
+    );
+
+    expect(injected.ANTHROPIC_MODEL).toBe("claude-sonnet-5");
+    expect(explicit.ANTHROPIC_MODEL).toBe("claude-opus-4-8");
+  });
+
+  test("sets Codex model through CODEX_CONFIG without overriding explicit env", () => {
+    const injected = buildChildEnv(
+      { PATH: "/bin" },
+      [],
+      {},
+      { agent: "codex", model: "gpt-5.5" },
+    );
+    const explicit = buildChildEnv(
+      { PATH: "/bin" },
+      [],
+      { CODEX_CONFIG: '{"model":"gpt-5.4"}' },
+      { agent: "codex", model: "gpt-5.5" },
+    );
+
+    expect(JSON.parse(injected.CODEX_CONFIG ?? "{}")).toEqual({
+      model: "gpt-5.5",
+    });
+    expect(explicit.CODEX_CONFIG).toBe('{"model":"gpt-5.4"}');
   });
 });
 

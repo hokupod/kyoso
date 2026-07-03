@@ -122,12 +122,34 @@ If both Claude credentials are set, Kyoso forwards only `CLAUDE_CODE_OAUTH_TOKEN
 
 Default child-agent env allowlist:
 
-| Agent  | Provider env                                                                                                                                                              |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Codex  | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, `CODEX_ACCESS_TOKEN`                                                                                                     |
-| Claude | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` |
+| Agent  | Provider env                                                                                                                                                                                 |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex  | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, `CODEX_ACCESS_TOKEN`                                                                                                                        |
+| Claude | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` |
 
 Kyoso also forwards minimal runtime env needed to launch subprocesses: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, and `SystemRoot`.
+
+## Agent Models
+
+Omit `agents.<name>.model` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml`; Claude uses the adapter default.
+
+```ts
+export default defineConfig({
+  agents: {
+    codex: {
+      model: "gpt-5.5",
+    },
+    claude: {
+      model: "claude-sonnet-5",
+    },
+  },
+});
+```
+
+Kyoso maps model pins to adapter-supported configuration:
+
+- Claude: sets `ANTHROPIC_MODEL` when not already set in `agents.claude.env` or a whitelisted parent env.
+- Codex: sets `CODEX_CONFIG={"model":"..."}` when `CODEX_CONFIG` is not already set. To combine other Codex session config with a model pin, set `agents.codex.env.CODEX_CONFIG` directly.
 
 ## Audit
 
@@ -152,8 +174,10 @@ Default agent timeouts are Codex 120 seconds and Claude 240 seconds. MCP clients
 Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the OpenAI judge, or `ANTHROPIC_API_KEY` to use the Anthropic judge. Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
-- `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-4o-mini`
-- `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-3-5-haiku-latest`
+- `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`
+- `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-haiku-4-5`
+
+Judge defaults intentionally use lightweight models. For a stronger judge, set `KYOSO_ANTHROPIC_JUDGE_MODEL` to a Sonnet-class model such as `claude-sonnet-5`.
 
 Subscription-only setup:
 

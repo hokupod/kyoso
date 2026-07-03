@@ -11,6 +11,7 @@ const agentSchema = z.object({
   type: z.literal("acp").default("acp"),
   command: z.string(),
   args: z.array(z.string()).default([]),
+  model: z.string().optional(),
   role: z.enum(["implementation_reviewer", "architecture_security_reviewer"]),
   timeoutMs: z.number().int().positive().default(120_000),
   env: z.record(z.string(), z.string()).default({}),

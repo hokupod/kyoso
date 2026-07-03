@@ -687,6 +687,7 @@ export default defineConfig({
       type: "acp",
       command: "npx",
       args: ["-y", "@agentclientprotocol/codex-acp"],
+      model: undefined, // omit to use Codex default, e.g. ~/.codex/config.toml
       role: "implementation_reviewer",
       timeoutMs: 120_000,
       env: {
@@ -711,6 +712,7 @@ export default defineConfig({
       type: "acp",
       command: "npx",
       args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      model: undefined, // omit to use the Claude adapter default
       role: "architecture_security_reviewer",
       timeoutMs: 240_000,
       env: {
@@ -724,6 +726,7 @@ export default defineConfig({
         envWhitelist: [
           "ANTHROPIC_API_KEY",
           "CLAUDE_CODE_OAUTH_TOKEN",
+          "ANTHROPIC_MODEL",
           "ANTHROPIC_BASE_URL",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_USE_BEDROCK",
@@ -985,6 +988,8 @@ Codex:
 {
   command: "npx",
   args: ["-y", "@agentclientprotocol/codex-acp"],
+  // Omit model to use the user's Codex default.
+  // model: "gpt-5.5",
   env: {
     INITIAL_AGENT_MODE: "read-only",
     KYOSO_CHILD_AGENT: "1",
@@ -998,11 +1003,19 @@ Claude:
 {
   command: "npx",
   args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+  // Omit model to use the Claude adapter default.
+  // model: "claude-sonnet-5",
   env: {
     KYOSO_CHILD_AGENT: "1",
   }
 }
 ```
+
+`agents.<name>.model` is optional. When omitted, Kyoso does not add any model
+override and the child adapter keeps its own default behavior. For Claude, Kyoso
+maps the value to `ANTHROPIC_MODEL` unless that env is already set. For Codex,
+Kyoso maps the value to `CODEX_CONFIG={"model":"..."}` unless `CODEX_CONFIG` is
+already set.
 
 If `npx` is unavailable but `bunx` is available, `doctor` should suggest config replacement. Do not silently change commands unless config says `command: "auto"`.
 
@@ -1179,8 +1192,12 @@ Do not require judge LLM for MVP to return a result.
 Environment overrides:
 
 - `OPENAI_BASE_URL`
-- `KYOSO_OPENAI_JUDGE_MODEL`, default `gpt-4o-mini`
-- `KYOSO_ANTHROPIC_JUDGE_MODEL`, default `claude-3-5-haiku-latest`
+- `KYOSO_OPENAI_JUDGE_MODEL`, default `gpt-5.4-mini`
+- `KYOSO_ANTHROPIC_JUDGE_MODEL`, default `claude-haiku-4-5`
+
+Judge defaults use lightweight models. Operators can override to a stronger
+model, such as a Sonnet-class Anthropic model, by setting the corresponding
+`KYOSO_*_JUDGE_MODEL` env var.
 
 ### 15.3 Judge responsibilities
 
@@ -1436,6 +1453,7 @@ Allowed env:
 
 - `ANTHROPIC_API_KEY`
 - `CLAUDE_CODE_OAUTH_TOKEN`
+- `ANTHROPIC_MODEL`
 - `ANTHROPIC_BASE_URL`
 - `CLAUDE_CONFIG_DIR`
 - `CLAUDE_CODE_USE_BEDROCK`

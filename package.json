@@ -4,6 +4,9 @@
   "description": "Kyo-so: MCP-native, ACP-powered multi-agent review gates for AI coding workflows.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -14,7 +17,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "kyoso": "./dist/bin/kyoso.js"
+    "kyoso": "dist/bin/kyoso.js"
   },
   "files": [
     "dist",
@@ -27,9 +30,12 @@
     "dev": "bun run src/cli/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "build": "bun build src/index.ts --target=node --outfile dist/index.js && bun build src/cli/main.ts --target=node --outfile dist/bin/kyoso.js && tsc -p tsconfig.build.json",
+    "build": "bun build src/index.ts --target=node --outfile dist/index.js && bun build src/cli/main.ts --target=node --outfile dist/bin/kyoso.js --banner '#!/usr/bin/env node' && tsc -p tsconfig.build.json",
     "lint": "tsc --noEmit",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pack:verify": "node scripts/verify-pack.mjs",
+    "prepack": "bun run build"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.0.0",

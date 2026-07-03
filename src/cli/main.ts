@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { booleanFlag, parseArgs, stringArrayFlag, stringFlag } from "./args.js";
 import { readPathOrText, readSelectedFiles } from "./io.js";

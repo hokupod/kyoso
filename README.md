@@ -28,6 +28,10 @@ safe-chain bun test
 safe-chain bun run build
 ```
 
+Requires Node.js 20 or newer when running the packaged CLI.
+
+Known distribution risk: `@modelcontextprotocol/server` has no stable release yet; Kyoso currently pins a prerelease API, so MCP SDK API changes may require a follow-up release.
+
 ## CLI
 
 ```bash

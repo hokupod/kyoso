@@ -133,6 +133,7 @@ export type AgentRunResult = {
   error?: {
     code: string;
     message: string;
+    detail?: string;
   };
   startedAt: string;
   completedAt?: string;

@@ -5,7 +5,8 @@
       "args": ["-y", "@kyoso/cli", "mcp"],
       "env": {
         "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN}"
       }
     }
   }

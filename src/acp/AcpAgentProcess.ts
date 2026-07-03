@@ -6,6 +6,7 @@ import {
   client,
   methods,
   ndJsonStream,
+  PROTOCOL_VERSION,
   RequestError,
 } from "@agentclientprotocol/sdk";
 import type { KyosoConfig } from "../config/schema.js";
@@ -123,7 +124,9 @@ async function runSubprocessAgent(
       })
       .catch((error) => {
         if (abortController.signal.aborted) return;
-        const failureText = `${stderr}\n${error instanceof Error ? error.message : String(error)}`;
+        const failureText = [stderr, formatAgentErrorDetail(error)]
+          .filter((part) => part.trim().length > 0)
+          .join("\n");
         resolveOnce({
           agent,
           role: input.role,
@@ -203,8 +206,18 @@ async function runAcpClientWorkflow(
     })
     .onRequest(methods.client.terminal.kill, () => ({}));
 
-  return app.connectWith(stream, async (ctx) =>
-    ctx
+  return app.connectWith(stream, async (ctx) => {
+    await ctx.request(methods.agent.initialize, {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: {
+          readTextFile: true,
+          writeTextFile: false,
+        },
+      },
+    });
+
+    return ctx
       .buildSession({
         cwd: input.workspaceDir,
         mcpServers: [],
@@ -222,8 +235,8 @@ async function runAcpClientWorkflow(
         const text = await session.readText();
         await promptResponse;
         return text;
-      }),
-  );
+      });
+  });
 }
 
 export async function readWorkspaceFile(
@@ -314,9 +327,14 @@ function isMissingPathError(error: unknown): boolean {
 function buildAgentFailure(
   rawDetail: string,
   fallbackMessage: string,
-): { code: string; message: string } {
+): { code: string; message: string; detail?: string } {
   const code = classifyAgentFailure(rawDetail);
-  return { code, message: safeAgentFailureMessage(code, fallbackMessage) };
+  const detail = sanitizeTextForDisplay(rawDetail.trim());
+  return {
+    code,
+    message: safeAgentFailureMessage(code, fallbackMessage),
+    ...(detail ? { detail } : {}),
+  };
 }
 
 function safeAgentFailureMessage(
@@ -329,6 +347,9 @@ function safeAgentFailureMessage(
   if (code === "PERMISSION_DENIED") {
     return "Agent request was denied by Kyoso policy.";
   }
+  if (code === "AGENT_NETWORK_FAILED") {
+    return "Agent adapter package could not be resolved due to network or cache failure.";
+  }
   if (code === "AGENT_SPAWN_FAILED") {
     return "Agent process could not be started.";
   }
@@ -337,8 +358,33 @@ function safeAgentFailureMessage(
 
 function classifyAgentFailure(stderr: string): string {
   if (/spawn/i.test(stderr)) return "AGENT_SPAWN_FAILED";
+  if (
+    /ENOTFOUND|ENOTCACHED|ECONNREFUSED|ETIMEDOUT|registry\.npmjs\.org|network request|cache mode/i.test(
+      stderr,
+    )
+  ) {
+    return "AGENT_NETWORK_FAILED";
+  }
   if (/auth|api key|login|credential/i.test(stderr)) return "AUTH_FAILED";
   if (/permission|policy|write|terminal/i.test(stderr))
     return "PERMISSION_DENIED";
   return "AGENT_FAILED";
+}
+
+function formatAgentErrorDetail(error: unknown): string {
+  if (error instanceof RequestError) {
+    const data = stringifyErrorData(error.data);
+    return data ? `${error.message}; data: ${data}` : error.message;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function stringifyErrorData(data: unknown): string {
+  if (data === undefined) return "";
+  try {
+    return JSON.stringify(data);
+  } catch {
+    return String(data);
+  }
 }

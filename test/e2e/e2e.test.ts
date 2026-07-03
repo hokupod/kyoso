@@ -17,9 +17,18 @@ describe("e2e surfaces", () => {
 
   test("doctor works without credentials", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-"));
-    const output = await runDoctor({ cwd, ignoreConfig: true });
+    const output = await runDoctor({
+      cwd,
+      ignoreConfig: true,
+      env: { PATH: process.env.PATH ?? "" },
+    });
     expect(output).toContain("Kyoso doctor");
     expect(output).toContain("ACP agents");
+    expect(output).toContain(
+      "auth: set ANTHROPIC_API_KEY (API billing) or run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (subscription)",
+    );
+    expect(output).toContain("provider: deterministic_fallback");
+    expect(output).toContain("billing: none (deterministic fallback)");
     expect(output).toContain("raw agent output: disabled");
   });
 
@@ -34,6 +43,43 @@ describe("e2e surfaces", () => {
 
     expect(output).toContain(
       'hint: replace command "npx" with "bunx" in kyoso.config.ts',
+    );
+  });
+
+  test("doctor accepts Claude Code OAuth token for subscription auth", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-oauth-"));
+    const output = await runDoctor({
+      cwd,
+      ignoreConfig: true,
+      env: {
+        PATH: process.env.PATH ?? "",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+      },
+    });
+
+    expect(output).toContain("auth: detected Claude Code OAuth token");
+    expect(output).toContain("provider: deterministic_fallback");
+    expect(output).not.toContain("existing local Claude credentials");
+  });
+
+  test("doctor warns when Claude API key and OAuth token are both set", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-both-"));
+    const output = await runDoctor({
+      cwd,
+      ignoreConfig: true,
+      env: {
+        PATH: process.env.PATH ?? "",
+        ANTHROPIC_API_KEY: "api-key",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+      },
+    });
+
+    expect(output).toContain(
+      "warning: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set; the adapter may prefer the API key (pay-per-token billing)",
+    );
+    expect(output).toContain("provider: anthropic");
+    expect(output).toContain(
+      "billing: direct provider API calls (pay-per-token billing)",
     );
   });
 

@@ -40,6 +40,12 @@ describe("config", () => {
   test("default config validates", () => {
     const parsed = kyosoConfigSchema.parse(defaultConfig);
     expect(parsed.agents.codex.command).toBe("npx");
+    expect(parsed.agents.claude.auth.recommendedEnv).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    );
+    expect(parsed.agents.claude.auth.envWhitelist).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    );
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
   });
 
@@ -65,6 +71,9 @@ describe("judge", () => {
     expect(
       resolveJudgeProvider("auto", { ANTHROPIC_API_KEY: "anthropic" }),
     ).toBe("anthropic");
+    expect(
+      resolveJudgeProvider("auto", { CLAUDE_CODE_OAUTH_TOKEN: "oauth" }),
+    ).toBe("deterministic_fallback");
     expect(
       resolveJudgeProvider("auto", {
         OPENAI_API_KEY: "openai",
@@ -592,6 +601,16 @@ describe("audit sanitize", () => {
 
     expect(sanitized.rawText).toBe("token=[KYOSO_REDACTED]");
     expect(sanitized.content).toBeUndefined();
+  });
+
+  test("keeps sanitized errorDetail in audit events", () => {
+    const leaked = `sk-ant-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const sanitized = sanitizeForAudit({
+      type: "agent_completed",
+      errorDetail: `Internal error data=${leaked}`,
+    }) as Record<string, unknown>;
+
+    expect(sanitized.errorDetail).toBe("Internal error data=[KYOSO_REDACTED]");
   });
 });
 

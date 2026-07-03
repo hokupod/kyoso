@@ -18,18 +18,24 @@ const originalJudgeEnv = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   CODEX_API_KEY: process.env.CODEX_API_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
 };
 
 beforeAll(() => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.CODEX_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 });
 
 afterAll(() => {
   restoreEnv("OPENAI_API_KEY", originalJudgeEnv.OPENAI_API_KEY);
   restoreEnv("CODEX_API_KEY", originalJudgeEnv.CODEX_API_KEY);
   restoreEnv("ANTHROPIC_API_KEY", originalJudgeEnv.ANTHROPIC_API_KEY);
+  restoreEnv(
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    originalJudgeEnv.CLAUDE_CODE_OAUTH_TOKEN,
+  );
 });
 
 describe("runReview", () => {
@@ -582,6 +588,53 @@ describe("runReview", () => {
     ).toBe(true);
   });
 
+  test("agent failure audit includes sanitized details and run timestamps", async () => {
+    const cwd = await tempCwd();
+    const leaked = `sk-ant-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const errorDetail = `Internal error; data: {"details":"Not initialized","token":"${leaked}"}`;
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        config,
+        agentManager: failedAgentManager(errorDetail),
+      },
+    );
+    const traceText = await readFile(
+      join(
+        cwd,
+        config.audit.directory,
+        result.audit.startedAt.slice(0, 10),
+        `${result.audit.traceId}.jsonl`,
+      ),
+      "utf8",
+    );
+
+    const events = traceText
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const agentEvents = events.filter(
+      (event) => event.type === "agent_completed",
+    );
+
+    expect(agentEvents).toHaveLength(2);
+    expect(
+      agentEvents.every(
+        (event) =>
+          event.errorCode === "AGENT_FAILED" &&
+          typeof event.errorDetail === "string" &&
+          typeof event.startedAt === "string" &&
+          typeof event.completedAt === "string",
+      ),
+    ).toBe(true);
+    expect(traceText).toContain("Not initialized");
+    expect(traceText).toContain("[KYOSO_REDACTED]");
+    expect(traceText).not.toContain(leaked);
+  });
+
   test("fake ACP markdown JSON output is normalized by the core pipeline", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
@@ -901,6 +954,54 @@ process.exit(1);
     expect(serialized).not.toContain(leaked);
     expect(result.summaryMarkdown).not.toContain("api_key");
   });
+
+  test("subprocess npm network failures are not classified as permission denials", async () => {
+    const cwd = await tempCwd();
+    const scriptPath = join(cwd, "network-failing-agent.js");
+    await writeFile(
+      scriptPath,
+      `console.error("npm error code ENOTFOUND");
+console.error("npm error network request to https://registry.npmjs.org/@agentclientprotocol%2fcodex-acp failed");
+console.error("npm error Log files were not written due to an error writing to directory");
+process.exit(1);
+`,
+      "utf8",
+    );
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: [scriptPath],
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          enabled: false,
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd,
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result.agentOpinions[0]?.errorCode).toBe("AGENT_NETWORK_FAILED");
+    expect(result.agentOpinions[0]?.summary).toBe(
+      "Agent adapter package could not be resolved due to network or cache failure.",
+    );
+  });
 });
 
 async function tempCwd(): Promise<string> {
@@ -919,6 +1020,32 @@ function rawTextAgentManager(rawText: string) {
         rawText,
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
+      };
+    },
+    async runAll(
+      inputs: Parameters<SubprocessAcpAgentManager["runAgent"]>[0][],
+    ) {
+      return Promise.all(inputs.map((input) => this.runAgent(input)));
+    },
+  };
+}
+
+function failedAgentManager(errorDetail: string) {
+  return {
+    async runAgent(
+      input: Parameters<SubprocessAcpAgentManager["runAgent"]>[0],
+    ) {
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "failed" as const,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        error: {
+          code: "AGENT_FAILED",
+          message: "Agent process failed.",
+          detail: errorDetail,
+        },
       };
     },
     async runAll(

@@ -99,6 +99,17 @@ Secret detection is best-effort. If Kyoso detects a likely secret in the request
 
 Kyoso does not store provider credentials. Child agent environment variables are allowlisted.
 
+## Agent Auth
+
+Codex uses the local `codex` login when available. No API key is required for the default subscription-backed path.
+
+Claude supports two auth paths:
+
+- `ANTHROPIC_API_KEY`: direct Anthropic API billing
+- `CLAUDE_CODE_OAUTH_TOKEN`: subscription auth from `claude setup-token`
+
+If both Claude credentials are set, the adapter may prefer `ANTHROPIC_API_KEY`.
+
 ## Audit
 
 Audit traces are written to:
@@ -120,6 +131,15 @@ Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the Open
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-4o-mini`
 - `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-3-5-haiku-latest`
+
+Subscription-only setup:
+
+- Codex: use local `codex` login
+- Claude: run `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`
+- Judge: set no API keys, so Kyoso uses `deterministic_fallback`
+- To avoid OpenAI judge calls when `OPENAI_API_KEY` is present, set `judgeProvider: "none"`
+
+Team admins should also check organization Usage credits. If credits are enabled, billing behavior beyond subscription limits is controlled outside Kyoso.
 
 ## Development
 

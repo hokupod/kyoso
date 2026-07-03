@@ -5,17 +5,28 @@ import {
   methods,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
 } from "@agentclientprotocol/sdk";
 
+let initialized = false;
+
 const app = agent({ name: "kyoso-fake-acp-agent" })
-  .onRequest(methods.agent.initialize, () => ({
-    protocolVersion: PROTOCOL_VERSION,
-    agentCapabilities: { loadSession: false },
-    authMethods: [],
-  }))
-  .onRequest(methods.agent.session.new, () => ({
-    sessionId: "fake-session",
-  }))
+  .onRequest(methods.agent.initialize, () => {
+    initialized = true;
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      agentCapabilities: { loadSession: false },
+      authMethods: [],
+    };
+  })
+  .onRequest(methods.agent.session.new, () => {
+    if (!initialized) {
+      throw RequestError.internalError({ details: "Not initialized" });
+    }
+    return {
+      sessionId: "fake-session",
+    };
+  })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
     const manifest = await ctx.client.request(methods.client.fs.readTextFile, {
       sessionId: ctx.params.sessionId,

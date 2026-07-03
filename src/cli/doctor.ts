@@ -1,6 +1,7 @@
 import { accessSync } from "node:fs";
 import { delimiter } from "node:path";
 import { loadConfig } from "../config/loadConfig.js";
+import { resolveJudgeProvider } from "../judge/provider.js";
 
 export async function runDoctor(options: {
   cwd: string;
@@ -43,14 +44,39 @@ export async function runDoctor(options: {
         '    hint: replace command "npx" with "bunx" in kyoso.config.ts',
       );
     }
-    if (agent === "claude" && !env.ANTHROPIC_API_KEY) {
-      lines.push(
-        "    auth: ANTHROPIC_API_KEY not found; existing local Claude credentials may work depending on environment",
-      );
+    if (agent === "claude") {
+      const hasApiKey = hasEnv(env, "ANTHROPIC_API_KEY");
+      const hasOAuthToken = hasEnv(env, "CLAUDE_CODE_OAUTH_TOKEN");
+      if (!hasApiKey && !hasOAuthToken) {
+        lines.push(
+          "    auth: set ANTHROPIC_API_KEY (API billing) or run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (subscription)",
+        );
+      } else if (hasApiKey && hasOAuthToken) {
+        lines.push("    auth: detected");
+        lines.push(
+          "    warning: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set; the adapter may prefer the API key (pay-per-token billing)",
+        );
+      } else if (hasOAuthToken) {
+        lines.push("    auth: detected Claude Code OAuth token");
+      } else {
+        lines.push("    auth: detected Anthropic API key");
+      }
     } else {
       lines.push("    auth: detected or delegated");
     }
   }
+
+  const judgeProvider =
+    loaded.config.judge.mode === "deterministic_only"
+      ? "deterministic_fallback"
+      : resolveJudgeProvider(loaded.config.judge.provider, env);
+  lines.push("", "Judge");
+  lines.push(`  provider: ${judgeProvider}`);
+  lines.push(
+    judgeProvider === "deterministic_fallback"
+      ? "  billing: none (deterministic fallback)"
+      : "  billing: direct provider API calls (pay-per-token billing)",
+  );
 
   lines.push("", "Security");
   lines.push("  secret scan: enabled");
@@ -66,6 +92,10 @@ export async function runDoctor(options: {
   );
 
   return lines.join("\n");
+}
+
+function hasEnv(env: NodeJS.ProcessEnv, key: string): boolean {
+  return typeof env[key] === "string" && env[key]!.trim().length > 0;
 }
 
 function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {

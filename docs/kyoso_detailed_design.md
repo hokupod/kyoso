@@ -417,7 +417,11 @@ ACP agents
     auth: detected or delegated
   Claude: warning
     command: npx -y @agentclientprotocol/claude-agent-acp
-    auth: ANTHROPIC_API_KEY not found; existing local Claude credentials may work depending on environment
+    auth: set ANTHROPIC_API_KEY (API billing) or run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (subscription)
+
+Judge
+  provider: deterministic_fallback
+  billing: none (deterministic fallback)
 
 Security
   secret scan: enabled
@@ -712,9 +716,10 @@ export default defineConfig({
       auth: {
         mode: "passthrough",
         preferExistingLogin: true,
-        recommendedEnv: ["ANTHROPIC_API_KEY"],
+        recommendedEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         envWhitelist: [
           "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_OAUTH_TOKEN",
           "ANTHROPIC_BASE_URL",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_USE_BEDROCK",
@@ -1413,18 +1418,24 @@ Do not read or copy `~/.codex/auth.json` directly. Let Codex / codex-acp handle 
 
 ### 19.3 Claude
 
-Preferred auth is `ANTHROPIC_API_KEY` for predictable third-party use.
+Preferred auth is explicit env passthrough:
+
+- `ANTHROPIC_API_KEY` for predictable third-party API billing.
+- `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` for subscription-backed Claude Code usage.
 
 Allowed env:
 
 - `ANTHROPIC_API_KEY`
+- `CLAUDE_CODE_OAUTH_TOKEN`
 - `ANTHROPIC_BASE_URL`
 - `CLAUDE_CONFIG_DIR`
 - `CLAUDE_CODE_USE_BEDROCK`
 - `CLAUDE_CODE_USE_VERTEX`
 - `CLAUDE_CODE_USE_FOUNDRY`
 
-Existing local Claude Code credentials may work depending on the adapter and environment, but Kyoso docs should not guarantee subscription-login behavior for third-party usage.
+Do not advertise interactive terminal auth. Kyoso is headless; Claude subscription usage must be passed through with `CLAUDE_CODE_OAUTH_TOKEN`.
+
+If both `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are set, `doctor` warns that the adapter may prefer API-key billing.
 
 ### 19.4 Auth errors
 
@@ -1488,6 +1499,10 @@ type TraceEvent =
       traceId: string;
       agent: string;
       status: string;
+      startedAt: string;
+      completedAt?: string;
+      errorCode?: string;
+      errorDetail?: string;
       timestamp: string;
     }
   | {
@@ -1531,6 +1546,7 @@ Audit may include:
 - finding metadata
 - redaction count
 - agent status
+- sanitized agent error code/detail and per-agent start/end timestamps
 - sanitized `rawText` on `agent_completed` events only when `audit.includeRawAgentOutput` is true; rawText is capped at 16,384 characters with an explicit truncation marker and preserves whitespace
 
 ---
@@ -1681,7 +1697,7 @@ dependencies:
 [mcp_servers.kyoso]
 command = "npx"
 args = ["-y", "@kyoso/cli", "mcp"]
-env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
+env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 startup_timeout_sec = 20
 tool_timeout_sec = 300
 enabled = true
@@ -1693,7 +1709,7 @@ Alternative Bun path:
 [mcp_servers.kyoso]
 command = "bunx"
 args = ["@kyoso/cli", "mcp"]
-env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY"]
+env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 startup_timeout_sec = 20
 tool_timeout_sec = 300
 enabled = true
@@ -1713,7 +1729,8 @@ Initial placeholder:
       "args": ["-y", "@kyoso/cli", "mcp"],
       "env": {
         "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN}"
       }
     }
   }

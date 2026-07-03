@@ -432,8 +432,14 @@ async function runAgents(input: {
         traceId: input.traceId,
         agent: result.agent,
         status: result.status,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
         timestamp: new Date().toISOString(),
       };
+      if (result.error) {
+        event.errorCode = result.error.code;
+        event.errorDetail = result.error.detail;
+      }
       if (input.config.audit.includeRawAgentOutput && result.rawText) {
         event.rawText = sanitizeTextForRawOutput(result.rawText);
       }

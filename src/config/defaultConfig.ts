@@ -45,9 +45,10 @@ export const defaultConfig: KyosoConfigInput = {
       auth: {
         mode: "passthrough",
         preferExistingLogin: true,
-        recommendedEnv: ["ANTHROPIC_API_KEY"],
+        recommendedEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         envWhitelist: [
           "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_OAUTH_TOKEN",
           "ANTHROPIC_BASE_URL",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_USE_BEDROCK",

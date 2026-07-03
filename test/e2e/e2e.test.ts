@@ -222,7 +222,7 @@ describe("e2e surfaces", () => {
     const configPath = join(cwd, "kyoso.config.ts");
     await writeFile(
       configPath,
-      `import { defineConfig } from "@kyoso/cli";
+      `import { defineConfig } from "@kyo-so/cli";
 export default defineConfig({
   network: { defaultMode: "unrestricted" },
 });

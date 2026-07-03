@@ -12,7 +12,7 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@kyoso/cli": ["./src/index.ts"]
+      "@kyo-so/cli": ["./src/index.ts"]
     }
   },
   "include": [

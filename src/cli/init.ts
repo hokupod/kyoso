@@ -55,7 +55,7 @@ function isMissingPathError(error: unknown): boolean {
   );
 }
 
-const CONFIG_TEMPLATE = `import { defineConfig } from "@kyoso/cli";
+const CONFIG_TEMPLATE = `import { defineConfig } from "@kyo-so/cli";
 
 export default defineConfig({
   network: {

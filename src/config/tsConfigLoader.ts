@@ -26,7 +26,7 @@ export async function loadConfigModule(
 
 function loadTypeScriptConfig(filePath: string, source: string): ConfigModule {
   const sourceWithoutSelfImport = source.replace(
-    /^\s*import\s+\{[^}]*defineConfig[^}]*\}\s+from\s+["']@kyoso\/cli["'];?\s*$/gm,
+    /^\s*import\s+\{[^}]*defineConfig[^}]*\}\s+from\s+["']@kyo-so\/cli["'];?\s*$/gm,
     "",
   );
   const transpiled = ts.transpileModule(sourceWithoutSelfImport, {

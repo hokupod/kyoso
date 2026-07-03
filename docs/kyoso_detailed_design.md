@@ -13,7 +13,7 @@
 | Product name           | **Kyoso**                                                                                  |
 | README 表記            | **Kyo-so**                                                                                 |
 | 日本語名               | 協奏                                                                                       |
-| npm package            | `@kyoso/cli`                                                                               |
+| npm package            | `@kyo-so/cli`                                                                              |
 | CLI command            | `kyoso`                                                                                    |
 | Config file            | `kyoso.config.ts`                                                                          |
 | Local data dir         | `.kyoso/`                                                                                  |
@@ -66,7 +66,7 @@ Kyoso は、複数の coding agent を単純多数決で使うのではなく、
 
 MVP で必ず実装する。
 
-1. `@kyoso/cli` package
+1. `@kyo-so/cli` package
 2. `kyoso` CLI
 3. `kyoso mcp` による MCP stdio server
 4. `plan_review` MCP tool
@@ -139,8 +139,8 @@ MVP backend agents:
 Kyoso is implemented in TypeScript and runs primarily on Bun. Distribution must support both:
 
 ```bash
-bunx @kyoso/cli mcp
-npx @kyoso/cli mcp
+bunx @kyo-so/cli mcp
+npx @kyo-so/cli mcp
 ```
 
 `bunx` is the recommended path for Bun users. `npx` compatibility is required because many MCP client examples and users expect `npx`.
@@ -665,7 +665,7 @@ A TypeScript config file can execute arbitrary code when loaded. Therefore:
 ### 10.3 Example config
 
 ```ts
-import { defineConfig } from "@kyoso/cli";
+import { defineConfig } from "@kyo-so/cli";
 
 export default defineConfig({
   entrypoints: {
@@ -1712,7 +1712,7 @@ dependencies:
 ```toml
 [mcp_servers.kyoso]
 command = "npx"
-args = ["-y", "@kyoso/cli", "mcp"]
+args = ["-y", "@kyo-so/cli", "mcp"]
 env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 startup_timeout_sec = 20
 tool_timeout_sec = 360
@@ -1724,7 +1724,7 @@ Alternative Bun path:
 ```toml
 [mcp_servers.kyoso]
 command = "bunx"
-args = ["@kyoso/cli", "mcp"]
+args = ["@kyo-so/cli", "mcp"]
 env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 startup_timeout_sec = 20
 tool_timeout_sec = 360
@@ -1742,7 +1742,7 @@ Initial placeholder:
   "mcpServers": {
     "kyoso": {
       "command": "npx",
-      "args": ["-y", "@kyoso/cli", "mcp"],
+      "args": ["-y", "@kyo-so/cli", "mcp"],
       "env": {
         "OPENAI_API_KEY": "${OPENAI_API_KEY}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
@@ -1759,7 +1759,7 @@ Initial placeholder:
 
 ```json
 {
-  "name": "@kyoso/cli",
+  "name": "@kyo-so/cli",
   "version": "0.1.0",
   "description": "Kyo-so: MCP-native, ACP-powered multi-agent review gates for AI coding workflows.",
   "type": "module",
@@ -2012,8 +2012,8 @@ These references were used to align the design with current protocol and tool be
 
 MVP is considered complete when all of the following pass:
 
-1. `bunx @kyoso/cli mcp` starts MCP server without stdout noise.
-2. `npx @kyoso/cli mcp` starts or displays a clear Bun installation error.
+1. `bunx @kyo-so/cli mcp` starts MCP server without stdout noise.
+2. `npx @kyo-so/cli mcp` starts or displays a clear Bun installation error.
 3. Codex can register Kyoso as an MCP stdio server.
 4. Claude Code can register Kyoso as an MCP stdio server.
 5. `plan_review` calls both Codex ACP and Claude ACP or fake equivalents in test.

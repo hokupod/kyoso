@@ -79,7 +79,7 @@ export default {};
     const configPath = join(cwd, "kyoso.config.ts");
     await writeFile(
       configPath,
-      `import { defineConfig } from "@kyoso/cli";
+      `import { defineConfig } from "@kyo-so/cli";
 export default defineConfig({
   network: { defaultMode: "unrestricted" },
 });
@@ -94,7 +94,7 @@ export default defineConfig({
     const loadedAgain = await loadConfig({ cwd, trustStorePath });
     await writeFile(
       configPath,
-      `import { defineConfig } from "@kyoso/cli";
+      `import { defineConfig } from "@kyo-so/cli";
 export default defineConfig({
   network: { defaultMode: "unrestricted", allowUnrestricted: false },
 });

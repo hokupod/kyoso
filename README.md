@@ -15,9 +15,11 @@ Kyoso does not apply code changes.
 ## Install
 
 ```bash
-bunx @kyoso/cli mcp
-npx @kyoso/cli mcp
+bunx @kyo-so/cli mcp
+npx @kyo-so/cli mcp
 ```
+
+Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), while the installed CLI command is the shorter `kyoso`.
 
 For local development:
 

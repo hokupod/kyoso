@@ -1,4 +1,4 @@
-import { defineConfig } from "@kyoso/cli";
+import { defineConfig } from "@kyo-so/cli";
 
 export default defineConfig({
   network: {

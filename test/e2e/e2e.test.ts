@@ -17,12 +17,15 @@ describe("e2e surfaces", () => {
 
   test("doctor works without credentials", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-doctor-home-"));
     const output = await runDoctor({
       cwd,
       ignoreConfig: true,
-      env: { PATH: process.env.PATH ?? "" },
+      env: { PATH: process.env.PATH ?? "", HOME: home },
     });
     expect(output).toContain("Kyoso doctor");
+    expect(output).toContain("Codex registration: missing");
+    expect(output).toContain("Claude Code kyoso-review: missing");
     expect(output).toContain("ACP agents");
     expect(output).toContain(
       "auth: set ANTHROPIC_API_KEY (API billing) or run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (subscription)",

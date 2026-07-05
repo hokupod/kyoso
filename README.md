@@ -12,11 +12,75 @@ It coordinates Codex and Claude reviewers for:
 
 Kyoso does not apply code changes.
 
-## Install
+## Quick Start
+
+No global install is required. Run Kyoso through `npx` or `bunx`.
+
+### Claude Code
+
+1. Prepare Claude authentication.
 
 ```bash
-bunx @kyo-so/cli mcp
+claude setup-token
+```
+
+Set `CLAUDE_CODE_OAUTH_TOKEN` from that command, or set `ANTHROPIC_API_KEY` for direct API billing.
+
+2. Register MCP and install the review skill.
+
+```bash
+npx @kyo-so/cli setup claude-code --write
+bunx @kyo-so/cli setup claude-code --write
+```
+
+3. Verify the setup.
+
+```bash
+npx @kyo-so/cli doctor
+bunx @kyo-so/cli doctor
+```
+
+4. Ask for a review from Claude Code.
+
+```text
+Use Kyoso plan_review on this plan before implementation.
+```
+
+### Codex
+
+1. Prepare Codex authentication.
+
+```bash
+codex login
+```
+
+2. Register MCP and install the review skill.
+
+```bash
+npx @kyo-so/cli setup codex --write
+bunx @kyo-so/cli setup codex --write
+```
+
+3. Verify the setup.
+
+```bash
+npx @kyo-so/cli doctor
+bunx @kyo-so/cli doctor
+```
+
+4. Ask for a review from Codex.
+
+```text
+Use Kyoso diff_review on the current diff. I need a second opinion before merging.
+```
+
+Manual setup examples are kept in `examples/codex-config.toml` and `examples/claude-code-mcp.json`.
+
+## Install / Run
+
+```bash
 npx @kyo-so/cli mcp
+bunx @kyo-so/cli mcp
 ```
 
 Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), while the installed CLI command is the shorter `kyoso`.
@@ -36,12 +100,16 @@ Known distribution risk: `@modelcontextprotocol/server` has no stable release ye
 
 ## CLI
 
+`npx @kyo-so/cli` and `bunx @kyo-so/cli` are the normal execution paths. The examples below abbreviate that prefix as `kyoso`.
+
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
 kyoso diff --base main --head HEAD
 kyoso doctor
 kyoso init
+kyoso setup codex
+kyoso setup claude-code
 ```
 
 ## Usage Examples
@@ -73,8 +141,8 @@ Register Kyoso with Codex or Claude Code as an MCP server, then call `plan_revie
 ```toml
 # See examples/codex-config.toml
 [mcp_servers.kyoso]
-command = "kyoso"
-args = ["mcp", "--network", "model_only"]
+command = "npx"
+args = ["-y", "@kyo-so/cli", "mcp", "--network", "model_only"]
 ```
 
 Example client request:
@@ -86,7 +154,8 @@ Use Kyoso plan_review on this plan and the selected auth files. I need a second 
 ## MCP
 
 ```bash
-kyoso mcp --network model_only
+npx @kyo-so/cli mcp --network model_only
+bunx @kyo-so/cli mcp --network model_only
 ```
 
 When `--network` is omitted, Kyoso uses `model_only`. This means Kyoso expects only model-provider traffic from backend agents. It is a policy-level constraint, not OS-level network isolation.
@@ -98,6 +167,14 @@ Kyoso exposes exactly these MCP tools:
 - `diff_review`
 
 MCP stdout is reserved for protocol messages. Logs go to stderr or local audit traces.
+
+## Skill
+
+The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
+
+`npx @kyo-so/cli setup codex --write` and `bunx @kyo-so/cli setup codex --write` copy it to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
+
+`npx @kyo-so/cli setup claude-code --write` and `bunx @kyo-so/cli setup claude-code --write` copy it to `.claude/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.claude/skills/kyoso-review/`.
 
 ## Safety Model
 
@@ -187,6 +264,12 @@ Subscription-only setup:
 - To avoid OpenAI judge calls when `OPENAI_API_KEY` is present, set `judgeProvider: "none"`
 
 Team admins should also check organization Usage credits. If credits are enabled, billing behavior beyond subscription limits is controlled outside Kyoso.
+
+## Troubleshooting
+
+- MCP timeout: set client tool timeouts to at least 360 seconds. Kyoso defaults are Codex 120 seconds and Claude 240 seconds.
+- Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx @kyo-so/cli` resolution after publish.
+- Non-interactive config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`.
 
 ## Development
 

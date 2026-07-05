@@ -3,6 +3,7 @@ import { booleanFlag, parseArgs, stringArrayFlag, stringFlag } from "./args.js";
 import { readPathOrText, readSelectedFiles } from "./io.js";
 import { runDoctor } from "./doctor.js";
 import { runInit } from "./init.js";
+import { runSetup } from "./setup.js";
 import { startMcpServer } from "../mcp/server.js";
 import { runReview } from "../core/runReview.js";
 import type {
@@ -46,6 +47,20 @@ async function main(): Promise<void> {
   if (parsed.command === "init") {
     console.log(
       await runInit({ cwd, force: booleanFlag(parsed.flags, "force") }),
+    );
+    return;
+  }
+
+  if (parsed.command === "setup") {
+    console.log(
+      await runSetup({
+        cwd,
+        client: parsed.positionals[0],
+        write: booleanFlag(parsed.flags, "write"),
+        global: booleanFlag(parsed.flags, "global"),
+        runner: stringFlag(parsed.flags, "runner"),
+        command: stringFlag(parsed.flags, "command"),
+      }),
     );
     return;
   }
@@ -165,6 +180,7 @@ const HELP = `Kyoso
 
 Usage:
   kyoso mcp [--config kyoso.config.ts] [--ignore-config] [--trust-config] [--network model_only|unrestricted]
+  kyoso setup [codex|claude-code] [--write] [--runner npx|bunx] [--command <command>] [--global]
   kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config]
   kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config]
   kyoso diff --base main --head HEAD [--json] [--trust-config]

@@ -1,15 +1,20 @@
 export type ParsedArgs = {
   command: string;
+  positionals: string[];
   flags: Record<string, string | boolean | string[]>;
 };
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const [command = "help", ...rest] = argv;
+  const positionals: string[] = [];
   const flags: ParsedArgs["flags"] = {};
   for (let index = 0; index < rest.length; index += 1) {
     const item = rest[index];
     if (!item) continue;
-    if (!item.startsWith("--")) continue;
+    if (!item.startsWith("--")) {
+      positionals.push(item);
+      continue;
+    }
     const key = item.slice(2);
     const next = rest[index + 1];
     const value = next && !next.startsWith("--") ? next : true;
@@ -23,7 +28,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       flags[key] = [String(existing), String(value)];
     }
   }
-  return { command, flags };
+  return { command, positionals, flags };
 }
 
 export function stringFlag(

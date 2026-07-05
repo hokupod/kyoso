@@ -2,6 +2,7 @@ import { accessSync } from "node:fs";
 import { delimiter } from "node:path";
 import { loadConfig } from "../config/loadConfig.js";
 import { resolveJudgeProvider } from "../judge/provider.js";
+import { detectSetup } from "./setup.js";
 
 export async function runDoctor(options: {
   cwd: string;
@@ -32,7 +33,30 @@ export async function runDoctor(options: {
   if (loaded.configHash) lines.push(`  config hash: ${loaded.configHash}`);
   for (const warning of loaded.warnings) lines.push(`  warning: ${warning}`);
 
+  const setup = detectSetup({ cwd: options.cwd, home: env.HOME });
   lines.push("", "MCP", "  stdio server: ok");
+  lines.push(`  Codex registration: ${setup.codex.mcp ? "ok" : "missing"}`);
+  lines.push(
+    `  Claude Code registration: ${setup["claude-code"].mcp ? "ok" : "missing"}`,
+  );
+  if (!setup.codex.mcp) {
+    lines.push("    next: run `npx @kyo-so/cli setup codex --write`");
+  }
+  if (!setup["claude-code"].mcp) {
+    lines.push("    next: run `npx @kyo-so/cli setup claude-code --write`");
+  }
+
+  lines.push("", "Skills");
+  lines.push(`  Codex kyoso-review: ${setup.codex.skill ? "ok" : "missing"}`);
+  lines.push(
+    `  Claude Code kyoso-review: ${setup["claude-code"].skill ? "ok" : "missing"}`,
+  );
+  if (!setup.codex.skill) {
+    lines.push("    next: run `npx @kyo-so/cli setup codex --write`");
+  }
+  if (!setup["claude-code"].skill) {
+    lines.push("    next: run `npx @kyo-so/cli setup claude-code --write`");
+  }
 
   lines.push("", "ACP agents");
   for (const agent of ["codex", "claude"] as const) {

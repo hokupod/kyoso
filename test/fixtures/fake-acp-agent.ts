@@ -7,8 +7,19 @@ import {
   PROTOCOL_VERSION,
   RequestError,
 } from "@agentclientprotocol/sdk";
+import { writeFileSync } from "node:fs";
 
 let initialized = false;
+const mode = process.env.FAKE_ACP_MODE ?? "happy";
+
+if (process.env.FAKE_ACP_PID_FILE) {
+  writeFileSync(process.env.FAKE_ACP_PID_FILE, String(process.pid));
+}
+
+if (mode === "crash") {
+  console.error("auth failed: fake ACP crash");
+  process.exit(1);
+}
 
 const app = agent({ name: "kyoso-fake-acp-agent" })
   .onRequest(methods.agent.initialize, () => {
@@ -28,6 +39,25 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     };
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
+    if (mode === "hang") {
+      await new Promise(() => {});
+    }
+
+    if (mode === "garbage") {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: {
+            type: "text",
+            text: "this is not json",
+          },
+        },
+      });
+      return { stopReason: "end_turn" };
+    }
+
     const manifest = await ctx.client.request(methods.client.fs.readTextFile, {
       sessionId: ctx.params.sessionId,
       path: "context/request.json",
@@ -45,7 +75,16 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         selectedFile.content.includes("export const foo = 1")
           ? "fake ACP subprocess read snapshot context and selected file"
           : "fake ACP subprocess reviewed the prompt",
-      findings: [],
+      findings: [
+        {
+          severity: "low",
+          category: "test",
+          title: "Fake ACP subprocess finding",
+          evidence: "fake ACP agent completed the ACP session",
+          recommendation: "Keep this integration contract under CI.",
+          confidence: "high",
+        },
+      ],
       testsToAdd: ["fake ACP subprocess test"],
       residualRisks: ["fake ACP subprocess residual risk"],
       openQuestions: [],

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -103,6 +103,16 @@ try {
     }
   }
 
+  if (failures.length === 0) {
+    try {
+      verifyPackedMcpServer(tarballPath, tempDir, packageVersion);
+    } catch (error) {
+      failures.push(
+        `packed MCP smoke failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   if (failures.length > 0) {
     for (const failure of failures) {
       console.error(`pack verify failed: ${failure}`);
@@ -158,4 +168,111 @@ function readTarEntry(tarballPath, entry) {
   }
 
   return result.stdout;
+}
+
+// One-shot spawnSync on purpose: an async spawn() issued after the many
+// spawnSync() calls above can leave the child stuck in dyld on macOS.
+// The MCP stdio server answers each request and exits on stdin EOF.
+function verifyPackedMcpServer(tarballPath, tempDir, packageVersion) {
+  const extractDir = join(tempDir, "extract");
+  mkdirSync(extractDir, { recursive: true });
+  const extract = spawnSync("tar", ["-xf", tarballPath, "-C", extractDir], {
+    encoding: "utf8",
+  });
+  if (extract.status !== 0) {
+    throw new Error(extract.stderr || "failed to extract package tarball");
+  }
+
+  const binPath = join(extractDir, "package", "dist", "bin", "kyoso.js");
+  const requests = [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "kyoso-pack-verify", version: "0.0.0" },
+      },
+    },
+    { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+  ];
+  const run = spawnSync(
+    "node",
+    [binPath, "mcp", "--ignore-config", "--network", "model_only"],
+    {
+      cwd: extractDir,
+      env: {
+        ...process.env,
+        OPENAI_API_KEY: "",
+        CODEX_API_KEY: "",
+        ANTHROPIC_API_KEY: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+      },
+      input: `${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
+      encoding: "utf8",
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+
+  const stderr = (run.stderr ?? "").trim();
+  const stderrNote = stderr
+    ? `stderr: ${stderr.slice(0, 400)}`
+    : "no stderr output";
+  if (run.error) {
+    throw new Error(
+      `failed to run packed MCP server: ${run.error.message}; ${stderrNote}`,
+    );
+  }
+  if (run.signal) {
+    throw new Error(
+      `packed MCP server was killed by ${run.signal} (likely timeout); ${stderrNote}`,
+    );
+  }
+
+  const responses = [];
+  const parseErrors = [];
+  for (const line of (run.stdout ?? "").split("\n")) {
+    if (line.trim().length === 0) continue;
+    try {
+      responses.push(JSON.parse(line));
+    } catch {
+      parseErrors.push(line);
+    }
+  }
+  const findResponse = (id) => {
+    const response = responses.find((item) => item.id === id);
+    if (!response) {
+      throw new Error(
+        `missing MCP response ${id}; exit=${run.status}; ${stderrNote}`,
+      );
+    }
+    return response;
+  };
+
+  const initialize = findResponse(1);
+  const serverInfo = initialize.result?.serverInfo;
+  if (serverInfo?.name !== "kyoso") {
+    throw new Error(`unexpected MCP server name: ${serverInfo?.name}`);
+  }
+  if (serverInfo.version !== packageVersion) {
+    throw new Error(
+      `MCP server version ${serverInfo.version} does not match package.json version ${packageVersion}`,
+    );
+  }
+
+  const tools = findResponse(2);
+  const names = tools.result?.tools?.map((tool) => tool.name) ?? [];
+  const expected = ["plan_review", "security_review", "diff_review"];
+  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+    throw new Error(`unexpected MCP tools: ${names.join(", ")}`);
+  }
+  if (parseErrors.length > 0) {
+    throw new Error(`non-JSON stdout from MCP server: ${parseErrors[0]}`);
+  }
+  if (stderr.length > 0) {
+    throw new Error(`unexpected MCP stderr: ${stderr}`);
+  }
 }

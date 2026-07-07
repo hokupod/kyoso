@@ -104,11 +104,14 @@ safe-chain bun install
 safe-chain bun run typecheck
 safe-chain bun test
 safe-chain bun run build
+safe-chain bun run pack:verify
 ```
 
 Requires Node.js 20 or newer when running the packaged CLI.
 
-Known distribution risk: `@modelcontextprotocol/server` has no stable release yet; Kyoso currently pins a prerelease API, so MCP SDK API changes may require a follow-up release.
+The test suite includes credential-free MCP stdio and ACP subprocess integration coverage. `pack:verify` additionally starts the packed `dist/bin/kyoso.js` MCP server and checks the published bundle's protocol handshake.
+
+Known distribution risk: `@modelcontextprotocol/server` has no stable release yet; Kyoso currently pins a prerelease API, so MCP SDK API changes may require a follow-up release. Run manual real-agent dogfooding before releases that bump `@modelcontextprotocol/server`, `@agentclientprotocol/sdk`, or pinned ACP adapters.
 
 ## CLI
 

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- CI-ready MCP stdio and ACP subprocess integration tests now cover the real
+  protocol boundaries without live LLM credentials. `pack:verify` also starts
+  the packed CLI bin as an MCP server and checks its version and tool list.
+
 ## [0.4.1] - 2026-07-07
 
 ### Changed

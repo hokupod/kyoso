@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +22,17 @@ const secretPatterns = [
   /"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----\\n[^"]+\\n-----END PRIVATE KEY-----\\n?"/,
   /-----BEGIN (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----\r?\n[\s\S]{16,}?\r?\n-----END (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----/,
 ];
+
+const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+const kyosoVersion = readFileSync("src/core/constants.ts", "utf8").match(
+  /KYOSO_VERSION = "([^"]+)"/,
+)?.[1];
+if (kyosoVersion !== packageVersion) {
+  console.error(
+    `pack verify failed: KYOSO_VERSION (${kyosoVersion}) does not match package.json version (${packageVersion})`,
+  );
+  process.exit(1);
+}
 
 const tempDir = mkdtempSync(join(tmpdir(), "kyoso-pack-"));
 

@@ -21,7 +21,10 @@ import {
 import { truncateUtf8 } from "../../src/context/truncate.js";
 import { createTraceWriter } from "../../src/audit/trace.js";
 import { sanitizeForAudit } from "../../src/audit/sanitize.js";
-import { RAW_OUTPUT_MAX_CHARS } from "../../src/core/constants.js";
+import {
+  KYOSO_VERSION,
+  RAW_OUTPUT_MAX_CHARS,
+} from "../../src/core/constants.js";
 import { createSnapshot } from "../../src/workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
 import { parseJudgeOutput } from "../../src/judge/prompt.js";
@@ -920,3 +923,22 @@ function completed(
     },
   };
 }
+
+describe("release consistency", () => {
+  test("KYOSO_VERSION matches package.json version", async () => {
+    const pkg = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    expect(KYOSO_VERSION).toBe(pkg.version);
+  });
+
+  test("default ACP adapter packages are version-pinned", () => {
+    for (const agent of ["codex", "claude"] as const) {
+      const args = defaultConfig.agents?.[agent]?.args ?? [];
+      const adapter = args.find((arg) =>
+        arg.startsWith("@agentclientprotocol/"),
+      );
+      expect(adapter).toMatch(/^@agentclientprotocol\/[a-z-]+@\d+\.\d+\.\d+$/);
+    }
+  });
+});

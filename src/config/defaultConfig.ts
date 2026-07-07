@@ -13,7 +13,9 @@ export const defaultConfig: KyosoConfigInput = {
       enabled: true,
       type: "acp",
       command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp"],
+      // Pinned on purpose: adapters are fetched at runtime on user machines,
+      // so updates must go through a deliberate kyoso release.
+      args: ["-y", "@agentclientprotocol/codex-acp@1.1.0"],
       role: "implementation_reviewer",
       timeoutMs: 120_000,
       env: {
@@ -37,7 +39,7 @@ export const defaultConfig: KyosoConfigInput = {
       enabled: true,
       type: "acp",
       command: "npx",
-      args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+      args: ["-y", "@agentclientprotocol/claude-agent-acp@0.57.0"],
       role: "architecture_security_reviewer",
       timeoutMs: 240_000,
       env: {

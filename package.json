@@ -32,6 +32,7 @@
     ".agents/skills/kyoso-review",
     "examples",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

@@ -3,6 +3,14 @@
   "version": "0.4.0",
   "description": "Kyo-so: MCP-native, ACP-powered multi-agent review gates for AI coding workflows.",
   "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hokupod/kyoso.git"
+  },
+  "homepage": "https://github.com/hokupod/kyoso#readme",
+  "bugs": {
+    "url": "https://github.com/hokupod/kyoso/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"

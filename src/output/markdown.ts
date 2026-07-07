@@ -15,6 +15,7 @@ export function renderMarkdownResult(
     `**Decision:** ${result.decision}`,
     `**Mode:** ${tool}`,
     `**Agents:** ${result.agentOpinions.map((opinion) => `${title(opinion.agent)} ${opinion.status}`).join(", ")}`,
+    `**Review mode:** ${formatReviewMode(result)}`,
     `**Degraded:** ${String(result.degraded)}`,
     "",
     "## Summary",
@@ -79,13 +80,17 @@ export function renderMarkdownResult(
   }
 
   lines.push("", "## Disagreements", "");
-  lines.push(
-    ...(result.disagreements.length > 0
-      ? result.disagreements.map(
-          (item) => `- ${item.topic}: ${item.judgeComment}`,
-        )
-      : ["- None."]),
-  );
+  if (result.reviewMode === "single_agent") {
+    lines.push("- N/A - single-agent review.");
+  } else {
+    lines.push(
+      ...(result.disagreements.length > 0
+        ? result.disagreements.map(
+            (item) => `- ${item.topic}: ${item.judgeComment}`,
+          )
+        : ["- None."]),
+    );
+  }
 
   lines.push(
     "",
@@ -111,6 +116,17 @@ export function defaultSummaryText(
 
 function title(value: string): string {
   return value.slice(0, 1).toUpperCase() + value.slice(1);
+}
+
+function formatReviewMode(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+): string {
+  if (result.reviewMode !== "single_agent") return "multi-agent";
+  const opinion = result.agentOpinions[0];
+  const agent = opinion ? title(opinion.agent) : "single agent";
+  const role =
+    opinion?.role === "combined_reviewer" ? "combined role" : "configured role";
+  return `single-agent (${agent}, ${role}; cross-model verification was not performed)`;
 }
 
 function notes(items: string[]): string {

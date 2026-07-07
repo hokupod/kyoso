@@ -91,7 +91,11 @@ export type CisaSecureByDesignResult = {
 export type AgentName = "codex" | "claude";
 
 export type AgentRole =
-  "implementation_reviewer" | "architecture_security_reviewer";
+  | "implementation_reviewer"
+  | "architecture_security_reviewer"
+  | "combined_reviewer";
+
+export type ReviewMode = "multi_agent" | "single_agent";
 
 export type NormalizedAgentOpinion = {
   agent: AgentName;
@@ -142,6 +146,8 @@ export type AgentRunResult = {
 export type KyosoResult = {
   decision: KyosoDecision;
   degraded: boolean;
+  agentsUsed: AgentName[];
+  reviewMode: ReviewMode;
   summaryMarkdown: string;
   findings: KyosoFinding[];
   cisaSecureByDesign?: CisaSecureByDesignResult;

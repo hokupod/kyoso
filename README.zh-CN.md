@@ -20,6 +20,14 @@ Kyoso 不会应用代码更改。
 
 无需全局安装。通过 `npx` 或 `bunx` 运行 Kyoso。
 
+### Claude Only / Codex Only
+
+Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.config.ts` 中禁用缺失的 backend；示例见 `examples/claude-only.config.ts` 和 `examples/codex-only.config.ts`。
+
+在 single-agent mode 中，剩余 backend 会以 `combined_reviewer` 运行一次，同时覆盖 implementation 和 architecture/security 两类关注点。JSON output 会包含 `reviewMode: "single_agent"` 和 `agentsUsed`；Markdown output 会说明未执行 cross-model verification，并将 disagreements 标记为 N/A。
+
+该 mode 不提供独立的 cross-model validation，仍可能有 self-review bias。它仍保留独立只读 review process、temporary snapshots、adversarial review prompts、secret scanning 和 deterministic gates。
+
 ### Claude Code
 
 1. 准备 Claude authentication。

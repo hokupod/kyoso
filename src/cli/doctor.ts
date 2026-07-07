@@ -59,9 +59,13 @@ export async function runDoctor(options: {
   }
 
   lines.push("", "ACP agents");
+  const agentCommandExists = {
+    codex: commandExists(loaded.config.agents.codex.command, env),
+    claude: commandExists(loaded.config.agents.claude.command, env),
+  };
   for (const agent of ["codex", "claude"] as const) {
     const config = loaded.config.agents[agent];
-    const exists = commandExists(config.command, env);
+    const exists = agentCommandExists[agent];
     lines.push(
       `  ${agent === "codex" ? "Codex" : "Claude"}: ${exists ? "ok" : "warning command not found"}`,
     );
@@ -89,6 +93,13 @@ export async function runDoctor(options: {
     } else {
       lines.push("    auth: detected or delegated");
     }
+  }
+  if (agentCommandExists.codex !== agentCommandExists.claude) {
+    const missing = agentCommandExists.codex ? "claude" : "codex";
+    const remaining = agentCommandExists.codex ? "codex" : "claude";
+    lines.push(
+      `  single-agent mode: set agents.${missing}.enabled: false to use ${remaining} only; the remaining agent will cover both review roles.`,
+    );
   }
 
   const judgeProvider =

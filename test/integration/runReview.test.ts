@@ -312,6 +312,81 @@ describe("runReview", () => {
     expect(manager.calls[0]?.networkMode).toBe("model_only");
   });
 
+  test("claude-only review runs once with combined role and marks single-agent output", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("claude");
+    const manager = new FakeAgentManager();
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      { cwd, config, agentManager: manager },
+    );
+    const traceEvents = await readTraceEvents(cwd, config, result);
+    const started = traceEvents.find((event) => event.type === "agent_started");
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.agent).toBe("claude");
+    expect(manager.calls[0]?.role).toBe("combined_reviewer");
+    expect(manager.calls[0]?.prompt).toContain("combined reviewer role");
+    expect(manager.calls[0]?.prompt).toContain("feasibility");
+    expect(manager.calls[0]?.prompt).toContain("threat modeling");
+    expect(result.reviewMode).toBe("single_agent");
+    expect(result.agentsUsed).toEqual(["claude"]);
+    expect(result.audit.agentsUsed).toEqual(["claude"]);
+    expect(result.agentOpinions[0]?.role).toBe("combined_reviewer");
+    expect(result.disagreements).toEqual([]);
+    expect(result.summaryMarkdown).toContain("single-agent");
+    expect(result.summaryMarkdown).toContain("cross-model verification");
+    expect(result.summaryMarkdown).toContain("N/A - single-agent review");
+    expect(started?.role).toBe("combined_reviewer");
+  });
+
+  test("codex-only review is symmetric with combined role", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("codex");
+    const manager = new FakeAgentManager();
+    const result = await runReview(
+      "diff_review",
+      {
+        goal: "review diff",
+        diff: {
+          unifiedDiff: "diff --git a/a.ts b/a.ts\n+export const a = 1;\n",
+        },
+      },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.agent).toBe("codex");
+    expect(manager.calls[0]?.role).toBe("combined_reviewer");
+    expect(result.reviewMode).toBe("single_agent");
+    expect(result.agentsUsed).toEqual(["codex"]);
+    expect(result.audit.agentsUsed).toEqual(["codex"]);
+    expect(result.agentOpinions[0]?.role).toBe("combined_reviewer");
+    expect(result.summaryMarkdown).toContain("N/A - single-agent review");
+  });
+
+  test("two-agent review keeps configured roles and multi-agent mode", async () => {
+    const cwd = await tempCwd();
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const manager = new FakeAgentManager();
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(manager.calls.map((call) => call.role)).toEqual([
+      "implementation_reviewer",
+      "architecture_security_reviewer",
+    ]);
+    expect(result.reviewMode).toBe("multi_agent");
+    expect(result.agentsUsed).toEqual(["codex", "claude"]);
+    expect(result.summaryMarkdown).toContain("**Review mode:** multi-agent");
+    expect(result.summaryMarkdown).toContain("- None.");
+    expect(result.summaryMarkdown).not.toContain("N/A - single-agent review");
+  });
+
   test("untrusted local config is skipped and reported in result warnings", async () => {
     const cwd = await tempCwd();
     await writeFile(
@@ -1093,6 +1168,43 @@ function failedAgentManager(errorDetail: string) {
       return Promise.all(inputs.map((input) => this.runAgent(input)));
     },
   };
+}
+
+function singleAgentConfig(agent: "codex" | "claude"): KyosoConfig {
+  const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+  return {
+    ...baseConfig,
+    agents: {
+      codex: {
+        ...baseConfig.agents.codex,
+        enabled: agent === "codex",
+      },
+      claude: {
+        ...baseConfig.agents.claude,
+        enabled: agent === "claude",
+      },
+    },
+  };
+}
+
+async function readTraceEvents(
+  cwd: string,
+  config: KyosoConfig,
+  result: Awaited<ReturnType<typeof runReview>>,
+): Promise<Record<string, unknown>[]> {
+  const traceText = await readFile(
+    join(
+      cwd,
+      config.audit.directory,
+      result.audit.startedAt.slice(0, 10),
+      `${result.audit.traceId}.jsonl`,
+    ),
+    "utf8",
+  );
+  return traceText
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function restoreEnv(key: string, value: string | undefined): void {

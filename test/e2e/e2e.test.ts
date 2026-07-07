@@ -49,6 +49,34 @@ describe("e2e surfaces", () => {
     );
   });
 
+  test("doctor suggests single-agent config when only one backend command exists", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-single-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-doctor-single-home-"));
+    await writeFile(join(cwd, "claude-agent"), "", "utf8");
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `import { defineConfig } from "@kyo-so/cli";
+export default defineConfig({
+  agents: {
+    codex: { command: "missing-codex" },
+    claude: { command: "claude-agent" },
+  },
+});
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd,
+      trustConfig: true,
+      env: { PATH: cwd, HOME: home },
+    });
+
+    expect(output).toContain(
+      "single-agent mode: set agents.codex.enabled: false to use claude only",
+    );
+  });
+
   test("doctor accepts Claude Code OAuth token for subscription auth", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-oauth-"));
     const output = await runDoctor({

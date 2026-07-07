@@ -2,7 +2,12 @@ import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildAgentPrompt } from "../acp/prompts.js";
-import type { KyosoReviewRequest, ReviewTool } from "../core/types.js";
+import type {
+  AgentName,
+  AgentRole,
+  KyosoReviewRequest,
+  ReviewTool,
+} from "../core/types.js";
 import {
   isAllowedPath,
   isDeniedPath,
@@ -20,7 +25,11 @@ export async function createSnapshot(
   traceId: string,
   tool: ReviewTool,
   request: KyosoReviewRequest,
-  options: { denyPatterns?: string[]; allowPatterns?: string[] } = {},
+  options: {
+    denyPatterns?: string[];
+    allowPatterns?: string[];
+    agentRoles?: Partial<Record<AgentName, AgentRole>>;
+  } = {},
 ): Promise<Snapshot> {
   const root = await mkdtemp(join(tmpdir(), `kyoso-${traceId}-`));
   const repoDir = join(root, "repo");
@@ -52,12 +61,22 @@ export async function createSnapshot(
   );
   await writeFile(
     join(contextDir, "instructions.codex.md"),
-    buildAgentPrompt(tool, request, "codex"),
+    buildAgentPrompt(
+      tool,
+      request,
+      "codex",
+      options.agentRoles?.codex ?? "implementation_reviewer",
+    ),
     "utf8",
   );
   await writeFile(
     join(contextDir, "instructions.claude.md"),
-    buildAgentPrompt(tool, request, "claude"),
+    buildAgentPrompt(
+      tool,
+      request,
+      "claude",
+      options.agentRoles?.claude ?? "architecture_security_reviewer",
+    ),
     "utf8",
   );
   if (request.repoSummary)

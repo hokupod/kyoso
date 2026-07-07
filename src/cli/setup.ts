@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export type SetupClient = "codex" | "claude-code";
@@ -34,6 +34,7 @@ type StepResult = {
 type SetupContext = {
   cwd: string;
   home: string;
+  env: NodeJS.ProcessEnv;
   write: boolean;
   scope: SetupScope;
   mcpCommand: McpCommand;
@@ -49,6 +50,7 @@ export async function runSetup(options: SetupOptions): Promise<string> {
   const context: SetupContext = {
     cwd: options.cwd,
     home: options.env?.HOME ?? homedir(),
+    env: options.env ?? process.env,
     write: options.write,
     scope: options.global ? "global" : "project",
     mcpCommand: command,
@@ -149,6 +151,7 @@ async function setupCodex(context: SetupContext): Promise<StepResult[]> {
       ),
       write: context.write,
     }),
+    ...singleAgentAdvice(context, "codex"),
   ];
 }
 
@@ -166,6 +169,7 @@ async function setupClaudeCode(context: SetupContext): Promise<StepResult[]> {
       ),
       write: context.write,
     }),
+    ...singleAgentAdvice(context, "claude-code"),
   ];
 }
 
@@ -496,6 +500,43 @@ function statusWord(value: boolean): string {
   return value ? "ok" : "missing";
 }
 
+function singleAgentAdvice(
+  context: SetupContext,
+  client: SetupClient,
+): StepResult[] {
+  if (client === "claude-code" && !commandExists("codex", context.env)) {
+    return [
+      {
+        title: "Single-agent config",
+        status: "skipped",
+        detail: [
+          "codex was not found on PATH. To use Claude only, add:",
+          "agents: {",
+          "  codex: { enabled: false },",
+          "}",
+          "Claude will run as combined_reviewer and cross-model verification will be marked unavailable.",
+        ].join("\n"),
+      },
+    ];
+  }
+  if (client === "codex" && !commandExists("claude", context.env)) {
+    return [
+      {
+        title: "Single-agent config",
+        status: "skipped",
+        detail: [
+          "claude was not found on PATH. To use Codex only, add:",
+          "agents: {",
+          "  claude: { enabled: false },",
+          "}",
+          "Codex will run as combined_reviewer and cross-model verification will be marked unavailable.",
+        ].join("\n"),
+      },
+    ];
+  }
+  return [];
+}
+
 function indent(value: string): string {
   return value
     .split("\n")
@@ -506,6 +547,11 @@ function indent(value: string): string {
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_./:=@{}$,-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
+  const paths = env.PATH?.split(delimiter) ?? [];
+  return paths.some((path) => existsSync(join(path, command)));
 }
 
 function isMissingPathError(error: unknown): boolean {

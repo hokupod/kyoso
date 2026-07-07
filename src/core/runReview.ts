@@ -13,7 +13,9 @@ import { buildContext } from "../context/buildContext.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "./constants.js";
 import { KyosoRequestError } from "./errors.js";
 import type {
+  AgentName,
   AgentRunResult,
+  AgentRole,
   CisaSecureByDesignResult,
   KyosoFinding,
   KyosoResult,
@@ -214,9 +216,11 @@ export async function runReview(
     });
     warnings.push(...built.warnings);
 
+    const agentRoles = resolveAgentRoles(loaded.config);
     snapshot = await createSnapshot(traceId, tool, built.request, {
       denyPatterns,
       allowPatterns,
+      agentRoles,
     });
     await trace.write({
       type: "snapshot_created",
@@ -238,6 +242,8 @@ export async function runReview(
     });
 
     const normalizedAgentResults = agentResults.map(normalizeAgentRunResult);
+    const agentsUsed = normalizedAgentResults.map((result) => result.agent);
+    const reviewMode = agentsUsed.length === 1 ? "single_agent" : "multi_agent";
     const completed = normalizedAgentResults.filter(
       (result) => result.status === "completed",
     );
@@ -305,6 +311,8 @@ export async function runReview(
     const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
       decision,
       degraded,
+      agentsUsed,
+      reviewMode,
       findings: aggregate.findings,
       cisaSecureByDesign: cisa,
       disagreements: aggregate.disagreements,
@@ -328,7 +336,7 @@ export async function runReview(
         traceId,
         startedAt,
         completedAt,
-        agentsUsed: normalizedAgentResults.map((result) => result.agent),
+        agentsUsed,
         redactionsApplied: secretScan.redactions,
         networkMode,
         workspaceMode: "temp_snapshot",
@@ -405,14 +413,20 @@ async function runAgents(input: {
   manager: AcpAgentManager;
   trace: { write(event: Record<string, unknown>): Promise<void> };
 }): Promise<AgentRunResult[]> {
+  const agentRoles = resolveAgentRoles(input.config);
   const agentInputs = (["codex", "claude"] as const)
     .filter((agent) => input.config.agents[agent].enabled)
     .map((agent) => ({
       traceId: input.traceId,
       agent,
-      role: input.config.agents[agent].role,
+      role: agentRoles[agent] ?? input.config.agents[agent].role,
       tool: input.tool,
-      prompt: buildAgentPrompt(input.tool, input.request, agent),
+      prompt: buildAgentPrompt(
+        input.tool,
+        input.request,
+        agent,
+        agentRoles[agent] ?? input.config.agents[agent].role,
+      ),
       workspaceDir: input.workspaceDir,
       timeoutMs:
         input.request.options?.maxAgentTimeoutMs ??
@@ -427,6 +441,7 @@ async function runAgents(input: {
         type: "agent_started",
         traceId: input.traceId,
         agent: agentInput.agent,
+        role: agentInput.role,
         timestamp: new Date().toISOString(),
       }),
     ),
@@ -438,6 +453,7 @@ async function runAgents(input: {
         type: "agent_completed",
         traceId: input.traceId,
         agent: result.agent,
+        role: result.role,
         status: result.status,
         startedAt: result.startedAt,
         completedAt: result.completedAt,
@@ -454,6 +470,22 @@ async function runAgents(input: {
     }),
   );
   return results;
+}
+
+function resolveAgentRoles(
+  config: KyosoConfig,
+): Partial<Record<AgentName, AgentRole>> {
+  const enabledAgents = (["codex", "claude"] as const).filter(
+    (agent) => config.agents[agent].enabled,
+  );
+  const singleAgentMode = enabledAgents.length === 1;
+  const roles: Partial<Record<AgentName, AgentRole>> = {};
+  for (const agent of enabledAgents) {
+    roles[agent] = singleAgentMode
+      ? "combined_reviewer"
+      : config.agents[agent].role;
+  }
+  return roles;
 }
 
 function defaultAgentManager(config: KyosoConfig): AcpAgentManager {
@@ -516,6 +548,8 @@ async function buildSecretBlockResult(input: {
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
     degraded: false,
+    agentsUsed: [],
+    reviewMode: "multi_agent",
     findings: [finding],
     cisaSecureByDesign: cisa,
     disagreements: [],
@@ -624,6 +658,8 @@ async function buildPolicyBlockResult(input: {
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
     degraded: false,
+    agentsUsed: [],
+    reviewMode: "multi_agent",
     findings: [input.finding],
     cisaSecureByDesign:
       input.tool === "security_review"

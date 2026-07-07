@@ -190,6 +190,22 @@ describe("setup", () => {
       },
     });
   });
+
+  test("suggests Claude-only config when codex is unavailable", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-single-agent-");
+    const output = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: false,
+      global: false,
+      env: { HOME: home, PATH: cwd },
+    });
+
+    expect(output).toContain("Single-agent config: skipped");
+    expect(output).toContain("codex was not found on PATH");
+    expect(output).toContain("codex: { enabled: false }");
+    expect(output).toContain("combined_reviewer");
+  });
 });
 
 async function setupTempDirs(prefix: string): Promise<{

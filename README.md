@@ -18,6 +18,14 @@ Kyoso does not apply code changes.
 
 No global install is required. Run Kyoso through `npx` or `bunx`.
 
+### Claude Only / Codex Only
+
+Kyoso can run when only Claude or only Codex is available. Disable the missing backend in `kyoso.config.ts` using `examples/claude-only.config.ts` or `examples/codex-only.config.ts`.
+
+In single-agent mode, the remaining backend runs once as `combined_reviewer` and covers both implementation and architecture/security focus areas. JSON output includes `reviewMode: "single_agent"` and `agentsUsed`; Markdown output states that cross-model verification was not performed and marks disagreements as N/A.
+
+This mode does not provide independent cross-model validation and may retain self-review bias. It still provides a separate read-only review process, temporary snapshots, adversarial review prompts, secret scanning, and deterministic gates.
+
 ### Claude Code
 
 1. Prepare Claude authentication.

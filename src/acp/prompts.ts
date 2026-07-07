@@ -1,9 +1,15 @@
-import type { KyosoReviewRequest, ReviewTool } from "../core/types.js";
+import type {
+  AgentName,
+  AgentRole,
+  KyosoReviewRequest,
+  ReviewTool,
+} from "../core/types.js";
 
 export function buildAgentPrompt(
   tool: ReviewTool,
   request: KyosoReviewRequest,
-  agent: "codex" | "claude",
+  agent: AgentName,
+  role: AgentRole,
 ): string {
   const shared = [
     "You are running as a Kyoso child reviewer.",
@@ -17,16 +23,23 @@ export function buildAgentPrompt(
     "Use empty arrays when no finding, test, risk, or question exists; do not copy the example finding.",
   ].join("\n");
 
-  const role =
-    agent === "codex"
-      ? [
-          "You are the Codex implementation reviewer in Kyoso.",
-          "Focus on feasibility, minimal change, existing code consistency, regression risk, tests, migration risk, and maintainability.",
-        ].join("\n")
-      : [
-          "You are the Claude architecture and security reviewer in Kyoso.",
-          "Focus on architecture, threat modeling, authn/authz, secrets, privacy, secure defaults, CISA Secure by Design, and edge cases.",
-        ].join("\n");
+  const roleInstructions: Record<AgentRole, string> = {
+    implementation_reviewer: [
+      "You are the implementation reviewer role in Kyoso.",
+      "Focus on feasibility, minimal change, existing code consistency, regression risk, tests, migration risk, and maintainability.",
+    ].join("\n"),
+    architecture_security_reviewer: [
+      "You are the architecture and security reviewer role in Kyoso.",
+      "Focus on architecture, threat modeling, authn/authz, secrets, privacy, secure defaults, CISA Secure by Design, and edge cases.",
+    ].join("\n"),
+    combined_reviewer: [
+      "You are the combined reviewer role in Kyoso.",
+      "Cover both implementation review and architecture/security review in one pass.",
+      "First assess feasibility, minimal change, existing code consistency, regression risk, tests, migration risk, and maintainability.",
+      "Then assess architecture, threat modeling, authn/authz, secrets, privacy, secure defaults, CISA Secure by Design, and edge cases.",
+      "Use finding category values so readers can distinguish implementation, architecture, and security concerns.",
+    ].join("\n"),
+  };
 
   const cisaInstruction =
     tool === "security_review"
@@ -38,7 +51,9 @@ export function buildAgentPrompt(
 
   return `${shared}
 
-${role}
+Agent: ${agent}
+Role: ${role}
+${roleInstructions[role]}
 
 Tool: ${tool}
 ${cisaInstruction}

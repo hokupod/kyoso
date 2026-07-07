@@ -5,7 +5,7 @@
     "": {
       "name": "@kyoso/cli",
       "dependencies": {
-        "@agentclientprotocol/sdk": "1.0.0",
+        "@agentclientprotocol/sdk": "1.1.0",
         "@modelcontextprotocol/server": "2.0.0-beta.2",
         "typescript": "6.0.3",
         "zod": "4.4.3",
@@ -17,7 +17,7 @@
     },
   },
   "packages": {
-    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.0.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-5FHgLbLZhSAq9F+9SU7AOCXTDzaw/IYx/AvMjrZDs/YFZ9ZPxkdn9ti3fSkny0huHfj2hrqF6pqdns9gN5/Fig=="],
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.1.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-NT2KqphUJ3w6EksUL51ZhJgIYgq/ZLGcBPkyMKgRSO5PMVwe9DnKKX+Htnvk6KHh6dUuh34UHK4gKp+4te1Mdg=="],
 
     "@modelcontextprotocol/server": ["@modelcontextprotocol/server@2.0.0-beta.2", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-XK+sgFntT5ZzeqtTGpT9uti+Sqmq7YJZdx/N76eLJv9UA9vKvP04Qh9Hc45LCeIHGfTKRwDG6eh4C1Hs4omyIg=="],
 

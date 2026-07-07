@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-07
+
+### Changed
+
+- Updated `@modelcontextprotocol/server` to 2.0.0-beta.2 and
+  `@agentclientprotocol/sdk` to 1.1.0. Before release, the MCP stdio server
+  handshake was smoke-tested against beta.2 and a full multi-agent review run
+  was verified with real Codex and Claude agents on the updated ACP stack.
+
 ## [0.4.0] - 2026-07-07
 
 ### Added

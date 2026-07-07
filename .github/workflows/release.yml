@@ -34,6 +34,13 @@ jobs:
         with:
           bun-version: "1.3.14"
 
+      # Pin the version: safe-chain itself is a supply-chain trust anchor
+      - name: Install safe-chain
+        run: npm install -g @aikidosec/safe-chain@1.5.12
+
+      - name: Setup safe-chain shims
+        run: safe-chain setup-ci
+
       # Trusted publishing requires npm CLI 11.5.1 or newer
       - name: Update npm
         run: npm install -g npm@latest

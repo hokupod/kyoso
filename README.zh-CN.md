@@ -1,5 +1,7 @@
 # Kyo-so
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hokupod/kyoso)
+
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 此翻译可能落后于英文版。请参阅英文 README 获取最新信息。

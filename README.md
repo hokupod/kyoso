@@ -1,5 +1,7 @@
 # Kyo-so
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hokupod/kyoso)
+
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 Kyo-so (Kyoso / 協奏) is an MCP-native, ACP-powered multi-agent review gate for AI coding workflows.

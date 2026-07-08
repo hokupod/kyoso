@@ -229,24 +229,28 @@ Default child-agent env allowlist:
 
 Kyoso 还会 forward 启动 subprocesses 所需的最小 runtime env：`PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, and `SystemRoot`。
 
-## Agent Models
+## Agent Models and Effort
 
-省略 `agents.<name>.model` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`；Claude 使用 adapter default。
+省略 `agents.<name>.model` 或 `agents.<name>.effort` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`；Claude 使用 adapter default。
 
 可指定的 model 名称请参阅 [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) 与 [Codex models](https://developers.openai.com/codex/models)。
 
 ```toml
 [agents.codex]
 model = "gpt-5.5"
+effort = "medium"
 
 [agents.claude]
 model = "claude-sonnet-5"
+effort = "high"
 ```
 
 Kyoso 会将 model pins 映射到 adapter-supported configuration：
 
 - Claude: 当 `agents.claude.env` 或 whitelisted parent env 中尚未设置时，设置 `ANTHROPIC_MODEL`。
 - Codex: 当 `CODEX_CONFIG` 尚未设置时，设置 `CODEX_CONFIG={"model":"..."}`。若要将 model pin 与其他 Codex session config 组合，请直接设置 `agents.codex.env.CODEX_CONFIG`。
+
+effort 的工作方式不同：Kyoso 不会为它设置 env var，而是在每个 session 中、发送第一个 prompt 之前，向 backend agent 发送一次 ACP `session/set_config_option` 请求(Claude 为 `configId: "effort"`，Codex 为 `configId: "reasoning_effort"`)。有效值取决于 backend agent 的版本和所选的 model(例如，Claude 仅对支持 effort levels 的 model 公开该 option)。Kyoso 本身不会 validate `effort` 的值；如果 backend agent reject 了该请求，或不支持该 option，Kyoso 会将其记录到 stderr 并继续 review。
 
 ## Audit
 
@@ -269,7 +273,7 @@ Kyoso 按以下顺序 load config：
 - project TOML: `<cwd>/kyoso.toml`
 - `--network` 等 CLI flags
 
-Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 tools toggles、agent `enabled` / `model` / `role` / `timeoutMs`、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network settings。
+Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network settings。
 
 Global TOML 用于 user-owned settings，包括 command 启动和 env forwarding。
 

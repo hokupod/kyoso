@@ -662,7 +662,7 @@ export type KyosoResult = {
 TOML config is declarative and does not require trust approval. The user global TOML layer may set all schema keys. Project TOML is restricted to project-scoped keys:
 
 - `tools.planReview`, `tools.securityReview`, `tools.diffReview`
-- `agents.codex|claude.enabled`, `model`, `role`, `timeoutMs`
+- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
 - `workspace.maxContextBytes`, `workspace.maxDiffBytes`, additive `workspace.deny`
 - `verification.enabled`, `maxFindings`, `timeoutMs`
 - `judge.mode`, `judge.provider`, `judge.timeoutMs`
@@ -691,9 +691,11 @@ enabled = true
 
 [agents.codex]
 model = "gpt-5.5"
+effort = "medium"
 
 [agents.claude]
 model = "claude-sonnet-5"
+effort = "high"
 timeoutMs = 240000
 ```
 
@@ -896,6 +898,8 @@ Codex:
   args: ["-y", "@agentclientprotocol/codex-acp"],
   // Omit model to use the user's Codex default.
   // model: "gpt-5.5",
+  // Omit effort to use the user's Codex default reasoning effort.
+  // effort: "medium",
   env: {
     INITIAL_AGENT_MODE: "read-only",
     KYOSO_CHILD_AGENT: "1",
@@ -911,6 +915,8 @@ Claude:
   args: ["-y", "@agentclientprotocol/claude-agent-acp"],
   // Omit model to use the Claude adapter default.
   // model: "claude-sonnet-5",
+  // Omit effort to use the Claude adapter default reasoning effort.
+  // effort: "high",
   env: {
     KYOSO_CHILD_AGENT: "1",
   }
@@ -922,6 +928,15 @@ override and the child adapter keeps its own default behavior. For Claude, Kyoso
 maps the value to `ANTHROPIC_MODEL` unless that env is already set. For Codex,
 Kyoso maps the value to `CODEX_CONFIG={"model":"..."}` unless `CODEX_CONFIG` is
 already set.
+
+`agents.<name>.effort` is optional. Unlike `model`, Kyoso does not map it to an
+env var; it sends an ACP `session/set_config_option` request
+(`methods.agent.session.setConfigOption`) once per session, before the first
+prompt. `configId` is `"effort"` for Claude and `"reasoning_effort"` for Codex,
+and `value` is the configured string. Valid values depend on the backend agent
+version and the selected model. Kyoso does not validate `effort` values itself;
+if the backend agent rejects or does not support the option, Kyoso logs it to
+stderr (fail-soft) and continues the session.
 
 If `npx` is unavailable but `bunx` is available, `doctor` should suggest config replacement. Do not silently change commands unless config says `command: "auto"`.
 

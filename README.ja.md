@@ -229,24 +229,28 @@ Default child-agent env allowlist:
 
 Kyoso は subprocesses の起動に必要な最小限の runtime env も forward します: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, `SystemRoot`。
 
-## Agent Models
+## Agent Models and Effort
 
-`agents.<name>.model` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml` などの local Codex config を使用し、Claude は adapter default を使用します。
+`agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml` などの local Codex config を使用し、Claude は adapter default を使用します。
 
 指定できる model 名は [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) と [Codex models](https://developers.openai.com/codex/models) を参照してください。
 
 ```toml
 [agents.codex]
 model = "gpt-5.5"
+effort = "medium"
 
 [agents.claude]
 model = "claude-sonnet-5"
+effort = "high"
 ```
 
 Kyoso は model pins を adapter-supported configuration に mapping します。
 
 - Claude: `agents.claude.env` または whitelisted parent env で未設定の場合に `ANTHROPIC_MODEL` を設定します。
 - Codex: `CODEX_CONFIG` が未設定の場合、`CODEX_CONFIG={"model":"..."}` を設定します。model pin と他の Codex session config を組み合わせるには、`agents.codex.env.CODEX_CONFIG` を直接設定してください。
+
+effort は仕組みが異なります。Kyoso は env var を設定せず、session ごとに最初の prompt の前に一度、backend agent へ ACP の `session/set_config_option` リクエストを送信します(Claude は `configId: "effort"`、Codex は `configId: "reasoning_effort"`)。有効な値は backend agent のバージョンと選択した model に依存します(例えば Claude は effort levels に対応した model でのみこの option を公開します)。Kyoso は `effort` の値自体を validate しません。backend agent がリクエストを reject した場合、または対応していない場合、Kyoso は stderr に log を出力してレビューを継続します。
 
 ## Audit
 
@@ -269,7 +273,7 @@ Kyoso は次の順に config を load します。
 - project TOML: `<cwd>/kyoso.toml`
 - `--network` などの CLI flags
 
-Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
+Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
 
 Global TOML は command 実行や env forwarding を含む user-owned settings 用です。
 

@@ -11,6 +11,7 @@ import { writeFileSync } from "node:fs";
 
 let initialized = false;
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
+let receivedConfigOption: { configId: string; value: unknown } | undefined;
 
 if (process.env.FAKE_ACP_PID_FILE) {
   writeFileSync(process.env.FAKE_ACP_PID_FILE, String(process.pid));
@@ -37,6 +38,18 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     return {
       sessionId: "fake-session",
     };
+  })
+  .onRequest(methods.agent.session.setConfigOption, (ctx) => {
+    if (process.env.FAKE_ACP_REJECT_CONFIG_OPTION === "1") {
+      throw RequestError.invalidRequest({
+        policy: "fake ACP config option rejected",
+      });
+    }
+    receivedConfigOption = {
+      configId: ctx.params.configId,
+      value: ctx.params.value,
+    };
+    return { configOptions: [] };
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
     if (mode === "hang") {
@@ -94,12 +107,15 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         path: join(process.cwd(), "src/foo.ts"),
       },
     );
+    const baseSummary =
+      manifest.content.includes("review plan") &&
+      selectedFile.content.includes("export const foo = 1")
+        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; CODEX_CONFIG=${process.env.CODEX_CONFIG ?? ""}`
+        : "fake ACP subprocess reviewed the prompt";
     const opinion = {
-      summary:
-        manifest.content.includes("review plan") &&
-        selectedFile.content.includes("export const foo = 1")
-          ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; CODEX_CONFIG=${process.env.CODEX_CONFIG ?? ""}`
-          : "fake ACP subprocess reviewed the prompt",
+      summary: receivedConfigOption
+        ? `${baseSummary}; configOption=${receivedConfigOption.configId}:${String(receivedConfigOption.value)}`
+        : baseSummary,
       findings:
         process.env.FAKE_ACP_FINDING_SEVERITY === "none"
           ? []

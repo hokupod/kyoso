@@ -8,7 +8,7 @@ import {
   kyosoConfigSchema,
   type KyosoConfig,
 } from "../../src/config/schema.js";
-import type { AgentRunInput } from "../../src/core/types.js";
+import type { AgentName, AgentRunInput } from "../../src/core/types.js";
 
 describe("SubprocessAcpAgentManager ACP integration", () => {
   test("completes a happy-path ACP session and normalizes findings", async () => {
@@ -52,6 +52,70 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.error?.detail).toContain("auth failed");
   });
 
+  test("forwards codex effort as reasoning_effort before prompting", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("happy", {}, { effort: "high" }),
+    );
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result.status).toBe("completed");
+    expect(result.normalized?.summary).toContain(
+      "configOption=reasoning_effort:high",
+    );
+  });
+
+  test("forwards claude effort as effort before prompting", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("happy", {}, { agent: "claude", effort: "high" }),
+    );
+
+    const result = await manager.runAgent(agentInput(cwd, { agent: "claude" }));
+
+    expect(result.status).toBe("completed");
+    expect(result.normalized?.summary).toContain("configOption=effort:high");
+  });
+
+  test("does not send a session config option when effort is not configured", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"));
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result.status).toBe("completed");
+    expect(result.normalized?.summary).not.toContain("configOption=");
+  });
+
+  test("keeps the session running when the agent rejects the config option", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig(
+        "happy",
+        { FAKE_ACP_REJECT_CONFIG_OPTION: "1" },
+        { effort: "high" },
+      ),
+    );
+    const originalError = console.error;
+    const errorCalls: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errorCalls.push(args);
+    };
+
+    let result: Awaited<ReturnType<typeof manager.runAgent>>;
+    try {
+      result = await manager.runAgent(agentInput(cwd));
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(result.status).toBe("completed");
+    expect(result.normalized?.summary).not.toContain("configOption=");
+    expect(errorCalls).toHaveLength(1);
+    expect(errorCalls[0]?.[0]).toContain("configId=reasoning_effort");
+  });
+
   test("times out hung ACP sessions and terminates the child process", async () => {
     const cwd = await fakeWorkspace();
     const pidPath = join(cwd, "fake-agent.pid");
@@ -74,23 +138,28 @@ type FakeAcpMode = "happy" | "garbage" | "crash" | "hang";
 function fakeAcpConfig(
   mode: FakeAcpMode,
   env: Record<string, string> = {},
+  options: { agent?: AgentName; effort?: string } = {},
 ): KyosoConfig {
   const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+  const targetAgent = options.agent ?? "codex";
+  const otherAgent: AgentName = targetAgent === "codex" ? "claude" : "codex";
   return {
     ...baseConfig,
     agents: {
-      codex: {
-        ...baseConfig.agents.codex,
+      ...baseConfig.agents,
+      [targetAgent]: {
+        ...baseConfig.agents[targetAgent],
         command: "bun",
         args: ["run", join(process.cwd(), "test/fixtures/fake-acp-agent.ts")],
         env: {
-          ...baseConfig.agents.codex.env,
+          ...baseConfig.agents[targetAgent].env,
           FAKE_ACP_MODE: mode,
           ...env,
         },
+        ...(options.effort ? { effort: options.effort } : {}),
       },
-      claude: {
-        ...baseConfig.agents.claude,
+      [otherAgent]: {
+        ...baseConfig.agents[otherAgent],
         enabled: false,
       },
     },

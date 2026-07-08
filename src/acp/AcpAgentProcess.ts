@@ -114,7 +114,12 @@ async function runSubprocessAgent(
       });
     });
 
-    runAcpClientWorkflow(child, input, abortController.signal)
+    runAcpClientWorkflow(
+      child,
+      input,
+      abortController.signal,
+      resolveEffortConfigOption(agent, agentConfig.effort),
+    )
       .then((rawText) => {
         stdout = rawText;
         resolveOnce({
@@ -166,6 +171,7 @@ async function runAcpClientWorkflow(
   child: ReturnType<typeof spawn>,
   input: AgentRunInput,
   signal: AbortSignal,
+  configOption: { configId: string; value: string } | undefined,
 ): Promise<string> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
@@ -234,6 +240,29 @@ async function runAcpClientWorkflow(
         },
       })
       .withSession(async (session) => {
+        if (configOption) {
+          // Backend agents throw the same error both when a model doesn't
+          // support effort levels (a normal, expected case) and when the
+          // value is invalid (a misconfiguration). ACP gives no way to tell
+          // these apart, so failing loud here would break reviews for models
+          // that simply don't support effort. Log to stderr so a rejected
+          // effort isn't silently indistinguishable from an applied one.
+          await ctx
+            .request(
+              methods.agent.session.setConfigOption,
+              { sessionId: session.sessionId, ...configOption },
+              { cancellationSignal: signal },
+            )
+            .catch((error) => {
+              if (signal.aborted) return;
+              const detail = sanitizeTextForDisplay(
+                error instanceof Error ? error.message : String(error),
+              );
+              console.error(
+                `kyoso: rejected effort config option (configId=${configOption.configId}, value=${configOption.value}); continuing without it: ${detail}`,
+              );
+            });
+        }
         const promptResponse = session.prompt(input.prompt, {
           cancellationSignal: signal,
         });
@@ -242,6 +271,16 @@ async function runAcpClientWorkflow(
         return text;
       });
   });
+}
+
+function resolveEffortConfigOption(
+  agent: AgentName,
+  effort: string | undefined,
+): { configId: string; value: string } | undefined {
+  if (!effort) return undefined;
+  if (agent === "codex") return { configId: "reasoning_effort", value: effort };
+  if (agent === "claude") return { configId: "effort", value: effort };
+  return undefined;
 }
 
 export async function readWorkspaceFile(

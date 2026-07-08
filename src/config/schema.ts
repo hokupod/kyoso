@@ -12,6 +12,7 @@ const agentSchema = z.object({
   command: z.string(),
   args: z.array(z.string()).default([]),
   model: z.string().optional(),
+  effort: z.string().optional(),
   role: z.enum([
     "implementation_reviewer",
     "architecture_security_reviewer",
@@ -101,6 +102,7 @@ function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
     `agents.${agent}.command`,
     `agents.${agent}.args`,
     `agents.${agent}.model`,
+    `agents.${agent}.effort`,
     `agents.${agent}.role`,
     `agents.${agent}.timeoutMs`,
     `agents.${agent}.env`,

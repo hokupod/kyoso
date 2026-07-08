@@ -230,24 +230,28 @@ Default child-agent env allowlist:
 
 Kyoso also forwards minimal runtime env needed to launch subprocesses: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, and `SystemRoot`.
 
-## Agent Models
+## Agent Models and Effort
 
-Omit `agents.<name>.model` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml`; Claude uses the adapter default.
+Omit `agents.<name>.model` or `agents.<name>.effort` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml`; Claude uses the adapter default.
 
 For available model names, see the [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) and the [Codex models list](https://developers.openai.com/codex/models).
 
 ```toml
 [agents.codex]
 model = "gpt-5.5"
+effort = "medium"
 
 [agents.claude]
 model = "claude-sonnet-5"
+effort = "high"
 ```
 
 Kyoso maps model pins to adapter-supported configuration:
 
 - Claude: sets `ANTHROPIC_MODEL` when not already set in `agents.claude.env` or a whitelisted parent env.
 - Codex: sets `CODEX_CONFIG={"model":"..."}` when `CODEX_CONFIG` is not already set. To combine other Codex session config with a model pin, set `agents.codex.env.CODEX_CONFIG` directly.
+
+Effort works differently: Kyoso does not set an env var for it. Instead, it sends an ACP `session/set_config_option` request to the backend agent once per session, before the first prompt: `configId: "effort"` for Claude, `configId: "reasoning_effort"` for Codex. Valid values depend on the backend agent version and the selected model (for example, Claude only exposes effort levels for models that support them). Kyoso does not validate `effort` values itself; if the backend agent rejects the request or does not support it, Kyoso logs it to stderr and continues the review.
 
 ## Audit
 
@@ -270,7 +274,7 @@ Kyoso loads config in this order:
 - project TOML: `<cwd>/kyoso.toml`
 - CLI flags such as `--network`
 
-Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as tool toggles, agent `enabled` / `model` / `role` / `timeoutMs`, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network settings.
+Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as tool toggles, agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network settings.
 
 Global TOML is for user-owned settings that can launch commands or forward environment variables:
 

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-08
+
+### Added
+
+- TOML config loading with XDG user-global layering:
+  `$XDG_CONFIG_HOME/kyoso/config.toml` or `~/.config/kyoso/config.toml`, then
+  project `kyoso.toml`.
+- Project TOML scope validation for repository-owned settings, including
+  additive `workspace.deny` and tightening-only security/network keys.
+- `kyoso doctor` now reports global, project TOML, and legacy TypeScript config
+  layers.
+
+### Changed
+
+- `kyoso init` now writes `kyoso.toml`.
+- Repository dogfooding config and examples now use TOML.
+
+### Deprecated
+
+- `kyoso.config.ts` remains supported through the existing trust flow, but emits
+  a deprecation warning. When both `kyoso.toml` and `kyoso.config.ts` exist,
+  TOML takes precedence.
+
 ## [0.5.0] - 2026-07-08
 
 ### Added

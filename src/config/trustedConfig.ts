@@ -22,7 +22,11 @@ export function defaultTrustedConfigStorePath(
 ): string {
   return env.KYOSO_TRUST_STORE_PATH
     ? resolve(env.KYOSO_TRUST_STORE_PATH)
-    : join(homedir(), ".kyoso", "trusted-configs.json");
+    : join(
+        env.HOME ? resolve(env.HOME) : homedir(),
+        ".kyoso",
+        "trusted-configs.json",
+      );
 }
 
 export async function isTrustedConfig(

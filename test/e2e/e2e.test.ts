@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { listKyosoMcpTools } from "../../src/mcp/server.js";
 import { runDoctor } from "../../src/cli/doctor.js";
+import { runInit } from "../../src/cli/init.js";
 
 describe("e2e surfaces", () => {
   test("MCP registers stable tool names", () => {
@@ -35,6 +36,29 @@ describe("e2e surfaces", () => {
     expect(output).toContain("raw agent output: disabled");
   });
 
+  test("doctor reports config layers and TypeScript migration hints", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-config-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-doctor-home-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[verification]
+enabled = true
+`,
+      "utf8",
+    );
+    await writeFile(join(cwd, "kyoso.config.ts"), "export default {};\n");
+
+    const output = await runDoctor({
+      cwd,
+      env: { PATH: process.env.PATH ?? "", HOME: home },
+    });
+
+    expect(output).toContain(`global config.toml: not found`);
+    expect(output).toContain(`kyoso.toml: found ${join(cwd, "kyoso.toml")}`);
+    expect(output).toContain("kyoso.config.ts: ignored");
+    expect(output).toContain("kyoso.config.ts was ignored");
+  });
+
   test("doctor suggests bunx when npx is unavailable", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-bunx-"));
     await writeFile(join(cwd, "bunx"), "", "utf8");
@@ -45,8 +69,19 @@ describe("e2e surfaces", () => {
     });
 
     expect(output).toContain(
-      'hint: replace command "npx" with "bunx" in kyoso.config.ts',
+      'hint: set agents.<name>.command = "bunx" in config.toml',
     );
+  });
+
+  test("init writes kyoso.toml", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-init-"));
+
+    const output = await runInit({ cwd, force: false });
+    const config = await readFile(join(cwd, "kyoso.toml"), "utf8");
+
+    expect(output).toContain("kyoso.toml: created");
+    expect(config).toContain("[network]");
+    expect(config).toContain('defaultMode = "model_only"');
   });
 
   test("doctor suggests single-agent config when only one backend command exists", async () => {

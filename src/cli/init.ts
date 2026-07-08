@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileWithOverwritePrompt } from "./io.js";
 
@@ -6,7 +6,8 @@ export async function runInit(options: {
   cwd: string;
   force: boolean;
 }): Promise<string> {
-  const configPath = join(options.cwd, "kyoso.config.ts");
+  const configPath = join(options.cwd, "kyoso.toml");
+  const tsConfigPath = join(options.cwd, "kyoso.config.ts");
   const skillPath = join(options.cwd, ".agents/skills/kyoso-review/SKILL.md");
   const gitignorePath = join(options.cwd, ".gitignore");
   const configResult = await writeFileWithOverwritePrompt(
@@ -20,11 +21,17 @@ export async function runInit(options: {
     options.force,
   );
   const gitignoreResult = await ensureGitignoreEntry(gitignorePath, ".kyoso/");
-  return [
-    `kyoso.config.ts: ${configResult}`,
+  const lines = [
+    `kyoso.toml: ${configResult}`,
     `.agents/skills/kyoso-review/SKILL.md: ${skillResult}`,
     `.gitignore .kyoso/: ${gitignoreResult}`,
-  ].join("\n");
+  ];
+  if (await exists(tsConfigPath)) {
+    lines.push(
+      "kyoso.config.ts: found deprecated config; kyoso.toml takes precedence",
+    );
+  }
+  return lines.join("\n");
 }
 
 async function ensureGitignoreEntry(
@@ -55,13 +62,20 @@ function isMissingPathError(error: unknown): boolean {
   );
 }
 
-const CONFIG_TEMPLATE = `import { defineConfig } from "@kyo-so/cli";
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-export default defineConfig({
-  network: {
-    defaultMode: "model_only",
-  },
-});
+const CONFIG_TEMPLATE = `# Kyoso project config.
+# Project TOML is declarative and does not require trust approval.
+
+[network]
+defaultMode = "model_only"
 `;
 
 const SKILL_TEMPLATE = `---

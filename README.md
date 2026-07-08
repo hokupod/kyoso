@@ -22,7 +22,7 @@ No global install is required. Run Kyoso through `npx` or `bunx`.
 
 ### Claude Only / Codex Only
 
-Kyoso can run when only Claude or only Codex is available. Disable the missing backend in `kyoso.config.ts` using `examples/claude-only.config.ts` or `examples/codex-only.config.ts`.
+Kyoso can run when only Claude or only Codex is available. Disable the missing backend in `kyoso.toml` using `examples/claude-only.toml` or `examples/codex-only.toml`.
 
 In single-agent mode, the remaining backend runs once as `combined_reviewer` and covers both implementation and architecture/security focus areas. JSON output includes `reviewMode: "single_agent"` and `agentsUsed`; Markdown output states that cross-model verification was not performed and marks disagreements as N/A.
 
@@ -230,17 +230,12 @@ Kyoso also forwards minimal runtime env needed to launch subprocesses: `PATH`, `
 
 Omit `agents.<name>.model` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml`; Claude uses the adapter default.
 
-```ts
-export default defineConfig({
-  agents: {
-    codex: {
-      model: "gpt-5.5",
-    },
-    claude: {
-      model: "claude-sonnet-5",
-    },
-  },
-});
+```toml
+[agents.codex]
+model = "gpt-5.5"
+
+[agents.claude]
+model = "claude-sonnet-5"
 ```
 
 Kyoso maps model pins to adapter-supported configuration:
@@ -262,21 +257,39 @@ Keep `.kyoso/traces/` out of Git. `kyoso init` adds `.kyoso/` to `.gitignore`, a
 
 ## Config
 
-`kyoso.config.ts` is loaded only after trust-on-first-use approval. Trusted hashes are stored in `~/.kyoso/trusted-configs.json`.
+Kyoso loads config in this order:
 
-TypeScript config files can execute arbitrary code. In a TTY, Kyoso prompts before executing an untrusted config. In non-interactive mode such as MCP or CI, untrusted config is skipped and defaults are used. Pass `--trust-config` to explicitly trust the current config hash, or `--ignore-config` to always use defaults.
+- built-in defaults
+- user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`, or `~/.config/kyoso/config.toml`
+- project TOML: `<cwd>/kyoso.toml`
+- CLI flags such as `--network`
+
+Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as tool toggles, agent `enabled` / `model` / `role` / `timeoutMs`, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network settings.
+
+Global TOML is for user-owned settings that can launch commands or forward environment variables:
+
+```toml
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
+
+[agents.codex.env]
+CODEX_CONFIG = '{"model":"gpt-5.5"}'
+```
+
+`kyoso.config.ts` is deprecated but still supported for compatibility. It is loaded only after trust-on-first-use approval; trusted hashes are stored in `~/.kyoso/trusted-configs.json`. If both `kyoso.toml` and `kyoso.config.ts` exist, Kyoso uses TOML and ignores the TypeScript config.
 
 Default agent timeouts are Codex 120 seconds and Claude 240 seconds. MCP clients should allow at least 360 seconds for tool calls. If `verification.enabled` is true, allow at least 480 seconds because Kyoso may run an additional cross-agent verification round.
 
 Optional finding verification is disabled by default:
 
-```ts
-verification: {
-  enabled: false,
-  maxFindings: 5,
-  timeoutMs: 90_000,
-  allowDemotion: false,
-}
+```toml
+[verification]
+enabled = false
+maxFindings = 5
+timeoutMs = 90000
+# global config only; project kyoso.toml cannot set this
+allowDemotion = false
 ```
 
 When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Phase 1 is annotate-only: verification can update finding confidence and notes, but it does not change severity or the final decision. `allowDemotion` is reserved for a future opt-in phase and is currently a no-op.
@@ -294,7 +307,7 @@ Subscription-only setup:
 - Codex: use local `codex` login
 - Claude: run `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`
 - Judge: set no API keys, so Kyoso uses `deterministic_fallback`
-- To avoid OpenAI judge calls when `OPENAI_API_KEY` is present, set `judgeProvider: "none"`
+- To avoid OpenAI judge calls when `OPENAI_API_KEY` is present, set `judge.provider = "none"`
 
 Team admins should also check organization Usage credits. If credits are enabled, billing behavior beyond subscription limits is controlled outside Kyoso.
 
@@ -302,7 +315,7 @@ Team admins should also check organization Usage credits. If credits are enabled
 
 - MCP timeout: set client tool timeouts to at least 360 seconds, or at least 480 seconds when `verification.enabled` is true. Kyoso defaults are Codex 120 seconds, Claude 240 seconds, and verification 90 seconds.
 - Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx @kyo-so/cli` resolution after publish.
-- Non-interactive config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`.
+- Deprecated TypeScript config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`; prefer `kyoso.toml`.
 
 ## Development
 

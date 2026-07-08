@@ -24,7 +24,7 @@ Kyoso はコード変更を適用しません。
 
 ### Claude Only / Codex Only
 
-Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.config.ts` で無効化してください。例は `examples/claude-only.config.ts` と `examples/codex-only.config.ts` にあります。
+Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.toml` で無効化してください。例は `examples/claude-only.toml` と `examples/codex-only.toml` にあります。
 
 single-agent mode では、残った backend が `combined_reviewer` として 1 回だけ実行され、implementation と architecture/security の両方を確認します。JSON output には `reviewMode: "single_agent"` と `agentsUsed` が入り、Markdown output には cross-model verification が行われていないことと disagreements が N/A であることを表示します。
 
@@ -229,17 +229,12 @@ Kyoso は subprocesses の起動に必要な最小限の runtime env も forward
 
 `agents.<name>.model` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml` などの local Codex config を使用し、Claude は adapter default を使用します。
 
-```ts
-export default defineConfig({
-  agents: {
-    codex: {
-      model: "gpt-5.5",
-    },
-    claude: {
-      model: "claude-sonnet-5",
-    },
-  },
-});
+```toml
+[agents.codex]
+model = "gpt-5.5"
+
+[agents.claude]
+model = "claude-sonnet-5"
 ```
 
 Kyoso は model pins を adapter-supported configuration に mapping します。
@@ -261,21 +256,39 @@ Raw agent output と raw file contents は既定で無効です。
 
 ## Config
 
-`kyoso.config.ts` は trust-on-first-use approval の後にのみ load されます。Trusted hashes は `~/.kyoso/trusted-configs.json` に保存されます。
+Kyoso は次の順に config を load します。
 
-TypeScript config files は任意の code を実行できます。TTY では、untrusted config を実行する前に Kyoso が確認します。MCP や CI のような non-interactive mode では、untrusted config は skip され、defaults が使われます。現在の config hash を明示的に trust するには `--trust-config` を渡し、常に defaults を使うには `--ignore-config` を渡してください。
+- built-in defaults
+- user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`、または `~/.config/kyoso/config.toml`
+- project TOML: `<cwd>/kyoso.toml`
+- `--network` などの CLI flags
+
+Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
+
+Global TOML は command 実行や env forwarding を含む user-owned settings 用です。
+
+```toml
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
+
+[agents.codex.env]
+CODEX_CONFIG = '{"model":"gpt-5.5"}'
+```
+
+`kyoso.config.ts` は deprecated ですが、互換性のため引き続き supported です。trust-on-first-use approval の後にのみ load され、trusted hashes は `~/.kyoso/trusted-configs.json` に保存されます。`kyoso.toml` と `kyoso.config.ts` が両方ある場合、Kyoso は TOML を使用し TypeScript config を無視します。
 
 Default agent timeouts は Codex 120 秒、Claude 240 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
 
 Optional finding verification は default で disabled です:
 
-```ts
-verification: {
-  enabled: false,
-  maxFindings: 5,
-  timeoutMs: 90_000,
-  allowDemotion: false,
-}
+```toml
+[verification]
+enabled = false
+maxFindings = 5
+timeoutMs = 90000
+# global config only; project kyoso.toml cannot set this
+allowDemotion = false
 ```
 
 Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only です。verification は finding confidence と notes を更新できますが、severity や final decision は変更しません。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
@@ -293,7 +306,7 @@ Subscription-only setup:
 - Codex: local `codex` login を使用
 - Claude: `claude setup-token` を実行し、`CLAUDE_CODE_OAUTH_TOKEN` を設定
 - Judge: API keys を設定しないことで、Kyoso は `deterministic_fallback` を使用
-- `OPENAI_API_KEY` が存在するときに OpenAI judge calls を避けるには、`judgeProvider: "none"` を設定
+- `OPENAI_API_KEY` が存在するときに OpenAI judge calls を避けるには、`judge.provider = "none"` を設定
 
 Team admins は organization Usage credits も確認してください。Credits が有効な場合、subscription limits を超える billing behavior は Kyoso の外側で制御されます。
 
@@ -301,7 +314,7 @@ Team admins は organization Usage credits も確認してください。Credits
 
 - MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 240 秒、verification 90 秒です。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
-- Non-interactive config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。
+- Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 
 ## Development
 

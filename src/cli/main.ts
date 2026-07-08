@@ -179,7 +179,7 @@ function canPromptForConfigTrust(): boolean {
 const HELP = `Kyoso
 
 Usage:
-  kyoso mcp [--config kyoso.config.ts] [--ignore-config] [--trust-config] [--network model_only|unrestricted]
+  kyoso mcp [--config kyoso.toml|kyoso.config.ts] [--ignore-config] [--trust-config] [--network model_only|unrestricted]
   kyoso setup [codex|claude-code] [--write] [--runner npx|bunx] [--command <command>] [--global]
   kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config]
   kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config]

@@ -15,7 +15,7 @@
 | 日本語名               | 協奏                                                                                       |
 | npm package            | `@kyo-so/cli`                                                                              |
 | CLI command            | `kyoso`                                                                                    |
-| Config file            | `kyoso.config.ts`                                                                          |
+| Config file            | `kyoso.toml`; legacy `kyoso.config.ts` remains supported but deprecated                    |
 | Local data dir         | `.kyoso/`                                                                                  |
 | Trace dir              | `.kyoso/traces/`                                                                           |
 | Env prefix             | `KYOSO_`                                                                                   |
@@ -307,7 +307,7 @@ kyoso/
   examples/
     codex-config.toml
     claude-code-mcp.json
-    kyoso.config.ts
+    kyoso.toml
   test/
     unit/
     integration/
@@ -346,7 +346,7 @@ Options:
 
 ```bash
 kyoso mcp \
-  --config ./kyoso.config.ts \
+  --config ./kyoso.toml \
   --ignore-config \
   --network model_only
 ```
@@ -405,8 +405,10 @@ Runtime
   Node/npm: ok npm x.x.x
 
 Config
-  kyoso.config.ts: found /repo/kyoso.config.ts
-  trusted config: trusted
+  global config.toml: not found /home/user/.config/kyoso/config.toml
+  kyoso.toml: found /repo/kyoso.toml
+  kyoso.config.ts: not found /repo/kyoso.config.ts
+  trusted config: not found
 
 MCP
   stdio server: ok
@@ -440,7 +442,7 @@ Audit
 Creates starter files:
 
 ```text
-kyoso.config.ts
+kyoso.toml
 .agents/skills/kyoso-review/SKILL.md
 ```
 
@@ -644,162 +646,66 @@ export type KyosoResult = {
 
 ## 10. Config design
 
-### 10.1 File name
+### 10.1 File names and layer order
 
 ```text
-kyoso.config.ts
+1. built-in defaults
+2. user global TOML: $XDG_CONFIG_HOME/kyoso/config.toml
+   fallback: ~/.config/kyoso/config.toml
+3. project TOML: <cwd>/kyoso.toml
+   fallback: <cwd>/kyoso.config.ts only when kyoso.toml is absent
+4. CLI/tool overrides
 ```
 
 ### 10.2 Security note
 
-A TypeScript config file can execute arbitrary code when loaded. Therefore:
+TOML config is declarative and does not require trust approval. The user global TOML layer may set all schema keys. Project TOML is restricted to project-scoped keys:
+
+- `tools.planReview`, `tools.securityReview`, `tools.diffReview`
+- `agents.codex|claude.enabled`, `model`, `role`, `timeoutMs`
+- `workspace.maxContextBytes`, `workspace.maxDiffBytes`, additive `workspace.deny`
+- `verification.enabled`, `maxFindings`, `timeoutMs`
+- `judge.mode`, `judge.provider`, `judge.timeoutMs`
+- tightening-only `network.defaultMode = "model_only"`, `secrets.blockOnDetectedSecret = true`, `secrets.allowOverride = false`
+- `securityReview.cisaSecureByDesign.* = true`
+
+Global-only keys include agent `command`, `args`, `env`, `auth`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, and `verification.allowDemotion`.
+
+Legacy `kyoso.config.ts` can execute arbitrary code when loaded. Therefore:
 
 - Use trust-on-first-use before executing local config.
 - Store trusted hashes in `~/.kyoso/trusted-configs.json` as `{ "<absolute config path>": "<sha256>" }`.
 - Provide `--ignore-config`.
 - Provide `--trust-config` for explicit non-interactive approval.
 - In non-interactive mode, skip untrusted config and use defaults.
-- In `doctor`, display the config path and hash.
-- In audit logs, store config path, hash, and trust status, not the whole config.
+- In `doctor`, display TOML layers, legacy config path, hash, and deprecation hints.
+- In audit logs, store config path, hash, trust status, and source paths, not the whole config.
 
 ### 10.3 Example config
 
-```ts
-import { defineConfig } from "@kyo-so/cli";
+Project `kyoso.toml`:
 
-export default defineConfig({
-  entrypoints: {
-    mcp: true,
-    cli: true,
-  },
+```toml
+[verification]
+enabled = true
 
-  firstClassClient: "codex",
+[agents.codex]
+model = "gpt-5.5"
 
-  tools: {
-    planReview: true,
-    securityReview: true,
-    diffReview: true,
-  },
+[agents.claude]
+model = "claude-sonnet-5"
+timeoutMs = 240000
+```
 
-  agents: {
-    codex: {
-      enabled: true,
-      type: "acp",
-      command: "npx",
-      args: ["-y", "@agentclientprotocol/codex-acp"],
-      model: undefined, // omit to use Codex default, e.g. ~/.codex/config.toml
-      role: "implementation_reviewer",
-      timeoutMs: 120_000,
-      env: {
-        INITIAL_AGENT_MODE: "read-only",
-        KYOSO_CHILD_AGENT: "1",
-      },
-      auth: {
-        mode: "passthrough",
-        preferExistingLogin: true,
-        preferApiKey: false,
-        envWhitelist: [
-          "CODEX_API_KEY",
-          "OPENAI_API_KEY",
-          "CODEX_HOME",
-          "CODEX_ACCESS_TOKEN",
-        ],
-      },
-    },
+User global `~/.config/kyoso/config.toml`:
 
-    claude: {
-      enabled: true,
-      type: "acp",
-      command: "npx",
-      args: ["-y", "@agentclientprotocol/claude-agent-acp"],
-      model: undefined, // omit to use the Claude adapter default
-      role: "architecture_security_reviewer",
-      timeoutMs: 240_000,
-      env: {
-        KYOSO_CHILD_AGENT: "1",
-      },
-      auth: {
-        mode: "passthrough",
-        preferExistingLogin: true,
-        preferApiKey: false,
-        recommendedEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        envWhitelist: [
-          "ANTHROPIC_API_KEY",
-          "CLAUDE_CODE_OAUTH_TOKEN",
-          "ANTHROPIC_MODEL",
-          "ANTHROPIC_BASE_URL",
-          "CLAUDE_CONFIG_DIR",
-          "CLAUDE_CODE_USE_BEDROCK",
-          "CLAUDE_CODE_USE_VERTEX",
-          "CLAUDE_CODE_USE_FOUNDRY",
-        ],
-      },
-    },
-  },
+```toml
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
 
-  workspace: {
-    mode: "temp_snapshot",
-    root: ".",
-    readOnly: true,
-    maxContextBytes: 500_000,
-    maxDiffBytes: 300_000,
-    deny: [
-      ".env",
-      ".env.*",
-      ".ssh",
-      ".aws",
-      ".gcp",
-      ".azure",
-      "node_modules",
-      "dist",
-      "build",
-      "coverage",
-      ".git",
-    ],
-  },
-
-  secrets: {
-    mode: "redact_and_block",
-    blockOnDetectedSecret: true,
-    allowOverride: true,
-  },
-
-  network: {
-    defaultMode: "model_only",
-    allowUnrestricted: true,
-    warnOnUnrestricted: true,
-    mediatedWeb: {
-      enabled: false,
-    },
-  },
-
-  securityReview: {
-    cisaSecureByDesign: {
-      enabled: true,
-      gate: true,
-      dimensions: {
-        customerSecurityOutcomes: true,
-        secureByDefault: true,
-        transparencyAndAccountability: true,
-        governance: true,
-      },
-    },
-  },
-
-  judge: {
-    mode: "deterministic_plus_llm",
-    provider: "auto",
-    timeoutMs: 60_000,
-  },
-
-  audit: {
-    enabled: true,
-    format: "jsonl",
-    directory: ".kyoso/traces",
-    includeRawAgentOutput: false,
-    includeFileContents: false,
-  },
-});
+[agents.codex.env]
+CODEX_CONFIG = '{"model":"gpt-5.5"}'
 ```
 
 ---
@@ -980,7 +886,7 @@ Implementation:
 
 ### 13.5 Agent-specific default commands
 
-If `npx` is unavailable but `bunx` is available, `kyoso doctor` should suggest replacing `command: "npx"` with `command: "bunx"` in `kyoso.config.ts`. It must not silently rewrite config.
+If `npx` is unavailable but `bunx` is available, `kyoso doctor` should suggest setting `agents.<name>.command = "bunx"` in the user global `config.toml`. It must not silently rewrite config.
 
 Codex:
 
@@ -2050,25 +1956,25 @@ MVP is considered complete when all of the following pass:
 
 ## 32. Design item to implementation traceability
 
-| Design item                          | Implementation files                                                                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| §6 CLI entrypoints                   | `src/cli/main.ts`, `src/cli/args.ts`, `src/cli/io.ts`, `src/cli/doctor.ts`, `src/cli/init.ts`                                                                                  |
-| §7 MCP server and tools              | `src/mcp/server.ts`, `src/mcp/schemas.ts`, `src/mcp/formatMcpResponse.ts`                                                                                                      |
-| §8 Tool contracts and request schema | `src/core/types.ts`, `src/core/validateRequest.ts`, `src/mcp/schemas.ts`                                                                                                       |
-| §10 Config loading                   | `src/config/schema.ts`, `src/config/defaultConfig.ts`, `src/config/loadConfig.ts`, `src/config/trustedConfig.ts`, `src/config/defineConfig.ts`, `src/config/tsConfigLoader.ts` |
-| §11 Review pipeline                  | `src/core/runReview.ts`                                                                                                                                                        |
-| §12 Context and snapshot             | `src/context/buildContext.ts`, `src/context/truncate.ts`, `src/context/pathPolicy.ts`, `src/workspace/createSnapshot.ts`, `src/workspace/cleanup.ts`                           |
-| §13.2 Env allowlist                  | `src/utils/env.ts` (`buildChildEnv`)                                                                                                                                           |
-| §13.3 Recursion guard                | `src/security/recursionGuard.ts`                                                                                                                                               |
-| §13.4 Permission denial              | `src/acp/AcpAgentProcess.ts` (`runAcpClientWorkflow` request handlers)                                                                                                         |
-| §14 Agent prompts and normalization  | `src/acp/prompts.ts`, `src/acp/normalize.ts`, `src/acp/AcpAgentManager.ts`, `src/acp/AcpAgentProcess.ts`, `src/acp/FakeAgentManager.ts`                                        |
-| §15.1 Deterministic aggregation      | `src/aggregate/aggregateFindings.ts`, `src/aggregate/severity.ts`                                                                                                              |
-| §15.2-15.3 Judge LLM                 | `src/judge/provider.ts`, `src/judge/prompt.ts`, `src/judge/openai.ts`, `src/judge/anthropic.ts`, `src/judge/deterministicFallback.ts`                                          |
-| §15.4 Final decision                 | `src/security/decision.ts`                                                                                                                                                     |
-| §16 CISA gate                        | `src/security/cisaGate.ts`                                                                                                                                                     |
-| §17 Secrets and redaction            | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts`                                                                                         |
-| §18 Network policy                   | `src/core/runReview.ts`, `src/cli/main.ts`                                                                                                                                     |
-| §20 Audit trace                      | `src/audit/trace.ts`, `src/audit/sanitize.ts`                                                                                                                                  |
-| §21 Markdown output                  | `src/output/markdown.ts`                                                                                                                                                       |
-| §22 Packaged skill                   | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml`                                                                                       |
-| §25 Test strategy                    | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts`                                                      |
+| Design item                          | Implementation files                                                                                                                                                                                                                           |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §6 CLI entrypoints                   | `src/cli/main.ts`, `src/cli/args.ts`, `src/cli/io.ts`, `src/cli/doctor.ts`, `src/cli/init.ts`                                                                                                                                                  |
+| §7 MCP server and tools              | `src/mcp/server.ts`, `src/mcp/schemas.ts`, `src/mcp/formatMcpResponse.ts`                                                                                                                                                                      |
+| §8 Tool contracts and request schema | `src/core/types.ts`, `src/core/validateRequest.ts`, `src/mcp/schemas.ts`                                                                                                                                                                       |
+| §10 Config loading                   | `src/config/schema.ts`, `src/config/defaultConfig.ts`, `src/config/loadConfig.ts`, `src/config/tomlConfigLoader.ts`, `src/config/projectScope.ts`, `src/config/trustedConfig.ts`, `src/config/defineConfig.ts`, `src/config/tsConfigLoader.ts` |
+| §11 Review pipeline                  | `src/core/runReview.ts`                                                                                                                                                                                                                        |
+| §12 Context and snapshot             | `src/context/buildContext.ts`, `src/context/truncate.ts`, `src/context/pathPolicy.ts`, `src/workspace/createSnapshot.ts`, `src/workspace/cleanup.ts`                                                                                           |
+| §13.2 Env allowlist                  | `src/utils/env.ts` (`buildChildEnv`)                                                                                                                                                                                                           |
+| §13.3 Recursion guard                | `src/security/recursionGuard.ts`                                                                                                                                                                                                               |
+| §13.4 Permission denial              | `src/acp/AcpAgentProcess.ts` (`runAcpClientWorkflow` request handlers)                                                                                                                                                                         |
+| §14 Agent prompts and normalization  | `src/acp/prompts.ts`, `src/acp/normalize.ts`, `src/acp/AcpAgentManager.ts`, `src/acp/AcpAgentProcess.ts`, `src/acp/FakeAgentManager.ts`                                                                                                        |
+| §15.1 Deterministic aggregation      | `src/aggregate/aggregateFindings.ts`, `src/aggregate/severity.ts`                                                                                                                                                                              |
+| §15.2-15.3 Judge LLM                 | `src/judge/provider.ts`, `src/judge/prompt.ts`, `src/judge/openai.ts`, `src/judge/anthropic.ts`, `src/judge/deterministicFallback.ts`                                                                                                          |
+| §15.4 Final decision                 | `src/security/decision.ts`                                                                                                                                                                                                                     |
+| §16 CISA gate                        | `src/security/cisaGate.ts`                                                                                                                                                                                                                     |
+| §17 Secrets and redaction            | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts`                                                                                                                                                         |
+| §18 Network policy                   | `src/core/runReview.ts`, `src/cli/main.ts`                                                                                                                                                                                                     |
+| §20 Audit trace                      | `src/audit/trace.ts`, `src/audit/sanitize.ts`                                                                                                                                                                                                  |
+| §21 Markdown output                  | `src/output/markdown.ts`                                                                                                                                                                                                                       |
+| §22 Packaged skill                   | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml`                                                                                                                                                       |
+| §25 Test strategy                    | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts`                                                                                                                      |

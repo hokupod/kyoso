@@ -1,0 +1,11 @@
+[network]
+defaultMode = "model_only"
+
+[agents.codex]
+# Omit model to use the user's Codex default from ~/.codex/config.toml.
+# model = "gpt-5.5"
+
+[agents.claude]
+# Omit model to use the Claude adapter default.
+# model = "claude-sonnet-5"
+timeoutMs = 240000

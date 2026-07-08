@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SubprocessAcpAgentManager } from "../../src/acp/AcpAgentProcess.js";
@@ -1429,6 +1429,61 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("TOML model pin reaches the subprocess environment", async () => {
+    const cwd = await tempCwd();
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+enabled = false
+
+[agents.claude]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.claude]
+model = "claude-from-toml"
+`,
+      "utf8",
+    );
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      { cwd, env: { HOME: home, PATH: process.env.PATH ?? "" } },
+    );
+
+    expect(result.agentsUsed).toEqual(["claude"]);
+    expect(result.agentOpinions[0]?.summary).toContain(
+      "ANTHROPIC_MODEL=claude-from-toml",
+    );
+    const traceText = await readFile(
+      join(
+        cwd,
+        kyosoConfigSchema.parse(defaultConfig).audit.directory,
+        result.audit.startedAt.slice(0, 10),
+        `${result.audit.traceId}.jsonl`,
+      ),
+      "utf8",
+    );
+    expect(traceText).toContain('"layer":"global_toml"');
+    expect(traceText).toContain('"layer":"project_toml"');
   });
 
   test("verification subprocess receives child-agent recursion guard env", async () => {

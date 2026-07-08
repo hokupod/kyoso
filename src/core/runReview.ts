@@ -121,6 +121,7 @@ export async function runReview(
           config: options.config,
           configHash: options.configHash,
           configTrustStatus: "trusted" as const,
+          sources: [],
           warnings: [] as string[],
         }
       : await loadConfig({
@@ -130,6 +131,7 @@ export async function runReview(
           trustConfig: options.trustConfig,
           promptForTrust: options.promptForTrust,
           trustStorePath: options.trustStorePath,
+          env: options.env,
           trustPrompt: options.trustPrompt,
         });
 
@@ -155,6 +157,7 @@ export async function runReview(
       traceId,
       configHash: loaded.configHash,
       configPath: loaded.configPath,
+      configSources: loaded.sources,
       configTrustStatus: loaded.configTrustStatus,
       timestamp: new Date().toISOString(),
     });

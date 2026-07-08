@@ -1,6 +1,9 @@
 import { accessSync } from "node:fs";
-import { delimiter } from "node:path";
-import { loadConfig } from "../config/loadConfig.js";
+import { delimiter, resolve } from "node:path";
+import {
+  loadConfig,
+  resolveGlobalTomlConfigPath,
+} from "../config/loadConfig.js";
 import { resolveJudgeProvider } from "../judge/provider.js";
 import { detectSetup } from "./setup.js";
 
@@ -15,6 +18,9 @@ export async function runDoctor(options: {
 }): Promise<string> {
   const env = options.env ?? process.env;
   const loaded = await loadConfig(options);
+  const globalConfigPath = resolveGlobalTomlConfigPath(env);
+  const projectTomlPath = resolve(options.cwd, "kyoso.toml");
+  const projectTsPath = resolve(options.cwd, "kyoso.config.ts");
   const lines: string[] = ["Kyoso doctor", "", "Runtime"];
   lines.push(
     `  Bun: ${commandExists("bun", env) ? "ok" : "warning not found"}`,
@@ -25,7 +31,13 @@ export async function runDoctor(options: {
 
   lines.push("", "Config");
   lines.push(
-    `  kyoso.config.ts: ${loaded.configPath ? `found ${loaded.configPath}` : "not found; using defaults"}`,
+    `  global config.toml: ${formatLayer(loaded, "global_toml", globalConfigPath)}`,
+  );
+  lines.push(
+    `  kyoso.toml: ${formatLayer(loaded, "project_toml", projectTomlPath)}`,
+  );
+  lines.push(
+    `  kyoso.config.ts: ${formatProjectTsLayer(loaded, projectTsPath)}`,
   );
   lines.push(
     `  trusted config: ${formatTrustStatus(loaded.configTrustStatus)}`,
@@ -71,9 +83,7 @@ export async function runDoctor(options: {
     );
     lines.push(`    command: ${[config.command, ...config.args].join(" ")}`);
     if (!exists && config.command === "npx" && commandExists("bunx", env)) {
-      lines.push(
-        '    hint: replace command "npx" with "bunx" in kyoso.config.ts',
-      );
+      lines.push('    hint: set agents.<name>.command = "bunx" in config.toml');
     }
     if (agent === "claude") {
       const hasApiKey = hasEnv(env, "ANTHROPIC_API_KEY");
@@ -128,6 +138,29 @@ export async function runDoctor(options: {
   );
 
   return lines.join("\n");
+}
+
+function formatLayer(
+  loaded: Awaited<ReturnType<typeof loadConfig>>,
+  layer: "global_toml" | "project_toml",
+  defaultPath: string,
+): string {
+  const source = loaded.sources.find((candidate) => candidate.layer === layer);
+  return source ? `found ${source.path}` : `not found ${defaultPath}`;
+}
+
+function formatProjectTsLayer(
+  loaded: Awaited<ReturnType<typeof loadConfig>>,
+  defaultPath: string,
+): string {
+  const source = loaded.sources.find(
+    (candidate) => candidate.layer === "project_ts",
+  );
+  if (source) return `found ${source.path} (deprecated)`;
+  if (loaded.warnings.some((warning) => warning.includes("was ignored"))) {
+    return `ignored ${defaultPath} (kyoso.toml takes precedence)`;
+  }
+  return `not found ${defaultPath}`;
 }
 
 function formatTrustStatus(status: string): string {

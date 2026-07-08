@@ -1,9 +1,12 @@
 import { access, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { stderr, stdin } from "node:process";
-import { resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { defaultConfig } from "./defaultConfig.js";
+import { mergeProjectTomlConfig } from "./projectScope.js";
 import { kyosoConfigSchema, type KyosoConfig } from "./schema.js";
+import { loadTomlConfigFile } from "./tomlConfigLoader.js";
 import { loadConfigModule } from "./tsConfigLoader.js";
 import {
   defaultTrustedConfigStorePath,
@@ -20,10 +23,16 @@ export type LoadConfigOptions = {
   trustConfig?: boolean;
   promptForTrust?: boolean;
   trustStorePath?: string;
+  env?: NodeJS.ProcessEnv;
   trustPrompt?: (config: {
     configPath: string;
     configHash: string;
   }) => Promise<boolean>;
+};
+
+export type LoadedConfigSource = {
+  path: string;
+  layer: "global_toml" | "project_toml" | "project_ts";
 };
 
 export type LoadedConfig = {
@@ -31,6 +40,7 @@ export type LoadedConfig = {
   configPath?: string;
   configHash?: string;
   configTrustStatus: ConfigTrustStatus;
+  sources: LoadedConfigSource[];
   warnings: string[];
 };
 
@@ -38,8 +48,11 @@ export async function loadConfig(
   options: LoadConfigOptions = {},
 ): Promise<LoadedConfig> {
   const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const globalConfigPath = resolveGlobalTomlConfigPath(env);
   const warnings: string[] = [];
-  let userConfig: unknown = {};
+  const sources: LoadedConfigSource[] = [];
+  let mergedConfig: unknown = defaultConfig;
   let configPath: string | undefined;
   let configHash: string | undefined;
   let configTrustStatus: ConfigTrustStatus = options.ignoreConfig
@@ -47,45 +60,178 @@ export async function loadConfig(
     : "not_found";
 
   if (!options.ignoreConfig) {
-    const candidate = resolve(cwd, options.configPath ?? "kyoso.config.ts");
-    if (await exists(candidate)) {
-      configPath = candidate;
-      const source = await readFile(candidate, "utf8");
-      configHash = hashConfigSource(source);
-      const trustStorePath =
-        options.trustStorePath ?? defaultTrustedConfigStorePath();
-      const trusted = await isTrustedConfig(
-        trustStorePath,
-        candidate,
-        configHash,
+    if (await exists(globalConfigPath)) {
+      mergedConfig = deepMerge(
+        mergedConfig,
+        await loadTomlConfigFile(globalConfigPath),
       );
-      const trustDecision = await resolveTrustDecision({
-        configPath: candidate,
-        configHash,
-        trusted,
-        options,
-      });
+      sources.push({ path: globalConfigPath, layer: "global_toml" });
+    }
 
-      configTrustStatus = trustDecision.status;
-      if (trustDecision.execute) {
-        userConfig = await loadUserConfig(candidate, source);
-        if (trustDecision.shouldPersist) {
-          await trustConfig(trustStorePath, candidate, configHash);
-        }
-      } else {
-        warnings.push(
-          `untrusted config was not executed: ${candidate}; run \`kyoso doctor --trust-config\` or pass \`--trust-config\` once to trust it`,
+    if (options.configPath) {
+      const explicitConfigPath = resolve(cwd, options.configPath);
+      if (await exists(explicitConfigPath)) {
+        const loaded = await loadProjectConfig({
+          configPath: explicitConfigPath,
+          baseConfig: mergedConfig,
+          globalConfigPath,
+          options,
+        });
+        mergedConfig = loaded.mergedConfig;
+        configPath = loaded.configPath;
+        configHash = loaded.configHash;
+        configTrustStatus = loaded.configTrustStatus;
+        sources.push(loaded.source);
+        warnings.push(...loaded.warnings);
+      }
+    } else {
+      const projectTomlPath = resolve(cwd, "kyoso.toml");
+      const projectTsPath = resolve(cwd, "kyoso.config.ts");
+      const hasProjectToml = await exists(projectTomlPath);
+      const hasProjectTs = await exists(projectTsPath);
+      if (hasProjectToml) {
+        mergedConfig = mergeProjectTomlConfig(
+          mergedConfig,
+          await loadTomlConfigFile(projectTomlPath),
+          { projectPath: projectTomlPath, globalConfigPath },
         );
+        configPath = projectTomlPath;
+        sources.push({ path: projectTomlPath, layer: "project_toml" });
+        if (hasProjectTs) {
+          warnings.push(
+            `kyoso.config.ts was ignored because kyoso.toml takes precedence: ${projectTsPath}`,
+          );
+        }
+      } else if (hasProjectTs) {
+        const loaded = await loadProjectTsConfig({
+          configPath: projectTsPath,
+          baseConfig: mergedConfig,
+          options,
+        });
+        mergedConfig = loaded.mergedConfig;
+        configPath = loaded.configPath;
+        configHash = loaded.configHash;
+        configTrustStatus = loaded.configTrustStatus;
+        sources.push(loaded.source);
+        warnings.push(...loaded.warnings);
       }
     }
   }
 
-  const parsed = kyosoConfigSchema.parse(deepMerge(defaultConfig, userConfig));
+  const parsed = kyosoConfigSchema.parse(mergedConfig);
   return {
     config: parsed,
     configPath,
     configHash,
     configTrustStatus,
+    sources,
+    warnings,
+  };
+}
+
+export function resolveGlobalTomlConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const configHome = env.XDG_CONFIG_HOME
+    ? resolve(env.XDG_CONFIG_HOME)
+    : join(env.HOME ? resolve(env.HOME) : homedir(), ".config");
+  return join(configHome, "kyoso", "config.toml");
+}
+
+async function loadProjectConfig(input: {
+  configPath: string;
+  baseConfig: unknown;
+  globalConfigPath: string;
+  options: LoadConfigOptions;
+}): Promise<{
+  mergedConfig: unknown;
+  configPath: string;
+  configHash?: string;
+  configTrustStatus: ConfigTrustStatus;
+  source: LoadedConfigSource;
+  warnings: string[];
+}> {
+  const extension = extname(input.configPath);
+  if (extension === ".toml") {
+    return {
+      mergedConfig: mergeProjectTomlConfig(
+        input.baseConfig,
+        await loadTomlConfigFile(input.configPath),
+        {
+          projectPath: input.configPath,
+          globalConfigPath: input.globalConfigPath,
+        },
+      ),
+      configPath: input.configPath,
+      configTrustStatus: "not_found",
+      source: { path: input.configPath, layer: "project_toml" },
+      warnings: [],
+    };
+  }
+  if (extension === ".ts") {
+    return await loadProjectTsConfig(input);
+  }
+  throw new Error(
+    `Unsupported config file extension for ${input.configPath}. Expected .toml or .ts.`,
+  );
+}
+
+async function loadProjectTsConfig(input: {
+  configPath: string;
+  baseConfig: unknown;
+  options: LoadConfigOptions;
+}): Promise<{
+  mergedConfig: unknown;
+  configPath: string;
+  configHash?: string;
+  configTrustStatus: ConfigTrustStatus;
+  source: LoadedConfigSource;
+  warnings: string[];
+}> {
+  const warnings = [
+    'kyoso.config.ts is deprecated; migrate to kyoso.toml (see README "Configuration")',
+  ];
+  const source = await readFile(input.configPath, "utf8");
+  const configHash = hashConfigSource(source);
+  const trustStorePath =
+    input.options.trustStorePath ??
+    defaultTrustedConfigStorePath(input.options.env);
+  const trusted = await isTrustedConfig(
+    trustStorePath,
+    input.configPath,
+    configHash,
+  );
+  const trustDecision = await resolveTrustDecision({
+    configPath: input.configPath,
+    configHash,
+    trusted,
+    options: input.options,
+  });
+
+  if (trustDecision.execute) {
+    const userConfig = await loadUserConfig(input.configPath, source);
+    if (trustDecision.shouldPersist) {
+      await trustConfig(trustStorePath, input.configPath, configHash);
+    }
+    return {
+      mergedConfig: deepMerge(input.baseConfig, userConfig),
+      configPath: input.configPath,
+      configHash,
+      configTrustStatus: trustDecision.status,
+      source: { path: input.configPath, layer: "project_ts" },
+      warnings,
+    };
+  }
+
+  warnings.push(
+    `untrusted config was not executed: ${input.configPath}; run \`kyoso doctor --trust-config\` or pass \`--trust-config\` once to trust it`,
+  );
+  return {
+    mergedConfig: input.baseConfig,
+    configPath: input.configPath,
+    configHash,
+    configTrustStatus: trustDecision.status,
+    source: { path: input.configPath, layer: "project_ts" },
     warnings,
   };
 }

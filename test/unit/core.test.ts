@@ -130,6 +130,9 @@ export default {};
     expect(loaded.warnings.join("\n")).toContain(
       "untrusted config was not executed",
     );
+    expect(loaded.warnings.join("\n")).toContain(
+      "kyoso.config.ts is deprecated",
+    );
   });
 
   test("loads trusted kyoso.config.ts and revalidates when hash changes", async () => {
@@ -163,10 +166,156 @@ export default defineConfig({
     const changed = await loadConfig({ cwd, trustStorePath });
 
     expect(trusted.configTrustStatus).toBe("trusted_by_flag");
+    expect(trusted.warnings.join("\n")).toContain(
+      "kyoso.config.ts is deprecated",
+    );
     expect(loadedAgain.configTrustStatus).toBe("trusted");
     expect(loadedAgain.config.network.defaultMode).toBe("unrestricted");
     expect(changed.configTrustStatus).toBe("untrusted_skipped");
     expect(changed.config.network.allowUnrestricted).toBe(true);
+  });
+
+  test("loads layered TOML config from XDG global and project files", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-toml-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[workspace]
+deny = ["global-only"]
+
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[workspace]
+maxDiffBytes = 1234
+deny = ["project-only"]
+
+[agents.codex]
+model = "gpt-5.5"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex.command).toBe("bunx");
+    expect(loaded.config.agents.codex.model).toBe("gpt-5.5");
+    expect(loaded.config.workspace.maxDiffBytes).toBe(1234);
+    expect(loaded.config.workspace.deny).toEqual([
+      "global-only",
+      "project-only",
+    ]);
+    expect(loaded.sources.map((source) => source.layer)).toEqual([
+      "global_toml",
+      "project_toml",
+    ]);
+  });
+
+  test("project TOML workspace.deny is additive against defaults", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-deny-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[workspace]
+deny = ["private"]
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({ cwd });
+
+    expect(loaded.config.workspace.deny).toContain("node_modules");
+    expect(loaded.config.workspace.deny).toContain("private");
+  });
+
+  test("rejects project TOML global-only and unsafe tightening keys", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-reject-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+command = "bunx"
+
+[network]
+defaultMode = "unrestricted"
+
+[verification]
+allowDemotion = true
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      /agents\.codex\.command.*network\.defaultMode.*verification\.allowDemotion/s,
+    );
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      join(home, ".config", "kyoso", "config.toml"),
+    );
+  });
+
+  test("prefers kyoso.toml over kyoso.config.ts without executing TypeScript", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-config-priority-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[verification]
+enabled = true
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `throw new Error("legacy config should not execute");
+export default {};
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({ cwd });
+
+    expect(loaded.config.verification.enabled).toBe(true);
+    expect(loaded.sources.map((source) => source.layer)).toEqual([
+      "project_toml",
+    ]);
+    expect(loaded.warnings.join("\n")).toContain("kyoso.config.ts was ignored");
+  });
+
+  test("loads explicit TOML config as project scope", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-explicit-toml-"));
+    const configPath = join(cwd, "custom.toml");
+    await writeFile(
+      configPath,
+      `[agents.claude]
+model = "claude-sonnet-5"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({ cwd, configPath });
+
+    expect(loaded.configPath).toBe(configPath);
+    expect(loaded.config.agents.claude.model).toBe("claude-sonnet-5");
+    expect(loaded.sources[0]).toEqual({
+      path: configPath,
+      layer: "project_toml",
+    });
+  });
+
+  test("fails closed on invalid TOML", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-invalid-toml-"));
+    await writeFile(join(cwd, "kyoso.toml"), "[agents.codex\n", "utf8");
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(
+      /TOML config parse failed/,
+    );
   });
 });
 

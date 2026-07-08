@@ -24,7 +24,7 @@ Kyoso 不会应用代码更改。
 
 ### Claude Only / Codex Only
 
-Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.config.ts` 中禁用缺失的 backend；示例见 `examples/claude-only.config.ts` 和 `examples/codex-only.config.ts`。
+Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.toml` 中禁用缺失的 backend；示例见 `examples/claude-only.toml` 和 `examples/codex-only.toml`。
 
 在 single-agent mode 中，剩余 backend 会以 `combined_reviewer` 运行一次，同时覆盖 implementation 和 architecture/security 两类关注点。JSON output 会包含 `reviewMode: "single_agent"` 和 `agentsUsed`；Markdown output 会说明未执行 cross-model verification，并将 disagreements 标记为 N/A。
 
@@ -229,17 +229,12 @@ Kyoso 还会 forward 启动 subprocesses 所需的最小 runtime env：`PATH`, `
 
 省略 `agents.<name>.model` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`；Claude 使用 adapter default。
 
-```ts
-export default defineConfig({
-  agents: {
-    codex: {
-      model: "gpt-5.5",
-    },
-    claude: {
-      model: "claude-sonnet-5",
-    },
-  },
-});
+```toml
+[agents.codex]
+model = "gpt-5.5"
+
+[agents.claude]
+model = "claude-sonnet-5"
 ```
 
 Kyoso 会将 model pins 映射到 adapter-supported configuration：
@@ -261,21 +256,39 @@ Raw agent output 和 raw file contents 默认禁用。
 
 ## Config
 
-`kyoso.config.ts` 只会在 trust-on-first-use approval 之后 load。Trusted hashes 保存在 `~/.kyoso/trusted-configs.json`。
+Kyoso 按以下顺序 load config：
 
-TypeScript config files 可以执行任意 code。在 TTY 中，Kyoso 会在执行 untrusted config 前提示确认。在 MCP 或 CI 等 non-interactive mode 中，untrusted config 会被 skip，并使用 defaults。传入 `--trust-config` 可明确 trust 当前 config hash；传入 `--ignore-config` 可始终使用 defaults。
+- built-in defaults
+- user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`，或 `~/.config/kyoso/config.toml`
+- project TOML: `<cwd>/kyoso.toml`
+- `--network` 等 CLI flags
+
+Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 tools toggles、agent `enabled` / `model` / `role` / `timeoutMs`、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network settings。
+
+Global TOML 用于 user-owned settings，包括 command 启动和 env forwarding。
+
+```toml
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
+
+[agents.codex.env]
+CODEX_CONFIG = '{"model":"gpt-5.5"}'
+```
+
+`kyoso.config.ts` 已 deprecated，但为了兼容仍然 supported。它只会在 trust-on-first-use approval 之后 load；trusted hashes 保存在 `~/.kyoso/trusted-configs.json`。如果 `kyoso.toml` 和 `kyoso.config.ts` 同时存在，Kyoso 使用 TOML 并忽略 TypeScript config。
 
 Default agent timeouts 是 Codex 120 秒、Claude 240 秒。MCP clients 应允许 tool calls 至少运行 360 秒。如果 `verification.enabled` 为 true，Kyoso 可能会运行额外的 cross-agent verification round，因此建议至少允许 480 秒。
 
 Optional finding verification 默认 disabled:
 
-```ts
-verification: {
-  enabled: false,
-  maxFindings: 5,
-  timeoutMs: 90_000,
-  allowDemotion: false,
-}
+```toml
+[verification]
+enabled = false
+maxFindings = 5
+timeoutMs = 90000
+# global config only; project kyoso.toml cannot set this
+allowDemotion = false
 ```
 
 启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。Phase 1 是 annotate-only：verification 可以更新 finding confidence 和 notes，但不会改变 severity 或 final decision。`allowDemotion` 为未来的 opt-in phase 保留，目前是 no-op。
@@ -293,7 +306,7 @@ Subscription-only setup:
 - Codex: 使用 local `codex` login
 - Claude: 运行 `claude setup-token`，然后设置 `CLAUDE_CODE_OAUTH_TOKEN`
 - Judge: 不设置 API keys，因此 Kyoso 使用 `deterministic_fallback`
-- 当存在 `OPENAI_API_KEY` 时，如需避免 OpenAI judge calls，请设置 `judgeProvider: "none"`
+- 当存在 `OPENAI_API_KEY` 时，如需避免 OpenAI judge calls，请设置 `judge.provider = "none"`
 
 Team admins 还应检查 organization Usage credits。如果启用了 credits，超出 subscription limits 的 billing behavior 由 Kyoso 外部控制。
 
@@ -301,7 +314,7 @@ Team admins 还应检查 organization Usage credits。如果启用了 credits，
 
 - MCP timeout: 将 client tool timeouts 设置为至少 360 秒；当 `verification.enabled` 为 true 时，设置为至少 480 秒。Kyoso defaults 是 Codex 120 秒、Claude 240 秒、verification 90 秒。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
-- Non-interactive config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip。
+- Deprecated TypeScript config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip；新配置请使用 `kyoso.toml`。
 
 ## Development
 

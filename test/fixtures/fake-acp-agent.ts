@@ -98,7 +98,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       summary:
         manifest.content.includes("review plan") &&
         selectedFile.content.includes("export const foo = 1")
-          ? "fake ACP subprocess read snapshot context and selected file"
+          ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; CODEX_CONFIG=${process.env.CODEX_CONFIG ?? ""}`
           : "fake ACP subprocess reviewed the prompt",
       findings:
         process.env.FAKE_ACP_FINDING_SEVERITY === "none"

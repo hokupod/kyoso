@@ -102,6 +102,7 @@ Naming note: npm package 是 `@kyo-so/cli` (对应产品名 Kyo-so)，安装后�
 本地开发：
 
 ```bash
+nix develop
 safe-chain bun install
 safe-chain bun run typecheck
 safe-chain bun test
@@ -109,6 +110,8 @@ safe-chain bun run build
 ```
 
 运行打包后的 CLI 需要 Node.js 20 或更高版本。
+
+Nix dev shell 会 pin Node.js 24 和 nixpkgs 提供的 Bun version。确认 `.envrc` 后，也可以运行一次 `direnv allow`，让它自动加载 shell。CI 仍然 pin 到 Bun 1.3.14；当前 nixpkgs Bun version 可能略有不同，但 `flake.lock` 会保证 local shell 可复现。
 
 已知分发风险：`@modelcontextprotocol/server` 目前还没有 stable release；Kyoso 当前 pin 了 prerelease API，因此 MCP SDK API 变更可能需要后续 release。
 

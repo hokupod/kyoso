@@ -100,6 +100,7 @@ Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so)
 For local development:
 
 ```bash
+nix develop
 safe-chain bun install
 safe-chain bun run typecheck
 safe-chain bun test
@@ -108,6 +109,8 @@ safe-chain bun run pack:verify
 ```
 
 Requires Node.js 20 or newer when running the packaged CLI.
+
+The Nix dev shell pins Node.js 24 and the nixpkgs-provided Bun version. After reviewing `.envrc`, you can also run `direnv allow` once and let it load the shell automatically. CI remains pinned to Bun 1.3.14; the current nixpkgs Bun version may differ slightly, but `flake.lock` keeps local shells reproducible.
 
 The test suite includes credential-free MCP stdio and ACP subprocess integration coverage. `pack:verify` additionally starts the packed `dist/bin/kyoso.js` MCP server and checks the published bundle's protocol handshake.
 

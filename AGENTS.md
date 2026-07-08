@@ -10,6 +10,7 @@
 
 ## Build, Test, and Development Commands
 
+- `nix develop`: enter the repository-pinned Bun / Node.js devShell. Run development commands from this shell; after reviewing `.envrc`, `direnv allow` loads it automatically.
 - `safe-chain bun install`: install dependencies from `bun.lock`.
 - `safe-chain bun run dev -- <args>`: run the CLI from `src/cli/main.ts`.
 - `safe-chain bun run typecheck`: run strict TypeScript checks with no emit.

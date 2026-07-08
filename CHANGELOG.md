@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `kyoso init` now writes `kyoso.toml`.
 - `--config` now fails when the specified file does not exist.
+- Default Claude agent timeout raised from 240s to 300s; dogfooding traces
+  showed frequent reviews truncated at the previous limit.
 - Repository dogfooding config and examples now use TOML.
 
 ### Deprecated

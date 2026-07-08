@@ -41,7 +41,7 @@ export const defaultConfig: KyosoConfigInput = {
       command: "npx",
       args: ["-y", "@agentclientprotocol/claude-agent-acp@0.57.0"],
       role: "architecture_security_reviewer",
-      timeoutMs: 240_000,
+      timeoutMs: 300_000,
       env: {
         KYOSO_CHILD_AGENT: "1",
       },

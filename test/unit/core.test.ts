@@ -73,7 +73,7 @@ describe("config", () => {
     );
     expect(parsed.agents.claude.auth.envWhitelist).toContain("ANTHROPIC_MODEL");
     expect(parsed.agents.claude.auth.preferApiKey).toBe(false);
-    expect(parsed.agents.claude.timeoutMs).toBe(240_000);
+    expect(parsed.agents.claude.timeoutMs).toBe(300_000);
     expect(parsed.verification).toEqual({
       enabled: false,
       maxFindings: 5,

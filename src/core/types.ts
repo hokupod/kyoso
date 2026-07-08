@@ -76,6 +76,7 @@ export type KyosoFinding = {
     lineEnd?: number;
   }>;
   sourceAgents: Array<AgentName | "judge" | "kyoso_policy">;
+  crossValidation?: "corroborated" | "single_source";
   confidence: "high" | "medium" | "low";
   cisaMapping?: CisaDimension[];
 };

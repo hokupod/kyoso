@@ -5,6 +5,7 @@ import type {
   FindingCategory,
   KyosoFinding,
   NormalizedAgentOpinion,
+  ReviewMode,
   Severity,
 } from "../core/types.js";
 import { compareSeverity, maxSeverity } from "./severity.js";
@@ -68,11 +69,17 @@ export type AggregatedReview = {
 
 export function aggregateAgentResults(
   results: AgentRunResult[],
+  options: { reviewMode?: ReviewMode } = {},
 ): AggregatedReview {
   const findings: KyosoFinding[] = [];
   const tests = new Set<string>();
   const residualRisks = new Set<string>();
   const opinions: NormalizedAgentOpinion[] = [];
+  const reviewMode =
+    options.reviewMode ??
+    (new Set(results.map((result) => result.agent)).size === 1
+      ? "single_agent"
+      : "multi_agent");
 
   for (const result of results) {
     if (result.normalized) opinions.push(result.normalized);
@@ -105,12 +112,50 @@ export function aggregateAgentResults(
     }
   }
 
+  const sortedFindings = findings.sort((a, b) =>
+    compareSeverity(a.severity, b.severity),
+  );
+  applyCrossValidation(sortedFindings, reviewMode);
+
   return {
-    findings: findings.sort((a, b) => compareSeverity(a.severity, b.severity)),
+    findings: sortedFindings,
     testsToAdd: Array.from(tests),
     residualRisks: Array.from(residualRisks),
     disagreements: extractDisagreements(opinions),
   };
+}
+
+function applyCrossValidation(
+  findings: KyosoFinding[],
+  reviewMode: ReviewMode,
+): void {
+  for (const finding of findings) {
+    if (reviewMode === "single_agent") {
+      delete finding.crossValidation;
+      continue;
+    }
+
+    const realAgentCount = realSourceAgentCount(finding.sourceAgents);
+    if (realAgentCount >= 2) {
+      finding.crossValidation = "corroborated";
+    } else if (realAgentCount === 1) {
+      finding.crossValidation = "single_source";
+    } else {
+      delete finding.crossValidation;
+    }
+  }
+}
+
+function realSourceAgentCount(
+  sourceAgents: KyosoFinding["sourceAgents"],
+): number {
+  const agents = new Set<AgentName>();
+  for (const sourceAgent of sourceAgents) {
+    if (sourceAgent === "codex" || sourceAgent === "claude") {
+      agents.add(sourceAgent);
+    }
+  }
+  return agents.size;
 }
 
 function extractDisagreements(

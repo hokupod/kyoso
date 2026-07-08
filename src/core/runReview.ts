@@ -248,7 +248,9 @@ export async function runReview(
       (result) => result.status === "completed",
     );
     const degraded = completed.length !== agentResults.length;
-    let aggregate = aggregateAgentResults(normalizedAgentResults);
+    let aggregate = aggregateAgentResults(normalizedAgentResults, {
+      reviewMode,
+    });
 
     if (secretScan.detected && allowSecretOverride) {
       aggregate = {

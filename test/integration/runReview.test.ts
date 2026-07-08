@@ -385,6 +385,7 @@ describe("runReview", () => {
     expect(result.summaryMarkdown).toContain("**Review mode:** multi-agent");
     expect(result.summaryMarkdown).toContain("- None.");
     expect(result.summaryMarkdown).not.toContain("N/A - single-agent review");
+    expect(result.summaryMarkdown).not.toContain("Cross-validation:");
   });
 
   test("untrusted local config is skipped and reported in result warnings", async () => {
@@ -440,7 +441,13 @@ export default {};
     expect(result.cisaSecureByDesign?.governance).toBe("warn");
     expect(result.testsToAdd.length).toBeGreaterThan(0);
     expect(result.residualRisks.length).toBeGreaterThan(0);
+    expect(result.findings[0]?.crossValidation).toBe("single_source");
+    expect(
+      (JSON.parse(JSON.stringify(result)) as typeof result).findings[0]
+        ?.crossValidation,
+    ).toBe("single_source");
     expect(result.summaryMarkdown).toContain("CISA Secure by Design Gate");
+    expect(result.summaryMarkdown).toContain("Cross-validation: single-source");
     expect(result.summaryMarkdown).toContain("Residual Risks");
   });
 
@@ -867,11 +874,12 @@ export default {};
       },
     );
     expect(result.decision).toBe("block");
-    expect(
-      result.findings.some(
-        (finding) => finding.title === "All backend agents failed",
-      ),
-    ).toBe(true);
+    const policyFinding = result.findings.find(
+      (finding) => finding.title === "All backend agents failed",
+    );
+    expect(policyFinding).toBeDefined();
+    expect(policyFinding?.sourceAgents).toEqual(["kyoso_policy"]);
+    expect(policyFinding?.crossValidation).toBeUndefined();
   });
 
   test("recursion guard blocks child invocation", async () => {

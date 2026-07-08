@@ -50,8 +50,14 @@ export function renderMarkdownResult(
         `Recommendation: ${finding.recommendation}`,
         "",
         `Files: ${formatFiles(finding.files)}`,
-        "",
       );
+      if (result.reviewMode !== "single_agent" && finding.crossValidation) {
+        lines.push(
+          "",
+          `Cross-validation: ${formatCrossValidation(finding.crossValidation)}`,
+        );
+      }
+      lines.push("");
     }
   }
 
@@ -140,4 +146,12 @@ function formatFiles(files: KyosoResult["findings"][number]["files"]): string {
       (file) => `\`${file.path}${file.lineStart ? `:${file.lineStart}` : ""}\``,
     )
     .join(", ");
+}
+
+function formatCrossValidation(
+  crossValidation: NonNullable<
+    KyosoResult["findings"][number]["crossValidation"]
+  >,
+): string {
+  return crossValidation === "corroborated" ? "corroborated" : "single-source";
 }

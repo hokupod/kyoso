@@ -585,6 +585,43 @@ describe("aggregation", () => {
     expect(aggregated.findings[0]?.sourceAgents).toEqual(["codex", "claude"]);
   });
 
+  test("marks merged multi-agent findings as corroborated", () => {
+    const aggregated = aggregateAgentResults(
+      [completed("codex", "medium"), completed("claude", "high")],
+      { reviewMode: "multi_agent" },
+    );
+
+    expect(aggregated.findings[0]?.crossValidation).toBe("corroborated");
+  });
+
+  test("marks unmerged multi-agent findings as single source", () => {
+    const aggregated = aggregateAgentResults(
+      [
+        completed("codex", "medium", {
+          title: "Codex only",
+          files: [{ path: "src/codex.ts" }],
+        }),
+        completed("claude", "high", {
+          title: "Claude only",
+          files: [{ path: "src/claude.ts" }],
+        }),
+      ],
+      { reviewMode: "multi_agent" },
+    );
+
+    expect(
+      aggregated.findings.map((finding) => finding.crossValidation),
+    ).toEqual(["single_source", "single_source"]);
+  });
+
+  test("omits cross validation in single-agent mode", () => {
+    const aggregated = aggregateAgentResults([completed("codex", "medium")], {
+      reviewMode: "single_agent",
+    });
+
+    expect(aggregated.findings[0]?.crossValidation).toBeUndefined();
+  });
+
   test("deduplicates same-file same-category findings with similar titles", () => {
     const aggregated = aggregateAgentResults([
       completed("codex", "medium", {

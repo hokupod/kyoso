@@ -1,5 +1,12 @@
 import type { KyosoConfig } from "../config/schema.js";
-import type { KyosoResult, JudgeProvider, ReviewTool } from "../core/types.js";
+import type {
+  AgentName,
+  CrossModelAnalysis,
+  KyosoResult,
+  JudgeProvider,
+  NormalizedAgentOpinion,
+  ReviewTool,
+} from "../core/types.js";
 import { runAnthropicJudge } from "./anthropic.js";
 import { runDeterministicJudge } from "./deterministicFallback.js";
 import { runOpenAiJudge } from "./openai.js";
@@ -7,6 +14,7 @@ import { runOpenAiJudge } from "./openai.js";
 export type JudgeOutput = {
   summaryText: string;
   disagreementComments: Array<{ topic: string; judgeComment: string }>;
+  analysis?: Omit<CrossModelAnalysis, "provider">;
 };
 
 export type ResolvedJudgeProvider =
@@ -23,6 +31,11 @@ export type JudgeRunInput = {
   tool: ReviewTool;
   result: Omit<KyosoResult, "summaryMarkdown">;
   summaryText: string;
+  agentFindings: Array<{
+    agent: AgentName;
+    role: string;
+    findings: NormalizedAgentOpinion["findings"];
+  }>;
   config: KyosoConfig["judge"];
   requestedProvider?: JudgeProvider;
   env: NodeJS.ProcessEnv;

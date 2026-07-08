@@ -17,10 +17,12 @@ import type {
   AgentRunResult,
   AgentRole,
   CisaSecureByDesignResult,
+  CrossModelAnalysis,
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
   NetworkMode,
+  NormalizedAgentOpinion,
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
@@ -29,9 +31,10 @@ import {
   defaultSummaryText,
   renderMarkdownResult,
 } from "../output/markdown.js";
-import { runJudge } from "../judge/provider.js";
+import { runJudge, type JudgeRunResult } from "../judge/provider.js";
 import { assertNotChildAgent } from "../security/recursionGuard.js";
 import {
+  sanitizeText,
   sanitizeTextForDisplay,
   sanitizeTextForRawOutput,
 } from "../security/sanitizeText.js";
@@ -351,6 +354,7 @@ export async function runReview(
       tool,
       result: resultWithoutMarkdown,
       summaryText,
+      agentFindings: buildJudgeAgentFindings(normalizedAgentResults),
       config: loaded.config.judge,
       requestedProvider: request.options?.judgeProvider,
       env: options.env ?? process.env,
@@ -368,12 +372,18 @@ export async function runReview(
           judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
       }),
     );
+    const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
     const result: KyosoResult = {
       ...resultWithoutMarkdown,
       disagreements,
+      ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
       summaryMarkdown: renderMarkdownResult(
         tool,
-        { ...resultWithoutMarkdown, disagreements },
+        {
+          ...resultWithoutMarkdown,
+          disagreements,
+          ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
+        },
         { summaryText: judge.output.summaryText },
       ),
     };
@@ -403,6 +413,49 @@ export async function runReview(
   } finally {
     if (snapshot) await cleanupSnapshot(snapshot.root);
   }
+}
+
+function buildJudgeAgentFindings(results: AgentRunResult[]): Array<{
+  agent: AgentRunResult["agent"];
+  role: string;
+  findings: NormalizedAgentOpinion["findings"];
+}> {
+  return results.flatMap((result) => {
+    if (!result.normalized) return [];
+    return [
+      {
+        agent: result.agent,
+        role: result.role,
+        findings: result.normalized.findings.map((finding) => ({
+          ...finding,
+          title: sanitizeText(finding.title),
+          evidence: sanitizeText(finding.evidence).slice(0, 300),
+          recommendation: sanitizeText(finding.recommendation),
+        })),
+      },
+    ];
+  });
+}
+
+function buildCrossModelAnalysis(
+  judge: JudgeRunResult,
+  reviewMode: KyosoResult["reviewMode"],
+): CrossModelAnalysis | undefined {
+  if (judge.status !== "completed") return undefined;
+  if (reviewMode === "single_agent") {
+    return {
+      blindSpots: [],
+      contradictions: [],
+      partialCoverage: [],
+      provider: judge.provider,
+    };
+  }
+  return {
+    blindSpots: judge.output.analysis?.blindSpots ?? [],
+    contradictions: judge.output.analysis?.contradictions ?? [],
+    partialCoverage: judge.output.analysis?.partialCoverage ?? [],
+    provider: judge.provider,
+  };
 }
 
 async function runAgents(input: {

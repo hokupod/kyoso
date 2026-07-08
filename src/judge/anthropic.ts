@@ -28,6 +28,7 @@ export async function runAnthropicJudge(
               input.tool,
               input.result,
               input.summaryText,
+              input.agentFindings,
             ),
           },
         ],

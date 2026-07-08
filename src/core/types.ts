@@ -118,6 +118,13 @@ export type NormalizedAgentOpinion = {
   cisaSecureByDesign?: Partial<CisaSecureByDesignResult>;
 };
 
+export type CrossModelAnalysis = {
+  blindSpots: string[];
+  contradictions: Array<{ topic: string; detail: string }>;
+  partialCoverage: Array<{ findingId?: string; note: string }>;
+  provider: string;
+};
+
 export type AgentRunInput = {
   traceId: string;
   agent: AgentName;
@@ -160,6 +167,7 @@ export type KyosoResult = {
     }>;
     judgeComment: string;
   }>;
+  crossModelAnalysis?: CrossModelAnalysis;
   testsToAdd: string[];
   residualRisks: string[];
   agentOpinions: Array<{

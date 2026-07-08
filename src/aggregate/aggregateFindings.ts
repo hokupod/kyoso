@@ -146,12 +146,12 @@ function applyCrossValidation(
   }
 }
 
-function realSourceAgentCount(
+export function realSourceAgentCount(
   sourceAgents: KyosoFinding["sourceAgents"],
 ): number {
   const agents = new Set<AgentName>();
   for (const sourceAgent of sourceAgents) {
-    if (sourceAgent === "codex" || sourceAgent === "claude") {
+    if (sourceAgent !== "judge" && sourceAgent !== "kyoso_policy") {
       agents.add(sourceAgent);
     }
   }

@@ -75,6 +75,34 @@ export function renderMarkdownResult(
       : ["- None."]),
   );
 
+  if (result.crossModelAnalysis) {
+    lines.push("", "## Cross-Model Analysis", "");
+    if (result.reviewMode === "single_agent") {
+      lines.push("- not available (single agent)");
+    } else {
+      lines.push(
+        `Provider: ${result.crossModelAnalysis.provider}`,
+        "",
+        "Blind spots (advisory; does not affect the decision):",
+        ...formatList(result.crossModelAnalysis.blindSpots),
+        "",
+        "Contradictions:",
+        ...formatList(
+          result.crossModelAnalysis.contradictions.map(
+            (item) => `${item.topic}: ${item.detail}`,
+          ),
+        ),
+        "",
+        "Partial coverage:",
+        ...formatList(
+          result.crossModelAnalysis.partialCoverage.map((item) =>
+            item.findingId ? `${item.findingId}: ${item.note}` : item.note,
+          ),
+        ),
+      );
+    }
+  }
+
   lines.push("", "## Agent Opinions", "");
   for (const opinion of result.agentOpinions) {
     lines.push(
@@ -154,4 +182,8 @@ function formatCrossValidation(
   >,
 ): string {
   return crossValidation === "corroborated" ? "corroborated" : "single-source";
+}
+
+function formatList(items: string[]): string[] {
+  return items.length > 0 ? items.map((item) => `- ${item}`) : ["- None."];
 }

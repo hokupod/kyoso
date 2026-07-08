@@ -26,6 +26,7 @@ export async function runOpenAiJudge(
               input.tool,
               input.result,
               input.summaryText,
+              input.agentFindings,
             ),
           },
         ],

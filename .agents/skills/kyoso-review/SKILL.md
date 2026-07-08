@@ -36,3 +36,21 @@ Do not use this skill for every coding task. It is intended for deliberate revie
 5. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
 6. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
 7. Do not claim Kyoso modified files. Kyoso only reviews.
+
+## Local development in this repository (kyoso itself)
+
+When the Kyoso MCP server is not registered, run the CLI from source instead:
+
+```bash
+safe-chain bun run dev -- diff --diff <patch> --file <files...> --json --trust-config
+safe-chain bun run dev -- plan --goal "<goal>" --plan <plan.md> --json --trust-config
+safe-chain bun run dev -- security --goal "<goal>" --diff <patch> --json --trust-config
+```
+
+Always pass `--trust-config`, not `--ignore-config`. This repository's
+`kyoso.config.ts` enables the verification round for dogfooding; `--ignore-config`
+silently disables it. Never reuse `--trust-config` outside this repository.
+
+When the JSON result contains findings with `verification.status` of `refuted` or
+`confirmed`, mention them explicitly in your report so they can be recorded in
+`ai/plans/active/2026-07-08-dogfooding計画.md`.

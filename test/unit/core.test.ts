@@ -944,7 +944,7 @@ describe("aggregation", () => {
     ).toBe(2);
   });
 
-  test("deduplicates same-file same-category findings with similar titles", () => {
+  test("deduplicates same-file same-category findings with similar titles without line info", () => {
     const aggregated = aggregateAgentResults([
       completed("codex", "medium", {
         title: "Tenant boundary bypass",
@@ -966,6 +966,92 @@ describe("aggregation", () => {
     expect(aggregated.findings[0]?.sourceAgents).toEqual(["codex", "claude"]);
   });
 
+  test("deduplicates same-category findings with overlapping line ranges despite different titles", () => {
+    const aggregated = aggregateAgentResults(
+      [
+        completed("codex", "medium", {
+          category: "authz",
+          title: "Client-controlled tenant authorization",
+          files: [{ path: "src/auth.ts", lineStart: 8 }],
+        }),
+        completed("claude", "high", {
+          category: "authz",
+          title: "Request header trust boundary violation",
+          files: [{ path: "src/auth.ts", lineStart: 8, lineEnd: 9 }],
+        }),
+      ],
+      { reviewMode: "multi_agent" },
+    );
+
+    expect(aggregated.findings).toHaveLength(1);
+    expect(aggregated.findings[0]?.sourceAgents).toEqual(["codex", "claude"]);
+    expect(aggregated.findings[0]?.crossValidation).toBe("corroborated");
+  });
+
+  test("uses a two-line margin for line range deduplication", () => {
+    const withinMargin = aggregateAgentResults([
+      completed("codex", "medium", {
+        category: "authz",
+        title: "Session tenant source",
+        files: [{ path: "src/auth.ts", lineStart: 10 }],
+      }),
+      completed("claude", "medium", {
+        category: "authz",
+        title: "Header derived account scope",
+        files: [{ path: "src/auth.ts", lineStart: 12 }],
+      }),
+    ]);
+    const outsideMargin = aggregateAgentResults([
+      completed("codex", "medium", {
+        category: "authz",
+        title: "Session tenant source",
+        files: [{ path: "src/auth.ts", lineStart: 10 }],
+      }),
+      completed("claude", "medium", {
+        category: "authz",
+        title: "Header derived account scope",
+        files: [{ path: "src/auth.ts", lineStart: 13 }],
+      }),
+    ]);
+
+    expect(withinMargin.findings).toHaveLength(1);
+    expect(outsideMargin.findings).toHaveLength(2);
+  });
+
+  test("does not deduplicate different-title same-file findings without line info", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "medium", {
+        category: "authz",
+        title: "Session tenant source",
+        files: [{ path: "src/auth.ts" }],
+      }),
+      completed("claude", "medium", {
+        category: "authz",
+        title: "Header derived account scope",
+        files: [{ path: "src/auth.ts" }],
+      }),
+    ]);
+
+    expect(aggregated.findings).toHaveLength(2);
+  });
+
+  test("does not deduplicate overlapping line ranges across categories", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "medium", {
+        category: "authz",
+        title: "Session tenant source",
+        files: [{ path: "src/auth.ts", lineStart: 8 }],
+      }),
+      completed("claude", "medium", {
+        category: "injection",
+        title: "Header derived account scope",
+        files: [{ path: "src/auth.ts", lineStart: 8 }],
+      }),
+    ]);
+
+    expect(aggregated.findings).toHaveLength(2);
+  });
+
   test("extracts disagreements for same issue severity differences", () => {
     const aggregated = aggregateAgentResults([
       completed("codex", "low", {
@@ -981,6 +1067,29 @@ describe("aggregation", () => {
     expect(
       aggregated.disagreements.some((item) =>
         item.topic.startsWith("Severity disagreement: Tenant boundary bypass"),
+      ),
+    ).toBe(true);
+  });
+
+  test("extracts severity disagreements for overlapping line ranges with different titles", () => {
+    const aggregated = aggregateAgentResults([
+      completed("codex", "low", {
+        category: "authz",
+        title: "Client-controlled tenant authorization",
+        files: [{ path: "src/auth.ts", lineStart: 8 }],
+      }),
+      completed("claude", "high", {
+        category: "authz",
+        title: "Request header trust boundary violation",
+        files: [{ path: "src/auth.ts", lineStart: 8, lineEnd: 9 }],
+      }),
+    ]);
+
+    expect(
+      aggregated.disagreements.some((item) =>
+        item.topic.startsWith(
+          "Severity disagreement: Client-controlled tenant authorization",
+        ),
       ),
     ).toBe(true);
   });

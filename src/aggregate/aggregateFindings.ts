@@ -55,6 +55,7 @@ const TITLE_STOP_WORDS = new Set([
 ]);
 
 const TITLE_SIMILARITY_THRESHOLD = 0.6;
+const LINE_OVERLAP_MARGIN = 2;
 
 export type AggregatedReview = {
   findings: KyosoFinding[];
@@ -253,8 +254,53 @@ function normalizeFiles(
 
 function sameFinding(a: KyosoFinding, b: KyosoFinding): boolean {
   if (a.category !== b.category) return false;
+  return sameTitledFinding(a, b) || findingLinesOverlap(a.files, b.files);
+}
+
+function sameTitledFinding(a: KyosoFinding, b: KyosoFinding): boolean {
   if (fileKey(a.files) !== fileKey(b.files)) return false;
   return titleSimilarity(a.title, b.title) >= TITLE_SIMILARITY_THRESHOLD;
+}
+
+function findingLinesOverlap(
+  a: KyosoFinding["files"],
+  b: KyosoFinding["files"],
+): boolean {
+  for (const aFile of a ?? []) {
+    if (aFile.lineStart === undefined) continue;
+    for (const bFile of b ?? []) {
+      if (bFile.lineStart === undefined || aFile.path !== bFile.path) continue;
+      if (
+        rangesOverlapWithMargin(
+          lineRange(aFile.lineStart, aFile.lineEnd),
+          lineRange(bFile.lineStart, bFile.lineEnd),
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function lineRange(
+  lineStart: number,
+  lineEnd: number | undefined,
+): { start: number; end: number } {
+  return {
+    start: lineStart,
+    end: lineEnd ?? lineStart,
+  };
+}
+
+function rangesOverlapWithMargin(
+  a: { start: number; end: number },
+  b: { start: number; end: number },
+): boolean {
+  return (
+    a.start <= b.end + LINE_OVERLAP_MARGIN &&
+    b.start <= a.end + LINE_OVERLAP_MARGIN
+  );
 }
 
 function mergeFinding(existing: KyosoFinding, candidate: KyosoFinding): void {
@@ -310,6 +356,16 @@ function sameIssueForDisagreement(
   b: ComparableFinding,
 ): boolean {
   if (a.category !== b.category) return false;
+  return (
+    sameTitledIssueForDisagreement(a, b) ||
+    findingLinesOverlap(a.files, b.files)
+  );
+}
+
+function sameTitledIssueForDisagreement(
+  a: ComparableFinding,
+  b: ComparableFinding,
+): boolean {
   const aFiles = fileKey(a.files);
   const bFiles = fileKey(b.files);
   if (aFiles && bFiles && aFiles !== bFiles) return false;

@@ -204,6 +204,8 @@ Kyoso does not store provider credentials. Child agent environment variables are
 
 Repository content, plans, diffs, and selected files are treated as untrusted data in backend prompts. Kyoso wraps them in `<untrusted-content>` tags and tells agents not to follow instructions found inside. Final decisions are derived from schema-constrained findings; agents cannot write files or run commands, and the judge cannot change the deterministic decision.
 
+Finding titles are normalized to concise English for aggregation; evidence, recommendations, and summaries can remain in the user's language.
+
 ## Agent Auth
 
 Codex uses the local `codex` login when available. No API key is required for the default subscription-backed path.

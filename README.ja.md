@@ -203,6 +203,8 @@ Kyoso は provider credentials を保存しません。Child agent environment v
 
 Repository content、plans、diffs、selected files は backend prompts 内で untrusted data として扱われます。Kyoso はそれらを `<untrusted-content>` tags で包み、その中にある instructions に従わないよう agents に指示します。最終判断は schema-constrained findings から導出されます。agents は files の書き込みや commands の実行ができず、judge は deterministic decision を変更できません。
 
+Finding title は aggregation のため簡潔な英語に正規化されます。evidence、recommendations、summaries はユーザーの言語のままで構いません。
+
 ## Agent Auth
 
 Codex は利用可能な場合、local `codex` login を使用します。既定の subscription-backed path では API key は不要です。

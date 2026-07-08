@@ -7,11 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-08
+
 ### Added
 
+- Cross-validation classification on aggregated findings: findings backed by
+  both agents are marked `corroborated`, single-agent findings `single_source`.
+- Fusion-style cross-model analysis from the advisory judge: blind spots,
+  semantic contradictions, and partial coverage are reported as advisory
+  metadata (`crossModelAnalysis`); the deterministic decision is unchanged.
+- Optional adversarial verification round (`verification.enabled`, default
+  off): single-source high/critical findings are sent to the other agent with
+  a skeptical refute-first prompt. Annotate-only: verdicts adjust confidence
+  and notes, never severity or the decision.
 - CI-ready MCP stdio and ACP subprocess integration tests now cover the real
   protocol boundaries without live LLM credentials. `pack:verify` also starts
   the packed CLI bin as an MCP server and checks its version and tool list.
+- Nix development shell pinning Node.js and Bun for reproducible local setups.
+
+### Changed
+
+- Reviewer prompts now require concise English finding titles (evidence,
+  recommendations, and summaries may stay in the user's language) and clarify
+  that selected files show the pre-change base state during diff reviews.
+- Same-category findings that reference overlapping line ranges in the same
+  file now merge regardless of title wording, so cross-model corroboration no
+  longer depends on title phrasing.
 
 ## [0.4.1] - 2026-07-07
 

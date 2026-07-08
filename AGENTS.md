@@ -44,3 +44,13 @@
 - Do not commit `.kyoso/` traces, secrets, dependency folders, or build output.
 - Treat `kyoso.config.ts` as executable code; use `--ignore-config` for untrusted repositories.
 - Invoke the `kyoso-review` skill only for explicit multi-agent plan, security, CISA, or diff review requests. Kyoso reviews only; it must not apply code changes.
+
+## Running Kyoso Reviews in This Repository (dogfooding)
+
+- When the Kyoso MCP server is not registered, run the CLI from source:
+  - `safe-chain bun run dev -- diff --diff <patch> --file <files...> --json --trust-config`
+  - `safe-chain bun run dev -- plan --goal "<goal>" --plan <plan.md> --json --trust-config`
+  - `safe-chain bun run dev -- security --goal "<goal>" --diff <patch> --json --trust-config`
+- In THIS repository only, pass `--trust-config` instead of `--ignore-config`: the local `kyoso.config.ts` enables the verification round for dogfooding, and `--ignore-config` silently disables it. Never reuse `--trust-config` in other repositories.
+- When the JSON result contains findings with `verification.status` of `refuted` or `confirmed`, mention them explicitly in your report so they can be recorded in `ai/plans/active/2026-07-08-dogfooding計画.md`.
+- Note: `.agents/skills/kyoso-review/SKILL.md` is shipped inside the npm package. Keep it generic; repository-specific workflow guidance belongs here in AGENTS.md.

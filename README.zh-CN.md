@@ -10,6 +10,10 @@ Kyo-so (Kyoso / 協奏) 是面向 AI coding workflows 的 MCP-native、ACP-power
 
 日语词「協奏」在英语中可译为 concerto：多个独立演奏者各司其职，共同完成一部协调的作品。
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-ensemble.png" alt="指挥家协调鼓手、小提琴手和钢琴家" width="480">
+</p>
+
 它会协调 Codex 和 Claude reviewers，用于：
 
 - implementation plan review
@@ -228,6 +232,8 @@ Kyoso 还会 forward 启动 subprocesses 所需的最小 runtime env：`PATH`, `
 ## Agent Models
 
 省略 `agents.<name>.model` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`；Claude 使用 adapter default。
+
+可指定的 model 名称请参阅 [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) 与 [Codex models](https://developers.openai.com/codex/models)。
 
 ```toml
 [agents.codex]

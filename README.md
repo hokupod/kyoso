@@ -8,6 +8,10 @@ Kyo-so (Kyoso / 協奏) is an MCP-native, ACP-powered multi-agent review gate fo
 
 The Japanese word 協奏 translates to concerto in English: multiple independent players performing one coordinated piece.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-ensemble.png" alt="A conductor coordinating a drummer, a violinist, and a pianist" width="480">
+</p>
+
 It coordinates Codex and Claude reviewers for:
 
 - implementation plan review
@@ -229,6 +233,8 @@ Kyoso also forwards minimal runtime env needed to launch subprocesses: `PATH`, `
 ## Agent Models
 
 Omit `agents.<name>.model` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml`; Claude uses the adapter default.
+
+For available model names, see the [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) and the [Codex models list](https://developers.openai.com/codex/models).
 
 ```toml
 [agents.codex]

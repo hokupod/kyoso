@@ -263,7 +263,20 @@ Raw agent output 和 raw file contents 默认禁用。
 
 TypeScript config files 可以执行任意 code。在 TTY 中，Kyoso 会在执行 untrusted config 前提示确认。在 MCP 或 CI 等 non-interactive mode 中，untrusted config 会被 skip，并使用 defaults。传入 `--trust-config` 可明确 trust 当前 config hash；传入 `--ignore-config` 可始终使用 defaults。
 
-Default agent timeouts 是 Codex 120 秒、Claude 240 秒。MCP clients 应允许 tool calls 至少运行 360 秒。
+Default agent timeouts 是 Codex 120 秒、Claude 240 秒。MCP clients 应允许 tool calls 至少运行 360 秒。如果 `verification.enabled` 为 true，Kyoso 可能会运行额外的 cross-agent verification round，因此建议至少允许 480 秒。
+
+Optional finding verification 默认 disabled:
+
+```ts
+verification: {
+  enabled: false,
+  maxFindings: 5,
+  timeoutMs: 90_000,
+  allowDemotion: false,
+}
+```
+
+启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。Phase 1 是 annotate-only：verification 可以更新 finding confidence 和 notes，但不会改变 severity 或 final decision。`allowDemotion` 为未来的 opt-in phase 保留，目前是 no-op。
 
 Judge LLMs 是 optional。设置 `OPENAI_API_KEY` 或 `CODEX_API_KEY` 可使用 OpenAI judge，设置 `ANTHROPIC_API_KEY` 可使用 Anthropic judge。Optional overrides:
 
@@ -284,7 +297,7 @@ Team admins 还应检查 organization Usage credits。如果启用了 credits，
 
 ## Troubleshooting
 
-- MCP timeout: 将 client tool timeouts 设置为至少 360 秒。Kyoso defaults 是 Codex 120 秒、Claude 240 秒。
+- MCP timeout: 将 client tool timeouts 设置为至少 360 秒；当 `verification.enabled` 为 true 时，设置为至少 480 秒。Kyoso defaults 是 Codex 120 秒、Claude 240 秒、verification 90 秒。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
 - Non-interactive config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip。
 

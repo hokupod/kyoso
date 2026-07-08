@@ -79,6 +79,11 @@ export type KyosoFinding = {
   crossValidation?: "corroborated" | "single_source";
   confidence: "high" | "medium" | "low";
   cisaMapping?: CisaDimension[];
+  verification?: {
+    status: "confirmed" | "refuted" | "uncertain" | "not_verified";
+    verifier?: AgentName;
+    note?: string;
+  };
 };
 
 export type CisaSecureByDesignResult = {
@@ -94,7 +99,8 @@ export type AgentName = "codex" | "claude";
 export type AgentRole =
   | "implementation_reviewer"
   | "architecture_security_reviewer"
-  | "combined_reviewer";
+  | "combined_reviewer"
+  | "finding_verifier";
 
 export type ReviewMode = "multi_agent" | "single_agent";
 
@@ -156,6 +162,7 @@ export type KyosoResult = {
   degraded: boolean;
   agentsUsed: AgentName[];
   reviewMode: ReviewMode;
+  verificationMode?: "cross_agent" | "skipped_single_agent";
   summaryMarkdown: string;
   findings: KyosoFinding[];
   cisaSecureByDesign?: CisaSecureByDesignResult;

@@ -263,7 +263,20 @@ Raw agent output と raw file contents は既定で無効です。
 
 TypeScript config files は任意の code を実行できます。TTY では、untrusted config を実行する前に Kyoso が確認します。MCP や CI のような non-interactive mode では、untrusted config は skip され、defaults が使われます。現在の config hash を明示的に trust するには `--trust-config` を渡し、常に defaults を使うには `--ignore-config` を渡してください。
 
-Default agent timeouts は Codex 120 秒、Claude 240 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。
+Default agent timeouts は Codex 120 秒、Claude 240 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
+
+Optional finding verification は default で disabled です:
+
+```ts
+verification: {
+  enabled: false,
+  maxFindings: 5,
+  timeoutMs: 90_000,
+  allowDemotion: false,
+}
+```
+
+Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only です。verification は finding confidence と notes を更新できますが、severity や final decision は変更しません。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
 
 Judge LLMs は optional です。OpenAI judge を使うには `OPENAI_API_KEY` または `CODEX_API_KEY` を設定し、Anthropic judge を使うには `ANTHROPIC_API_KEY` を設定します。Optional overrides:
 
@@ -284,7 +297,7 @@ Team admins は organization Usage credits も確認してください。Credits
 
 ## Troubleshooting
 
-- MCP timeout: client tool timeouts を少なくとも 360 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 240 秒です。
+- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 240 秒、verification 90 秒です。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Non-interactive config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。
 

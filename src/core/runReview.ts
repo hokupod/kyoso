@@ -5,7 +5,10 @@ import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
 import type { AcpAgentManager } from "../acp/AcpAgentManager.js";
 import { SubprocessAcpAgentManager } from "../acp/AcpAgentProcess.js";
 import { FakeAgentManager } from "../acp/FakeAgentManager.js";
-import { buildAgentPrompt } from "../acp/prompts.js";
+import {
+  buildAgentPrompt,
+  buildFindingVerifierPrompt,
+} from "../acp/prompts.js";
 import { normalizeAgentOutput } from "../acp/normalize.js";
 import { aggregateAgentResults } from "../aggregate/aggregateFindings.js";
 import { createTraceWriter } from "../audit/trace.js";
@@ -44,6 +47,14 @@ import { decide } from "../security/decision.js";
 import { createSnapshot, type Snapshot } from "../workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../workspace/cleanup.js";
 import { newTraceId } from "../utils/ids.js";
+import {
+  applyVerificationVerdicts,
+  countVerificationStatuses,
+  groupVerificationTargetsByVerifier,
+  markVerificationOverflow,
+  parseVerificationVerdicts,
+  selectVerificationTargets,
+} from "./verification.js";
 
 export type RunReviewOptions = LoadConfigOptions & {
   config?: KyosoConfig;
@@ -233,6 +244,7 @@ export async function runReview(
       timestamp: new Date().toISOString(),
     });
 
+    const manager = options.agentManager ?? defaultAgentManager(loaded.config);
     const agentResults = await runAgents({
       tool,
       request: built.request,
@@ -240,7 +252,7 @@ export async function runReview(
       traceId,
       workspaceDir: snapshot.root,
       networkMode,
-      manager: options.agentManager ?? defaultAgentManager(loaded.config),
+      manager,
       trace,
     });
 
@@ -300,6 +312,28 @@ export async function runReview(
       timestamp: new Date().toISOString(),
     });
 
+    const verificationMode =
+      loaded.config.verification.enabled && reviewMode === "single_agent"
+        ? "skipped_single_agent"
+        : loaded.config.verification.enabled
+          ? "cross_agent"
+          : undefined;
+    if (verificationMode === "cross_agent") {
+      warnings.push(
+        ...(await runFindingVerification({
+          tool,
+          request: built.request,
+          config: loaded.config,
+          traceId,
+          workspaceDir: snapshot.root,
+          networkMode,
+          manager,
+          trace,
+          findings: aggregate.findings,
+        })),
+      );
+    }
+
     const cisa =
       tool === "security_review"
         ? computeCisaGate(aggregate.findings, normalizedAgentResults)
@@ -318,6 +352,7 @@ export async function runReview(
       degraded,
       agentsUsed,
       reviewMode,
+      ...(verificationMode ? { verificationMode } : {}),
       findings: aggregate.findings,
       cisaSecureByDesign: cisa,
       disagreements: aggregate.disagreements,
@@ -413,6 +448,119 @@ export async function runReview(
   } finally {
     if (snapshot) await cleanupSnapshot(snapshot.root);
   }
+}
+
+async function runFindingVerification(input: {
+  tool: ReviewTool;
+  request: KyosoReviewRequest;
+  config: KyosoConfig;
+  traceId: string;
+  workspaceDir: string;
+  networkMode: NetworkMode;
+  manager: AcpAgentManager;
+  trace: { write(event: Record<string, unknown>): Promise<void> };
+  findings: KyosoFinding[];
+}): Promise<string[]> {
+  // Phase 1: allowDemotion is intentionally a no-op. Verification may adjust
+  // confidence and notes, but it never changes severity or decision.
+  const allowDemotionRequested = input.config.verification.allowDemotion;
+  const selection = selectVerificationTargets(
+    input.findings,
+    input.config.verification.maxFindings,
+  );
+  markVerificationOverflow(selection.overflow);
+  if (selection.selected.length === 0) return [];
+
+  const warnings: string[] = [];
+  const groups = groupVerificationTargetsByVerifier(selection.selected);
+  await input.trace.write({
+    type: "verification_started",
+    traceId: input.traceId,
+    targetCount: selection.selected.length,
+    notVerifiedCount: selection.overflow.length,
+    verifierCount: groups.length,
+    timeoutMs: input.config.verification.timeoutMs,
+    allowDemotionRequested,
+    timestamp: new Date().toISOString(),
+  });
+
+  const agentInputs = groups.map(({ verifier, findings }) => ({
+    traceId: input.traceId,
+    agent: verifier,
+    role: "finding_verifier" as const,
+    tool: input.tool,
+    prompt: buildFindingVerifierPrompt(
+      input.tool,
+      input.request,
+      verifier,
+      findings,
+    ),
+    workspaceDir: input.workspaceDir,
+    timeoutMs: input.config.verification.timeoutMs,
+    networkMode: input.networkMode,
+  }));
+
+  let results: AgentRunResult[];
+  try {
+    results = await input.manager.runAll(agentInputs);
+  } catch (error) {
+    for (const group of groups) {
+      applyVerificationVerdicts(selection.selected, group.verifier, undefined);
+    }
+    const message = `Finding verification failed: ${sanitizeTextForDisplay(
+      error instanceof Error ? error.message : String(error),
+    )}`;
+    warnings.push(message);
+    await input.trace.write({
+      type: "verification_failed",
+      traceId: input.traceId,
+      error: message,
+      counts: countVerificationStatuses(input.findings),
+      timestamp: new Date().toISOString(),
+    });
+    return warnings;
+  }
+
+  for (const result of results) {
+    if (result.status !== "completed") {
+      applyVerificationVerdicts(selection.selected, result.agent, undefined);
+      const message = `Finding verification by ${result.agent} ${result.status}: ${
+        result.error?.message ?? result.error?.code ?? "no detail"
+      }`;
+      warnings.push(sanitizeTextForDisplay(message));
+      await input.trace.write({
+        type: "verification_failed",
+        traceId: input.traceId,
+        agent: result.agent,
+        status: result.status,
+        errorCode: result.error?.code,
+        timestamp: new Date().toISOString(),
+      });
+      continue;
+    }
+
+    const verdicts = parseVerificationVerdicts(result.rawText);
+    applyVerificationVerdicts(selection.selected, result.agent, verdicts);
+    if (!verdicts) {
+      const message = `Finding verification by ${result.agent} returned malformed verdict JSON.`;
+      warnings.push(message);
+      await input.trace.write({
+        type: "verification_failed",
+        traceId: input.traceId,
+        agent: result.agent,
+        status: "malformed_verdicts",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  await input.trace.write({
+    type: "verification_completed",
+    traceId: input.traceId,
+    counts: countVerificationStatuses(input.findings),
+    timestamp: new Date().toISOString(),
+  });
+  return warnings;
 }
 
 function buildJudgeAgentFindings(results: AgentRunResult[]): Array<{

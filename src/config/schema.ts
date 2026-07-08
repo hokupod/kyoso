@@ -79,6 +79,12 @@ export const kyosoConfigSchema = z.object({
     provider: z.enum(["auto", "openai", "anthropic", "none"]),
     timeoutMs: z.number().int().positive(),
   }),
+  verification: z.object({
+    enabled: z.boolean().default(false),
+    maxFindings: z.number().int().nonnegative().default(5),
+    timeoutMs: z.number().int().positive().default(90_000),
+    allowDemotion: z.boolean().default(false),
+  }),
   audit: z.object({
     enabled: z.boolean(),
     format: z.literal("jsonl"),

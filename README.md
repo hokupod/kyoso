@@ -264,7 +264,20 @@ Keep `.kyoso/traces/` out of Git. `kyoso init` adds `.kyoso/` to `.gitignore`, a
 
 TypeScript config files can execute arbitrary code. In a TTY, Kyoso prompts before executing an untrusted config. In non-interactive mode such as MCP or CI, untrusted config is skipped and defaults are used. Pass `--trust-config` to explicitly trust the current config hash, or `--ignore-config` to always use defaults.
 
-Default agent timeouts are Codex 120 seconds and Claude 240 seconds. MCP clients should allow at least 360 seconds for tool calls.
+Default agent timeouts are Codex 120 seconds and Claude 240 seconds. MCP clients should allow at least 360 seconds for tool calls. If `verification.enabled` is true, allow at least 480 seconds because Kyoso may run an additional cross-agent verification round.
+
+Optional finding verification is disabled by default:
+
+```ts
+verification: {
+  enabled: false,
+  maxFindings: 5,
+  timeoutMs: 90_000,
+  allowDemotion: false,
+}
+```
+
+When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Phase 1 is annotate-only: verification can update finding confidence and notes, but it does not change severity or the final decision. `allowDemotion` is reserved for a future opt-in phase and is currently a no-op.
 
 Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the OpenAI judge, or `ANTHROPIC_API_KEY` to use the Anthropic judge. Optional overrides:
 
@@ -285,7 +298,7 @@ Team admins should also check organization Usage credits. If credits are enabled
 
 ## Troubleshooting
 
-- MCP timeout: set client tool timeouts to at least 360 seconds. Kyoso defaults are Codex 120 seconds and Claude 240 seconds.
+- MCP timeout: set client tool timeouts to at least 360 seconds, or at least 480 seconds when `verification.enabled` is true. Kyoso defaults are Codex 120 seconds, Claude 240 seconds, and verification 90 seconds.
 - Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx @kyo-so/cli` resolution after publish.
 - Non-interactive config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`.
 

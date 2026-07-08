@@ -58,6 +58,31 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       return { stopReason: "end_turn" };
     }
 
+    const promptText = promptToText(
+      (ctx.params as { prompt?: unknown }).prompt,
+    );
+    if (promptText.includes("Role: finding_verifier")) {
+      const verdict = process.env.FAKE_ACP_VERDICT ?? "confirmed";
+      const verdicts = findingIdsFromPrompt(promptText).map((findingId) => ({
+        findingId,
+        verdict,
+        reasoning: `fake verifier ${verdict}; KYOSO_CHILD_AGENT=${process.env.KYOSO_CHILD_AGENT ?? ""}`,
+        evidence: "fake verifier evidence",
+      }));
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: {
+            type: "text",
+            text: JSON.stringify({ verdicts }),
+          },
+        },
+      });
+      return { stopReason: "end_turn" };
+    }
+
     const manifest = await ctx.client.request(methods.client.fs.readTextFile, {
       sessionId: ctx.params.sessionId,
       path: "context/request.json",
@@ -75,16 +100,19 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         selectedFile.content.includes("export const foo = 1")
           ? "fake ACP subprocess read snapshot context and selected file"
           : "fake ACP subprocess reviewed the prompt",
-      findings: [
-        {
-          severity: "low",
-          category: "test",
-          title: "Fake ACP subprocess finding",
-          evidence: "fake ACP agent completed the ACP session",
-          recommendation: "Keep this integration contract under CI.",
-          confidence: "high",
-        },
-      ],
+      findings:
+        process.env.FAKE_ACP_FINDING_SEVERITY === "none"
+          ? []
+          : [
+              {
+                severity: process.env.FAKE_ACP_FINDING_SEVERITY ?? "low",
+                category: "test",
+                title: "Fake ACP subprocess finding",
+                evidence: "fake ACP agent completed the ACP session",
+                recommendation: "Keep this integration contract under CI.",
+                confidence: "high",
+              },
+            ],
       testsToAdd: ["fake ACP subprocess test"],
       residualRisks: ["fake ACP subprocess residual risk"],
       openQuestions: [],
@@ -110,3 +138,21 @@ const stream = ndJsonStream(
 
 const connection = app.connect(stream);
 await connection.closed;
+
+function promptToText(prompt: unknown): string {
+  if (typeof prompt === "string") return prompt;
+  if (Array.isArray(prompt)) return prompt.map(promptToText).join("\n");
+  if (typeof prompt === "object" && prompt !== null) {
+    const record = prompt as Record<string, unknown>;
+    if (typeof record.text === "string") return record.text;
+    if ("content" in record) return promptToText(record.content);
+    return Object.values(record).map(promptToText).join("\n");
+  }
+  return "";
+}
+
+function findingIdsFromPrompt(prompt: string): string[] {
+  return Array.from(prompt.matchAll(/^Finding ID: (.+)$/gm)).map(
+    (match) => match[1] ?? "",
+  );
+}

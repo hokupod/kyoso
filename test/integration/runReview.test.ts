@@ -13,6 +13,11 @@ import {
   kyosoConfigSchema,
 } from "../../src/config/schema.js";
 import { runReview } from "../../src/core/runReview.js";
+import type {
+  AgentRunInput,
+  AgentRunResult,
+  NormalizedAgentOpinion,
+} from "../../src/core/types.js";
 
 const originalJudgeEnv = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -449,6 +454,223 @@ export default {};
     expect(result.summaryMarkdown).toContain("CISA Secure by Design Gate");
     expect(result.summaryMarkdown).toContain("Cross-validation: single-source");
     expect(result.summaryMarkdown).toContain("Residual Risks");
+  });
+
+  test("verification disabled preserves existing output and does not call verifier", async () => {
+    const cwd = await tempCwd();
+    const finding = highFinding({ confidence: "medium" });
+    const baselineManager = verificationAgentManager({
+      codexFindings: [finding],
+      claudeFindings: [],
+    });
+    const baseline = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      {
+        cwd,
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: baselineManager,
+      },
+    );
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const disabledConfig: KyosoConfig = {
+      ...baseConfig,
+      verification: { ...baseConfig.verification, enabled: false },
+    };
+    const disabledManager = verificationAgentManager({
+      codexFindings: [finding],
+      claudeFindings: [],
+    });
+
+    const disabled = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      { cwd, config: disabledConfig, agentManager: disabledManager },
+    );
+
+    expect(stableResult(disabled)).toEqual(stableResult(baseline));
+    expect(disabled.verificationMode).toBeUndefined();
+    expect(disabled.findings[0]?.verification).toBeUndefined();
+    expect(disabledManager.calls.map((call) => call.role)).toEqual([
+      "implementation_reviewer",
+      "architecture_security_reviewer",
+    ]);
+  });
+
+  test("verification is skipped in single-agent mode", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      verification: { ...baseConfig.verification, enabled: true },
+    };
+    const manager = verificationAgentManager({
+      codexFindings: [highFinding()],
+      claudeFindings: [],
+    });
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(result.reviewMode).toBe("single_agent");
+    expect(result.verificationMode).toBe("skipped_single_agent");
+    expect(manager.calls).toHaveLength(1);
+    expect(result.findings[0]?.verification).toBeUndefined();
+  });
+
+  test("verification verdicts annotate findings without changing severity or decision", async () => {
+    const cases: Array<{
+      name: string;
+      verifierRawText?: string;
+      verifierStatus?: "timeout";
+      expectedStatus: "confirmed" | "refuted" | "uncertain";
+      expectedConfidence: "high" | "medium" | "low";
+      expectedWarning?: string;
+    }> = [
+      {
+        name: "confirmed",
+        verifierRawText: verifierRaw("KYOSO-1", "confirmed", "confirmed"),
+        expectedStatus: "confirmed",
+        expectedConfidence: "high",
+      },
+      {
+        name: "refuted",
+        verifierRawText: verifierRaw(
+          "KYOSO-1",
+          "refuted",
+          `Refuted with token=sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"} ${"x".repeat(400)}`,
+        ),
+        expectedStatus: "refuted",
+        expectedConfidence: "low",
+      },
+      {
+        name: "uncertain",
+        verifierRawText: verifierRaw("KYOSO-1", "uncertain", "unclear"),
+        expectedStatus: "uncertain",
+        expectedConfidence: "medium",
+      },
+      {
+        name: "malformed",
+        verifierRawText: "not json",
+        expectedStatus: "uncertain",
+        expectedConfidence: "medium",
+        expectedWarning: "malformed verdict JSON",
+      },
+      {
+        name: "timeout",
+        verifierStatus: "timeout",
+        expectedStatus: "uncertain",
+        expectedConfidence: "medium",
+        expectedWarning: "timeout",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const cwd = await tempCwd();
+      const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+      const config: KyosoConfig = {
+        ...baseConfig,
+        verification: { ...baseConfig.verification, enabled: true },
+      };
+      const manager = verificationAgentManager({
+        codexFindings: [highFinding({ confidence: "medium" })],
+        claudeFindings: [],
+        verifierRawText: testCase.verifierRawText,
+        verifierStatus: testCase.verifierStatus,
+      });
+
+      const result = await runReview(
+        "plan_review",
+        { goal: `review ${testCase.name}`, currentPlan: "do it" },
+        { cwd, config, agentManager: manager },
+      );
+      const finding = result.findings[0];
+
+      expect(result.verificationMode).toBe("cross_agent");
+      expect(result.degraded).toBe(false);
+      expect(result.decision).toBe("approve_with_changes");
+      expect(finding?.severity).toBe("high");
+      expect(finding?.confidence).toBe(testCase.expectedConfidence);
+      expect(finding?.verification?.status).toBe(testCase.expectedStatus);
+      expect(finding?.verification?.verifier).toBe("claude");
+      if (testCase.name === "refuted") {
+        expect(finding?.verification?.note).not.toContain("sk-proj");
+        expect(finding?.verification?.note?.length).toBeLessThanOrEqual(300);
+      }
+      if (testCase.expectedWarning) {
+        expect(result.audit.warnings?.join("\n")).toContain(
+          testCase.expectedWarning,
+        );
+      }
+      expect(manager.calls.map((call) => call.role)).toEqual([
+        "implementation_reviewer",
+        "architecture_security_reviewer",
+        "finding_verifier",
+      ]);
+    }
+  });
+
+  test("verification maxFindings leaves overflow findings not_verified", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      verification: {
+        ...baseConfig.verification,
+        enabled: true,
+        maxFindings: 1,
+      },
+    };
+    const manager = verificationAgentManager({
+      codexFindings: [
+        highFinding({ title: "Critical finding", severity: "critical" }),
+        highFinding({ title: "High finding", severity: "high" }),
+      ],
+      claudeFindings: [],
+      verifierRawText: verifierRaw("KYOSO-1", "confirmed", "confirmed"),
+    });
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(
+      result.findings.map((finding) => finding.verification?.status),
+    ).toEqual(["confirmed", "not_verified"]);
+  });
+
+  test("verification allowDemotion true remains annotate-only in phase 1", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      verification: {
+        ...baseConfig.verification,
+        enabled: true,
+        allowDemotion: true,
+      },
+    };
+    const manager = verificationAgentManager({
+      codexFindings: [highFinding({ confidence: "high" })],
+      claudeFindings: [],
+      verifierRawText: verifierRaw("KYOSO-1", "refuted", "not reproducible"),
+    });
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(result.decision).toBe("approve_with_changes");
+    expect(result.findings[0]?.severity).toBe("high");
+    expect(result.findings[0]?.confidence).toBe("low");
+    expect(result.findings[0]?.verification?.status).toBe("refuted");
   });
 
   test("raw agent JSON CISA gate participates in decision", async () => {
@@ -1209,6 +1431,64 @@ export default {};
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
   });
 
+  test("verification subprocess receives child-agent recursion guard env", async () => {
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      verification: {
+        ...baseConfig.verification,
+        enabled: true,
+        timeoutMs: 5_000,
+      },
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          env: {
+            ...baseConfig.agents.codex.env,
+            FAKE_ACP_FINDING_SEVERITY: "high",
+          },
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          command: "bun",
+          args: ["run", fixture],
+          env: {
+            ...baseConfig.agents.claude.env,
+            FAKE_ACP_FINDING_SEVERITY: "none",
+            FAKE_ACP_VERDICT: "refuted",
+          },
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd: process.cwd(),
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result.verificationMode).toBe("cross_agent");
+    expect(result.findings[0]?.verification?.status).toBe("refuted");
+    expect(result.findings[0]?.verification?.note).toContain(
+      "KYOSO_CHILD_AGENT=1",
+    );
+    expect(result.decision).toBe("approve_with_changes");
+  });
+
   test("subprocess timeout escalates from SIGTERM to SIGKILL", async () => {
     const cwd = await tempCwd();
     const scriptPath = join(cwd, "ignore-term.js");
@@ -1439,6 +1719,107 @@ function judgeInputFromPrompt(prompt: string): Record<string, unknown> {
     string,
     unknown
   >;
+}
+
+function stableResult(
+  result: Awaited<ReturnType<typeof runReview>>,
+): Omit<typeof result, "audit"> {
+  const { audit: _audit, ...stable } = result;
+  return stable;
+}
+
+function highFinding(
+  overrides: Partial<NormalizedAgentOpinion["findings"][number]> = {},
+): NormalizedAgentOpinion["findings"][number] {
+  return {
+    severity: "high",
+    category: "authz",
+    title: "Tenant boundary bypass",
+    evidence: "tenant id is trusted from client input",
+    recommendation: "derive tenant id from the authenticated session",
+    confidence: "medium",
+    ...overrides,
+  };
+}
+
+function verifierRaw(
+  findingId: string,
+  verdict: "confirmed" | "refuted" | "uncertain",
+  reasoning: string,
+): string {
+  return JSON.stringify({
+    verdicts: [
+      {
+        findingId,
+        verdict,
+        reasoning,
+        evidence: "verifier evidence",
+      },
+    ],
+  });
+}
+
+function verificationAgentManager(input: {
+  codexFindings: NormalizedAgentOpinion["findings"];
+  claudeFindings: NormalizedAgentOpinion["findings"];
+  verifierRawText?: string;
+  verifierStatus?: "timeout";
+}) {
+  const calls: AgentRunInput[] = [];
+  const manager = {
+    calls,
+    async runAgent(agentInput: AgentRunInput): Promise<AgentRunResult> {
+      calls.push(agentInput);
+      const startedAt = new Date().toISOString();
+      if (agentInput.role === "finding_verifier") {
+        if (input.verifierStatus === "timeout") {
+          return {
+            agent: agentInput.agent,
+            role: agentInput.role,
+            status: "timeout",
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: { code: "AGENT_TIMEOUT", message: "Fake timeout" },
+          };
+        }
+        return {
+          agent: agentInput.agent,
+          role: agentInput.role,
+          status: "completed",
+          rawText:
+            input.verifierRawText ??
+            verifierRaw("KYOSO-1", "confirmed", "confirmed"),
+          startedAt,
+          completedAt: new Date().toISOString(),
+        };
+      }
+
+      const opinion: Omit<NormalizedAgentOpinion, "agent" | "role"> = {
+        summary: `${agentInput.agent} scripted review`,
+        findings:
+          agentInput.agent === "codex"
+            ? input.codexFindings
+            : input.claudeFindings,
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      };
+      return {
+        agent: agentInput.agent,
+        role: agentInput.role,
+        status: "completed",
+        rawText: JSON.stringify(opinion),
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    },
+    async runAll(agentInputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+      return Promise.all(
+        agentInputs.map((agentInput) => this.runAgent(agentInput)),
+      );
+    },
+  };
+  return manager;
 }
 
 async function readTraceEvents(

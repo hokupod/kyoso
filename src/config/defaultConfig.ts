@@ -114,6 +114,12 @@ export const defaultConfig: KyosoConfigInput = {
     provider: "auto",
     timeoutMs: 60_000,
   },
+  verification: {
+    enabled: false,
+    maxFindings: 5,
+    timeoutMs: 90_000,
+    allowDemotion: false,
+  },
   audit: {
     enabled: true,
     format: "jsonl",

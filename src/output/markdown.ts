@@ -16,6 +16,11 @@ export function renderMarkdownResult(
     `**Mode:** ${tool}`,
     `**Agents:** ${result.agentOpinions.map((opinion) => `${title(opinion.agent)} ${opinion.status}`).join(", ")}`,
     `**Review mode:** ${formatReviewMode(result)}`,
+    ...(result.verificationMode
+      ? [
+          `**Verification mode:** ${formatVerificationMode(result.verificationMode)}`,
+        ]
+      : []),
     `**Degraded:** ${String(result.degraded)}`,
     "",
     "## Summary",
@@ -56,6 +61,9 @@ export function renderMarkdownResult(
           "",
           `Cross-validation: ${formatCrossValidation(finding.crossValidation)}`,
         );
+      }
+      if (finding.verification) {
+        lines.push("", `Verification: ${formatVerification(finding)}`);
       }
       lines.push("");
     }
@@ -182,6 +190,24 @@ function formatCrossValidation(
   >,
 ): string {
   return crossValidation === "corroborated" ? "corroborated" : "single-source";
+}
+
+function formatVerificationMode(
+  verificationMode: NonNullable<KyosoResult["verificationMode"]>,
+): string {
+  return verificationMode === "cross_agent"
+    ? "cross-agent"
+    : "skipped (single-agent)";
+}
+
+function formatVerification(finding: KyosoResult["findings"][number]): string {
+  const verification = finding.verification;
+  if (!verification) return "n/a";
+  const verifier = verification.verifier
+    ? ` by ${title(verification.verifier)}`
+    : "";
+  const note = verification.note ? ` - ${verification.note}` : "";
+  return `${verification.status}${verifier}${note}`;
 }
 
 function formatList(items: string[]): string[] {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KYOSO_VERSION } from "../../src/core/constants.js";
@@ -91,16 +91,119 @@ describe("MCP stdio integration", () => {
       await stopProcess(client.proc);
     }
   }, 15_000);
+
+  test("forwards allow-unknown-config to tool calls", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-allow-unknown-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-mcp-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[network]
+defautMode = "unrestricted"
+`,
+      "utf8",
+    );
+    const client = startMcp(cwd, {
+      args: ["--allow-unknown-config"],
+      env: { HOME: home, XDG_CONFIG_HOME: configHome },
+    });
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: {
+            goal: "review plan",
+            options: { maxAgentTimeoutMs: 2_000 },
+          },
+        },
+      });
+      const callResponse = await client.waitForResponse(3, 10_000);
+      const callResult = callResponse.result as {
+        content?: Array<{ type?: string; text?: string }>;
+      };
+      const texts = callResult.content?.map((item) => item.text ?? "") ?? [];
+      const jsonResult = JSON.parse(texts[1] ?? "{}") as {
+        decision?: string;
+        audit?: { warnings?: string[] };
+      };
+
+      expect(jsonResult.decision).toBe("approve");
+      expect(jsonResult.audit?.warnings?.join("\n")).toContain(
+        "security-sensitive unknown settings",
+      );
+      expect(jsonResult.audit?.warnings?.join("\n")).toContain(
+        "network.defautMode",
+      );
+      expect(client.parseErrors).toEqual([]);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 15_000);
+
+  test("rejects security-sensitive unknown config in MCP calls by default", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-reject-unknown-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-mcp-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[network]
+defautMode = "unrestricted"
+`,
+      "utf8",
+    );
+    const client = startMcp(cwd, {
+      args: [],
+      env: { HOME: home, XDG_CONFIG_HOME: configHome },
+    });
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: {
+            goal: "review plan",
+            options: { maxAgentTimeoutMs: 2_000 },
+          },
+        },
+      });
+      const callResponse = await client.waitForResponse(3, 10_000);
+      const errorText = JSON.stringify(callResponse);
+
+      expect(errorText).toContain(
+        "Security-sensitive unknown config settings rejected",
+      );
+      expect(errorText).toContain("network.defautMode");
+      expect(client.parseErrors).toEqual([]);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 15_000);
 });
 
-function startMcp(cwd: string) {
+function startMcp(
+  cwd: string,
+  options: { args?: string[]; env?: NodeJS.ProcessEnv } = {},
+) {
   const proc = spawn(
     "bun",
     [
       "run",
       join(process.cwd(), "src/cli/main.ts"),
       "mcp",
-      "--ignore-config",
+      ...(options.args ?? ["--ignore-config"]),
       "--network",
       "model_only",
     ],
@@ -113,6 +216,7 @@ function startMcp(cwd: string) {
         ANTHROPIC_API_KEY: "",
         CLAUDE_CODE_OAUTH_TOKEN: "",
         KYOSO_TEST_FAKE_AGENTS: "1",
+        ...options.env,
       },
     },
   );
@@ -154,6 +258,27 @@ function startMcp(cwd: string) {
       throw new Error(`Timed out waiting for MCP response ${id}`);
     },
   };
+}
+
+async function initializeMcp(
+  client: ReturnType<typeof startMcp>,
+): Promise<void> {
+  writeJson(client.proc, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "kyoso-integration", version: "0.0.0" },
+    },
+  });
+  await client.waitForResponse(1);
+  writeJson(client.proc, {
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
 }
 
 function writeJson(

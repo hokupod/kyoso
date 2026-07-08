@@ -83,6 +83,15 @@ export function renderMarkdownResult(
       : ["- None."]),
   );
 
+  if (result.audit.warnings && result.audit.warnings.length > 0) {
+    lines.push("", "## Warnings", "");
+    lines.push(
+      ...result.audit.warnings.map(
+        (warning) => `- ${escapeMarkdownText(warning)}`,
+      ),
+    );
+  }
+
   if (result.crossModelAnalysis) {
     lines.push("", "## Cross-Model Analysis", "");
     if (result.reviewMode === "single_agent") {
@@ -212,4 +221,13 @@ function formatVerification(finding: KyosoResult["findings"][number]): string {
 
 function formatList(items: string[]): string[] {
   return items.length > 0 ? items.map((item) => `- ${item}`) : ["- None."];
+}
+
+function escapeMarkdownText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/([\\`*_{}\[\]()#+!|])/g, "\\$1");
 }

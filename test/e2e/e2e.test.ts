@@ -59,6 +59,58 @@ enabled = true
     expect(output).toContain("kyoso.config.ts was ignored");
   });
 
+  test("doctor reports unknown global config keys as warnings", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-unknown-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-doctor-home-"));
+    const configHome = join(home, "xdg");
+    const configPath = join(configHome, "kyoso", "config.toml");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      configPath,
+      `[nework]
+defaultMode = "unrestricted"
+
+[network]
+defautMode = "unrestricted"
+
+["\\u001B[31m"]
+enabled = true
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd,
+      allowUnknownConfig: true,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+      },
+    });
+
+    expect(output).toContain(
+      `warning: unknown settings in ${configPath} were ignored:`,
+    );
+    expect(output).toContain(
+      `warning: security-sensitive unknown settings in ${configPath} were ignored:`,
+    );
+    expect(output).toContain("nework.defaultMode");
+    expect(output).toContain("network.defautMode");
+    expect(output).not.toContain("\u001b");
+    expect(output).toContain("network default: model_only");
+    await expect(
+      runDoctor({
+        cwd,
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          XDG_CONFIG_HOME: configHome,
+        },
+      }),
+    ).rejects.toThrow("Security-sensitive unknown config settings rejected");
+  });
+
   test("doctor suggests bunx when npx is unavailable", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-doctor-bunx-"));
     await writeFile(join(cwd, "bunx"), "", "utf8");

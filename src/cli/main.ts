@@ -18,6 +18,7 @@ async function main(): Promise<void> {
   const configPath = stringFlag(parsed.flags, "config");
   const ignoreConfig = booleanFlag(parsed.flags, "ignore-config");
   const trustConfig = booleanFlag(parsed.flags, "trust-config");
+  const allowUnknownConfig = booleanFlag(parsed.flags, "allow-unknown-config");
 
   if (parsed.command === "mcp") {
     const network = networkFlag(parsed.flags);
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
       configPath,
       ignoreConfig,
       trustConfig,
+      allowUnknownConfig,
       mcpNetworkMode: network,
     });
     return;
@@ -38,6 +40,7 @@ async function main(): Promise<void> {
         configPath,
         ignoreConfig,
         trustConfig,
+        allowUnknownConfig,
         promptForTrust: canPromptForConfigTrust(),
       }),
     );
@@ -77,6 +80,7 @@ async function main(): Promise<void> {
       configPath,
       ignoreConfig,
       trustConfig,
+      allowUnknownConfig,
       promptForTrust: canPromptForConfigTrust(),
     });
     console.log(
@@ -179,12 +183,12 @@ function canPromptForConfigTrust(): boolean {
 const HELP = `Kyoso
 
 Usage:
-  kyoso mcp [--config kyoso.toml|kyoso.config.ts] [--ignore-config] [--trust-config] [--network model_only|unrestricted]
+  kyoso mcp [--config kyoso.toml|kyoso.config.ts] [--ignore-config] [--trust-config] [--allow-unknown-config] [--network model_only|unrestricted]
   kyoso setup [codex|claude-code] [--write] [--runner npx|bunx] [--command <command>] [--global]
-  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config]
-  kyoso diff --base main --head HEAD [--json] [--trust-config]
-  kyoso doctor [--trust-config]
+  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config] [--allow-unknown-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
+  kyoso diff --base main --head HEAD [--json] [--trust-config] [--allow-unknown-config]
+  kyoso doctor [--trust-config] [--allow-unknown-config]
   kyoso init [--force]
 `;
 

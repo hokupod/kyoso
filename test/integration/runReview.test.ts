@@ -432,6 +432,61 @@ export default {};
     expect(traceText).toContain('"configTrustStatus":"untrusted_skipped"');
   });
 
+  test("global config unknown-key warnings are reported in review output", async () => {
+    const cwd = await tempCwd();
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    const configPath = join(configHome, "kyoso", "config.toml");
+    const secretLikeKey = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      configPath,
+      `[nework]
+defaultMode = "unrestricted"
+
+["<script>"]
+enabled = true
+
+["\\u001B[31m"]
+enabled = true
+
+["${secretLikeKey}"]
+enabled = true
+`,
+      "utf8",
+    );
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        env: { PATH: process.env.PATH ?? "", XDG_CONFIG_HOME: configHome },
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    const warnings = result.audit.warnings?.join("\n") ?? "";
+    expect(warnings).toContain(
+      `unknown settings in ${configPath} were ignored:`,
+    );
+    expect(warnings).toContain("nework.defaultMode");
+    expect(warnings).toContain("<script>.enabled");
+    expect(warnings).toContain("[KYOSO_REDACTED]");
+    expect(warnings).not.toContain(secretLikeKey);
+    expect(warnings).not.toContain("\u001b");
+    expect(result.summaryMarkdown).toContain("## Warnings");
+    expect(result.summaryMarkdown).toContain("unknown settings in ");
+    expect(result.summaryMarkdown).toContain("config.toml were ignored:");
+    expect(result.summaryMarkdown).toContain("nework.defaultMode");
+    expect(result.summaryMarkdown).toContain("&lt;script&gt;.enabled");
+    expect(result.summaryMarkdown).toContain("\\[KYOSO\\_REDACTED\\]");
+    expect(result.summaryMarkdown).not.toContain(secretLikeKey);
+    expect(result.summaryMarkdown).not.toContain("<script>");
+    expect(result.summaryMarkdown).not.toContain("\u001b");
+    expect(result.audit.networkMode).toBe("model_only");
+  });
+
   test("security review includes CISA gate and tests", async () => {
     const cwd = await tempCwd();
     const result = await runReview(

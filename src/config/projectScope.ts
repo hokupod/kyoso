@@ -1,5 +1,5 @@
 const PROJECT_GLOBAL_ONLY_MESSAGE =
-  "Move these settings to the user global config instead.";
+  "Move global-only settings to the user global config:";
 
 type ProjectScopeOptions = {
   projectPath: string;
@@ -154,11 +154,11 @@ function formatProjectScopeError(
   );
   return [
     `Project TOML config ${options.projectPath} contains settings that are not allowed in project scope: ${entries.join(", ")}`,
-    `${PROJECT_GLOBAL_ONLY_MESSAGE} ${options.globalConfigPath}`,
+    `${PROJECT_GLOBAL_ONLY_MESSAGE} ${options.globalConfigPath}. If a key is misspelled, fix the name instead.`,
   ].join("\n");
 }
 
-function flattenLeaves(
+export function flattenLeaves(
   value: unknown,
   path: string[] = [],
 ): Array<{ path: string[]; value: unknown }> {

@@ -129,6 +129,7 @@ export async function runReview(
           configPath: options.configPath,
           ignoreConfig: options.ignoreConfig,
           trustConfig: options.trustConfig,
+          allowUnknownConfig: options.allowUnknownConfig,
           promptForTrust: options.promptForTrust,
           trustStorePath: options.trustStorePath,
           env: options.env,

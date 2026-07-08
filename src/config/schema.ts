@@ -94,5 +94,82 @@ export const kyosoConfigSchema = z.object({
   }),
 });
 
+function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
+  return [
+    `agents.${agent}.enabled`,
+    `agents.${agent}.type`,
+    `agents.${agent}.command`,
+    `agents.${agent}.args`,
+    `agents.${agent}.model`,
+    `agents.${agent}.role`,
+    `agents.${agent}.timeoutMs`,
+    `agents.${agent}.env`,
+    `agents.${agent}.auth.mode`,
+    `agents.${agent}.auth.preferExistingLogin`,
+    `agents.${agent}.auth.preferApiKey`,
+    `agents.${agent}.auth.recommendedEnv`,
+    `agents.${agent}.auth.envWhitelist`,
+  ];
+}
+
+export const kyosoConfigKnownLeafPaths = [
+  "entrypoints.mcp",
+  "entrypoints.cli",
+  "firstClassClient",
+  "tools.planReview",
+  "tools.securityReview",
+  "tools.diffReview",
+  ...agentConfigLeafPaths("codex"),
+  ...agentConfigLeafPaths("claude"),
+  "workspace.mode",
+  "workspace.root",
+  "workspace.readOnly",
+  "workspace.maxContextBytes",
+  "workspace.maxDiffBytes",
+  "workspace.deny",
+  "secrets.mode",
+  "secrets.blockOnDetectedSecret",
+  "secrets.allowOverride",
+  "network.defaultMode",
+  "network.allowUnrestricted",
+  "network.warnOnUnrestricted",
+  "network.mediatedWeb.enabled",
+  "securityReview.cisaSecureByDesign.enabled",
+  "securityReview.cisaSecureByDesign.gate",
+  "securityReview.cisaSecureByDesign.dimensions.customerSecurityOutcomes",
+  "securityReview.cisaSecureByDesign.dimensions.secureByDefault",
+  "securityReview.cisaSecureByDesign.dimensions.transparencyAndAccountability",
+  "securityReview.cisaSecureByDesign.dimensions.governance",
+  "judge.mode",
+  "judge.provider",
+  "judge.timeoutMs",
+  "verification.enabled",
+  "verification.maxFindings",
+  "verification.timeoutMs",
+  "verification.allowDemotion",
+  "audit.enabled",
+  "audit.format",
+  "audit.directory",
+  "audit.includeRawAgentOutput",
+  "audit.includeFileContents",
+];
+
+export const kyosoConfigRecordPrefixes = [
+  "agents.codex.env",
+  "agents.claude.env",
+];
+
+export const kyosoConfigSecuritySensitivePrefixes = [
+  "agents.codex",
+  "agents.claude",
+  "audit",
+  "judge",
+  "network",
+  "secrets",
+  "securityReview",
+  "verification",
+  "workspace",
+];
+
 export type KyosoConfig = z.infer<typeof kyosoConfigSchema>;
 export type KyosoConfigInput = PartialDeep<KyosoConfig>;

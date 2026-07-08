@@ -4,8 +4,15 @@ import { stderr, stdin } from "node:process";
 import { extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { defaultConfig } from "./defaultConfig.js";
-import { mergeProjectTomlConfig } from "./projectScope.js";
-import { kyosoConfigSchema, type KyosoConfig } from "./schema.js";
+import { flattenLeaves, mergeProjectTomlConfig } from "./projectScope.js";
+import {
+  kyosoConfigKnownLeafPaths,
+  kyosoConfigRecordPrefixes,
+  kyosoConfigSecuritySensitivePrefixes,
+  kyosoConfigSchema,
+  type KyosoConfig,
+} from "./schema.js";
+import { sanitizeText } from "../security/sanitizeText.js";
 import { loadTomlConfigFile } from "./tomlConfigLoader.js";
 import { loadConfigModule } from "./tsConfigLoader.js";
 import {
@@ -21,6 +28,7 @@ export type LoadConfigOptions = {
   configPath?: string;
   ignoreConfig?: boolean;
   trustConfig?: boolean;
+  allowUnknownConfig?: boolean;
   promptForTrust?: boolean;
   trustStorePath?: string;
   env?: NodeJS.ProcessEnv;
@@ -44,6 +52,13 @@ export type LoadedConfig = {
   warnings: string[];
 };
 
+const KNOWN_GLOBAL_CONFIG_LEAF_PATHS = new Set(kyosoConfigKnownLeafPaths);
+const GLOBAL_CONFIG_RECORD_PREFIXES = kyosoConfigRecordPrefixes.map((path) =>
+  path.split("."),
+);
+const SECURITY_SENSITIVE_GLOBAL_PREFIXES =
+  kyosoConfigSecuritySensitivePrefixes.map((path) => path.split("."));
+
 export async function loadConfig(
   options: LoadConfigOptions = {},
 ): Promise<LoadedConfig> {
@@ -61,29 +76,43 @@ export async function loadConfig(
 
   if (!options.ignoreConfig) {
     if (await exists(globalConfigPath)) {
-      mergedConfig = deepMerge(
-        mergedConfig,
-        await loadTomlConfigFile(globalConfigPath),
+      const globalConfig = await loadTomlConfigFile(globalConfigPath);
+      const globalConfigWarnings = collectGlobalConfigWarnings(
+        globalConfigPath,
+        globalConfig,
       );
+      const securitySensitiveWarnings = globalConfigWarnings.filter((warning) =>
+        warning.startsWith("security-sensitive unknown settings "),
+      );
+      if (securitySensitiveWarnings.length > 0 && !options.allowUnknownConfig) {
+        throw new Error(
+          `Security-sensitive unknown config settings rejected. Fix the key name or pass --allow-unknown-config to continue with warnings: ${securitySensitiveWarnings.join("; ")}`,
+        );
+      }
+      warnings.push(...globalConfigWarnings);
+      mergedConfig = deepMerge(mergedConfig, globalConfig);
       sources.push({ path: globalConfigPath, layer: "global_toml" });
     }
 
     if (options.configPath) {
       const explicitConfigPath = resolve(cwd, options.configPath);
-      if (await exists(explicitConfigPath)) {
-        const loaded = await loadProjectConfig({
-          configPath: explicitConfigPath,
-          baseConfig: mergedConfig,
-          globalConfigPath,
-          options,
-        });
-        mergedConfig = loaded.mergedConfig;
-        configPath = loaded.configPath;
-        configHash = loaded.configHash;
-        configTrustStatus = loaded.configTrustStatus;
-        sources.push(loaded.source);
-        warnings.push(...loaded.warnings);
+      if (!(await exists(explicitConfigPath))) {
+        throw new Error(
+          `Config file not found: ${explicitConfigPath} (from --config)`,
+        );
       }
+      const loaded = await loadProjectConfig({
+        configPath: explicitConfigPath,
+        baseConfig: mergedConfig,
+        globalConfigPath,
+        options,
+      });
+      mergedConfig = loaded.mergedConfig;
+      configPath = loaded.configPath;
+      configHash = loaded.configHash;
+      configTrustStatus = loaded.configTrustStatus;
+      sources.push(loaded.source);
+      warnings.push(...loaded.warnings);
     } else {
       const projectTomlPath = resolve(cwd, "kyoso.toml");
       const projectTsPath = resolve(cwd, "kyoso.config.ts");
@@ -136,6 +165,73 @@ export function resolveGlobalTomlConfigPath(
     ? resolve(env.XDG_CONFIG_HOME)
     : join(env.HOME ? resolve(env.HOME) : homedir(), ".config");
   return join(configHome, "kyoso", "config.toml");
+}
+
+function collectGlobalConfigWarnings(
+  configPath: string,
+  config: unknown,
+): string[] {
+  // Global config stays warning-only for forward compatibility across versions.
+  // Project TOML remains fail-closed because it is repository-owned policy.
+  const unknownSettings = flattenLeaves(config)
+    .map((leaf) => leaf.path)
+    .filter((path) => !isKnownGlobalConfigPath(path))
+    .map((path) => ({
+      path: sanitizeWarningText(path.join(".")),
+      securitySensitive: isSecuritySensitiveGlobalPath(path),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+
+  const warnings: string[] = [];
+  const securitySensitivePaths = unknownSettings
+    .filter((setting) => setting.securitySensitive)
+    .map((setting) => setting.path);
+  const generalPaths = unknownSettings
+    .filter((setting) => !setting.securitySensitive)
+    .map((setting) => setting.path);
+  const sanitizedConfigPath = sanitizeWarningText(configPath);
+  if (securitySensitivePaths.length > 0) {
+    warnings.push(
+      `security-sensitive unknown settings in ${sanitizedConfigPath} were ignored: ${formatUnknownPaths(securitySensitivePaths)}`,
+    );
+  }
+  if (generalPaths.length > 0) {
+    warnings.push(
+      `unknown settings in ${sanitizedConfigPath} were ignored: ${formatUnknownPaths(generalPaths)}`,
+    );
+  }
+  return warnings;
+}
+
+function sanitizeWarningText(value: string): string {
+  const withoutControlChars = value
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return sanitizeText(withoutControlChars);
+}
+
+function formatUnknownPaths(paths: string[]): string {
+  return paths.map((path) => JSON.stringify(path)).join("; ");
+}
+
+function isSecuritySensitiveGlobalPath(path: string[]): boolean {
+  return SECURITY_SENSITIVE_GLOBAL_PREFIXES.some((prefix) =>
+    pathStartsWith(path, prefix),
+  );
+}
+
+function isKnownGlobalConfigPath(path: string[]): boolean {
+  if (KNOWN_GLOBAL_CONFIG_LEAF_PATHS.has(path.join("."))) return true;
+  return GLOBAL_CONFIG_RECORD_PREFIXES.some((prefix) =>
+    pathStartsWith(path, prefix),
+  );
+}
+
+function pathStartsWith(path: string[], prefix: string[]): boolean {
+  return (
+    path.length >= prefix.length &&
+    prefix.every((part, index) => path[index] === part)
+  );
 }
 
 async function loadProjectConfig(input: {

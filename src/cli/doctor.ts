@@ -12,6 +12,7 @@ export async function runDoctor(options: {
   configPath?: string;
   ignoreConfig?: boolean;
   trustConfig?: boolean;
+  allowUnknownConfig?: boolean;
   promptForTrust?: boolean;
   trustStorePath?: string;
   env?: NodeJS.ProcessEnv;

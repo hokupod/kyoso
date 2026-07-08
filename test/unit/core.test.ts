@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import {
   aggregateAgentResults,
   realSourceAgentCount,
@@ -16,8 +17,14 @@ import {
   buildFindingVerifierPrompt,
 } from "../../src/acp/prompts.js";
 import { loadConfig } from "../../src/config/loadConfig.js";
-import { kyosoConfigSchema } from "../../src/config/schema.js";
+import {
+  kyosoConfigKnownLeafPaths,
+  kyosoConfigRecordPrefixes,
+  kyosoConfigSecuritySensitivePrefixes,
+  kyosoConfigSchema,
+} from "../../src/config/schema.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
+import { flattenLeaves } from "../../src/config/projectScope.js";
 import { buildContext } from "../../src/context/buildContext.js";
 import {
   isAllowedPath,
@@ -109,6 +116,38 @@ describe("config", () => {
         },
       }),
     ).toThrow();
+  });
+
+  test("global config known-path metadata covers defaults and dynamic records", () => {
+    const schemaPaths = collectSchemaPathsForTest(kyosoConfigSchema);
+    const knownPaths = new Set(kyosoConfigKnownLeafPaths);
+    const recordPrefixes = kyosoConfigRecordPrefixes.map((path) =>
+      path.split("."),
+    );
+    expect([...knownPaths].sort()).toEqual(
+      schemaPaths.leafPaths.map((path) => path.join(".")).sort(),
+    );
+    expect([...kyosoConfigRecordPrefixes].sort()).toEqual(
+      schemaPaths.recordPrefixes.map((path) => path.join(".")).sort(),
+    );
+    for (const leaf of flattenLeaves(defaultConfig)) {
+      const coveredByRecord = recordPrefixes.some(
+        (prefix) =>
+          leaf.path.length >= prefix.length &&
+          prefix.every((part, index) => leaf.path[index] === part),
+      );
+      expect(knownPaths.has(leaf.path.join(".")) || coveredByRecord).toBe(true);
+    }
+    expect(knownPaths.has("agents.codex.model")).toBe(true);
+    expect(knownPaths.has("agents.claude.model")).toBe(true);
+    expect(kyosoConfigRecordPrefixes).toContain("agents.codex.env");
+    expect(kyosoConfigRecordPrefixes).toContain("agents.claude.env");
+    expect(kyosoConfigSecuritySensitivePrefixes).toContain("agents.codex");
+    expect(kyosoConfigSecuritySensitivePrefixes).toContain("judge");
+    expect(kyosoConfigSecuritySensitivePrefixes).toContain("verification");
+    expect(new Set(kyosoConfigKnownLeafPaths).size).toBe(
+      kyosoConfigKnownLeafPaths.length,
+    );
   });
 
   test("skips untrusted kyoso.config.ts without executing it", async () => {
@@ -206,6 +245,7 @@ model = "gpt-5.5"
     const loaded = await loadConfig({
       cwd,
       env: { XDG_CONFIG_HOME: configHome },
+      allowUnknownConfig: true,
     });
 
     expect(loaded.config.agents.codex.command).toBe("bunx");
@@ -215,6 +255,7 @@ model = "gpt-5.5"
       "global-only",
       "project-only",
     ]);
+    expect(loaded.warnings.join("\n")).not.toContain("unknown settings");
     expect(loaded.sources.map((source) => source.layer)).toEqual([
       "global_toml",
       "project_toml",
@@ -259,6 +300,9 @@ allowDemotion = true
     );
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
       join(home, ".config", "kyoso", "config.toml"),
+    );
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      "If a key is misspelled, fix the name instead.",
     );
   });
 
@@ -307,6 +351,168 @@ model = "claude-sonnet-5"
       path: configPath,
       layer: "project_toml",
     });
+  });
+
+  test("fails closed when explicit config path does not exist", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-missing-config-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+
+    await expect(
+      loadConfig({
+        cwd,
+        configPath: "missing.toml",
+        env: { HOME: home },
+      }),
+    ).rejects.toThrow(
+      `Config file not found: ${join(cwd, "missing.toml")} (from --config)`,
+    );
+  });
+
+  test("uses defaults when implicit config files are absent", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-default-config-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+
+    const loaded = await loadConfig({ cwd, env: { HOME: home } });
+
+    expect(loaded.config.network.defaultMode).toBe("model_only");
+    expect(loaded.sources).toEqual([]);
+    expect(loaded.warnings).toEqual([]);
+  });
+
+  test("warns about unknown keys in global TOML config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-unknown-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    const configPath = join(configHome, "kyoso", "config.toml");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      configPath,
+      `[verifcation]
+enabled = true
+
+[verification]
+enabled = true
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.verification.enabled).toBe(true);
+    expect(loaded.warnings).toContain(
+      `unknown settings in ${configPath} were ignored: "verifcation.enabled"`,
+    );
+  });
+
+  test("marks security-sensitive unknown global TOML keys distinctly", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-security-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    const configPath = join(configHome, "kyoso", "config.toml");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      configPath,
+      `[network]
+defautMode = "unrestricted"
+
+[agents.codex.auth]
+envWhitlist = ["CODEX_API_KEY"]
+
+[agents.codex]
+comand = "bunx"
+
+[judge]
+provder = "none"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+      allowUnknownConfig: true,
+    });
+
+    const warnings = loaded.warnings.join("\n");
+    expect(warnings).toContain(
+      `security-sensitive unknown settings in ${configPath} were ignored:`,
+    );
+    expect(warnings).toContain('"agents.codex.comand"');
+    expect(warnings).toContain('"agents.codex.auth.envWhitlist"');
+    expect(warnings).toContain('"judge.provder"');
+    expect(warnings).toContain('"network.defautMode"');
+    expect(loaded.config.network.defaultMode).toBe("model_only");
+    await expect(
+      loadConfig({
+        cwd,
+        env: { XDG_CONFIG_HOME: configHome },
+      }),
+    ).rejects.toThrow("Security-sensitive unknown config settings rejected");
+  });
+
+  test("rejects invalid values in known global TOML config keys", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-invalid-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[network]
+defaultMode = 123
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow();
+  });
+
+  test("allows arbitrary agent env keys in global TOML config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-env-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.claude.env]
+MY_VAR = "value"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.claude.env.MY_VAR).toBe("value");
+    expect(loaded.warnings.join("\n")).not.toContain("unknown settings");
+  });
+
+  test("allows optional agent model keys in global TOML config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-model-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+model = "gpt-5.5"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex.model).toBe("gpt-5.5");
+    expect(loaded.warnings.join("\n")).not.toContain("unknown settings");
   });
 
   test("fails closed on invalid TOML", async () => {
@@ -483,6 +689,93 @@ function collectAnalysisStrings(
       item.note,
     ]),
   ].filter((value) => value.length > 0);
+}
+
+function collectSchemaPathsForTest(
+  schema: z.ZodTypeAny,
+  path: string[] = [],
+): { leafPaths: string[][]; recordPrefixes: string[][] } {
+  const current = unwrapSchemaForTest(schema);
+  if (current instanceof z.ZodObject) {
+    return mergeSchemaPathsForTest(
+      Object.entries(current.shape).map(([key, child]) =>
+        collectSchemaPathsForTest(child as z.ZodTypeAny, [...path, key]),
+      ),
+    );
+  }
+  if (current instanceof z.ZodRecord) {
+    return {
+      leafPaths: path.length > 0 ? [path] : [],
+      recordPrefixes: path.length > 0 ? [path] : [],
+    };
+  }
+  if (current instanceof z.ZodUnion) {
+    return mergeSchemaPathsForTest(
+      current.options.map((option) =>
+        collectSchemaPathsForTest(option as z.ZodTypeAny, path),
+      ),
+    );
+  }
+  if (current instanceof z.ZodIntersection) {
+    const definition = current._def as unknown as {
+      left: z.ZodTypeAny;
+      right: z.ZodTypeAny;
+    };
+    return mergeSchemaPathsForTest([
+      collectSchemaPathsForTest(definition.left, path),
+      collectSchemaPathsForTest(definition.right, path),
+    ]);
+  }
+  assertKnownSchemaLeafForTest(current, path);
+  return { leafPaths: path.length > 0 ? [path] : [], recordPrefixes: [] };
+}
+
+function mergeSchemaPathsForTest(
+  paths: Array<{ leafPaths: string[][]; recordPrefixes: string[][] }>,
+): { leafPaths: string[][]; recordPrefixes: string[][] } {
+  return {
+    leafPaths: paths.flatMap((path) => path.leafPaths),
+    recordPrefixes: paths.flatMap((path) => path.recordPrefixes),
+  };
+}
+
+function unwrapSchemaForTest(schema: z.ZodTypeAny): z.ZodTypeAny {
+  let current = schema;
+  while (true) {
+    if (
+      current instanceof z.ZodDefault ||
+      current instanceof z.ZodOptional ||
+      current instanceof z.ZodNullable ||
+      current instanceof z.ZodCatch ||
+      current instanceof z.ZodReadonly
+    ) {
+      current = current.unwrap() as z.ZodTypeAny;
+      continue;
+    }
+    if (current instanceof z.ZodPipe) {
+      current = current.in as z.ZodTypeAny;
+      continue;
+    }
+    return current;
+  }
+}
+
+function assertKnownSchemaLeafForTest(
+  schema: z.ZodTypeAny,
+  path: string[],
+): void {
+  const knownLeafTypes = [
+    z.ZodArray,
+    z.ZodBoolean,
+    z.ZodEnum,
+    z.ZodLiteral,
+    z.ZodNumber,
+    z.ZodString,
+  ];
+  if (knownLeafTypes.some((type) => schema instanceof type)) return;
+  throw new Error(
+    `Unsupported config schema node at ${path.join(".") || "<root>"}: ${schema.constructor.name}`,
+  );
 }
 
 describe("path policy", () => {

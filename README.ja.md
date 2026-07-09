@@ -298,7 +298,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 `kyoso.config.ts` は deprecated ですが、互換性のため引き続き supported です。trust-on-first-use approval の後にのみ load され、trusted hashes は `~/.kyoso/trusted-configs.json` に保存されます。`kyoso.toml` と `kyoso.config.ts` が両方ある場合、Kyoso は TOML を使用し TypeScript config を無視します。
 
-Default agent timeouts は Codex 120 秒、Claude 240 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
+Default agent timeouts は Codex 120 秒、Claude 300 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
 
 Optional finding verification は default で disabled です:
 
@@ -332,7 +332,7 @@ Team admins は organization Usage credits も確認してください。Credits
 
 ## Troubleshooting
 
-- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 240 秒、verification 90 秒です。
+- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 300 秒、verification 90 秒です。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 

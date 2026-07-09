@@ -8,4 +8,4 @@ defaultMode = "model_only"
 [agents.claude]
 # Omit model to use the Claude adapter default.
 # model = "claude-sonnet-5"
-timeoutMs = 240000
+timeoutMs = 300000

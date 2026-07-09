@@ -32,7 +32,7 @@
 | Agent roles            | role-specific prompts                                                                      |
 | Judge                  | deterministic aggregator + configurable judge LLM                                          |
 | Security framework     | CISA Secure by Design gate                                                                 |
-| Timeout                | per-agent configurable; defaults: Codex 120s / Claude 240s                                 |
+| Timeout                | per-agent configurable; defaults: Codex 120s / Claude 300s                                 |
 | Max context            | 500 KB selected file content budget                                                        |
 | Secret handling        | default block, config extensible                                                           |
 | Network                | default `model_only`; opt-in `--network unrestricted`; `mediated_web` designed but not MVP |
@@ -696,7 +696,7 @@ effort = "medium"
 [agents.claude]
 model = "claude-sonnet-5"
 effort = "high"
-timeoutMs = 240000
+timeoutMs = 300000
 ```
 
 User global `~/.config/kyoso/config.toml`:
@@ -1899,7 +1899,7 @@ When implementing Kyoso:
 | Config executes malicious code        | trust-on-first-use, `--ignore-config`, `--trust-config`, config hash                  |
 | Prompt injection in repo content      | `<untrusted-content>` boundaries, read-only agents, schema-constrained findings       |
 | MCP stdout polluted                   | logs to stderr only                                                                   |
-| Timeout in client                     | Codex 120s / Claude 240s agent defaults, MCP tool timeout docs recommend 360s         |
+| Timeout in client                     | Codex 120s / Claude 300s agent defaults, MCP tool timeout docs recommend 360s         |
 | User assumes full sandbox             | explicit docs: MVP is temp snapshot, not OS sandbox                                   |
 
 ---

@@ -1541,6 +1541,106 @@ model = "claude-from-toml"
     expect(traceText).toContain('"layer":"project_toml"');
   });
 
+  test("TOML effort pin reaches the subprocess as a session config option", async () => {
+    const cwd = await tempCwd();
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+enabled = false
+
+[agents.claude]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.claude]
+effort = "high"
+`,
+      "utf8",
+    );
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      { cwd, env: { HOME: home, PATH: process.env.PATH ?? "" } },
+    );
+
+    expect(result.agentsUsed).toEqual(["claude"]);
+    expect(result.agentOpinions[0]?.summary).toContain(
+      "configOption=effort:high",
+    );
+  });
+
+  test("rejected effort with a token-like/newline value surfaces a sanitized audit warning", async () => {
+    const cwd = await tempCwd();
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+enabled = false
+
+[agents.claude]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+
+[agents.claude.env]
+FAKE_ACP_REJECT_CONFIG_OPTION = "1"
+`,
+      "utf8",
+    );
+    const rawEffortValue = "sk-test1234567890abcdef\\ninjected-newline";
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.claude]
+effort = "${rawEffortValue}"
+`,
+      "utf8",
+    );
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      { cwd, env: { HOME: home, PATH: process.env.PATH ?? "" } },
+    );
+
+    expect(result.agentsUsed).toEqual(["claude"]);
+    expect(result.agentOpinions[0]?.status).toBe("completed");
+    const auditWarnings = result.audit.warnings ?? [];
+    expect(auditWarnings.some((w) => w.includes("configId=effort"))).toBe(true);
+    expect(auditWarnings.some((w) => w.includes("[KYOSO_REDACTED]"))).toBe(
+      true,
+    );
+    for (const warning of auditWarnings) {
+      expect(warning).not.toContain("sk-test1234567890abcdef");
+      expect(warning).not.toContain("\n");
+    }
+    expect(JSON.stringify(result)).not.toContain("sk-test1234567890abcdef");
+  });
+
   test("verification subprocess receives child-agent recursion guard env", async () => {
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");

@@ -260,6 +260,14 @@ export async function runReview(
       trace,
     });
 
+    warnings.push(
+      ...agentResults.flatMap((result) =>
+        (result.warnings ?? []).map(
+          (warning) => `Agent ${result.agent} ${warning}`,
+        ),
+      ),
+    );
+
     const normalizedAgentResults = agentResults.map(normalizeAgentRunResult);
     const agentsUsed = normalizedAgentResults.map((result) => result.agent);
     const reviewMode = agentsUsed.length === 1 ? "single_agent" : "multi_agent";

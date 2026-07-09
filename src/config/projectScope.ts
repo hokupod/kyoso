@@ -66,7 +66,7 @@ function isAllowedProjectPath(path: string[]): boolean {
     top === "agents" &&
     path.length === 3 &&
     ["codex", "claude"].includes(second ?? "") &&
-    ["enabled", "model", "role", "timeoutMs"].includes(third ?? "")
+    ["enabled", "model", "effort", "role", "timeoutMs"].includes(third ?? "")
   ) {
     return true;
   }

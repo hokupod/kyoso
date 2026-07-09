@@ -114,8 +114,13 @@ async function runSubprocessAgent(
       });
     });
 
-    runAcpClientWorkflow(child, input, abortController.signal)
-      .then((rawText) => {
+    runAcpClientWorkflow(
+      child,
+      input,
+      abortController.signal,
+      resolveEffortConfigOption(agent, agentConfig.effort),
+    )
+      .then(({ rawText, warnings }) => {
         stdout = rawText;
         resolveOnce({
           agent,
@@ -125,6 +130,7 @@ async function runSubprocessAgent(
           normalized: normalizeAgentOutput(agent, input.role, rawText),
           startedAt,
           completedAt: new Date().toISOString(),
+          ...(warnings.length > 0 ? { warnings } : {}),
         });
       })
       .catch((error) => {
@@ -166,7 +172,8 @@ async function runAcpClientWorkflow(
   child: ReturnType<typeof spawn>,
   input: AgentRunInput,
   signal: AbortSignal,
-): Promise<string> {
+  configOption: { configId: string; value: string } | undefined,
+): Promise<{ rawText: string; warnings: string[] }> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
   }
@@ -234,14 +241,50 @@ async function runAcpClientWorkflow(
         },
       })
       .withSession(async (session) => {
+        const warnings: string[] = [];
+        if (configOption) {
+          // Backend agents throw the same error both when a model doesn't
+          // support effort levels (a normal, expected case) and when the
+          // value is invalid (a misconfiguration). ACP gives no way to tell
+          // these apart, so failing loud here would break reviews for models
+          // that simply don't support effort. Record a warning (and log to
+          // stderr) so a rejected effort isn't silently indistinguishable
+          // from an applied one, for CLI and MCP/JSON callers alike.
+          await ctx
+            .request(
+              methods.agent.session.setConfigOption,
+              { sessionId: session.sessionId, ...configOption },
+              { cancellationSignal: signal },
+            )
+            .catch((error) => {
+              if (signal.aborted) return;
+              const sanitizedValue = sanitizeTextForDisplay(configOption.value);
+              const detail = sanitizeTextForDisplay(
+                formatAgentErrorDetail(error),
+              );
+              const warning = `rejected effort config option (configId=${configOption.configId}, value=${sanitizedValue}); continuing without it: ${detail}`;
+              warnings.push(warning);
+              console.error(`kyoso: ${warning}`);
+            });
+        }
         const promptResponse = session.prompt(input.prompt, {
           cancellationSignal: signal,
         });
         const text = await session.readText();
         await promptResponse;
-        return text;
+        return { rawText: text, warnings };
       });
   });
+}
+
+function resolveEffortConfigOption(
+  agent: AgentName,
+  effort: string | undefined,
+): { configId: string; value: string } | undefined {
+  if (!effort) return undefined;
+  if (agent === "codex") return { configId: "reasoning_effort", value: effort };
+  if (agent === "claude") return { configId: "effort", value: effort };
+  return undefined;
 }
 
 export async function readWorkspaceFile(

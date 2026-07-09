@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-09
+
+### Added
+
+- `agents.<name>.effort` config field for Codex and Claude, mirroring
+  `agents.<name>.model`. Kyoso sends it once per session as an ACP
+  `session/set_config_option` request (`effort` for Claude,
+  `reasoning_effort` for Codex). The request is fail-soft: a rejection is
+  logged to stderr as a sanitized warning and surfaced to MCP/JSON callers
+  via `result.audit.warnings`, and the review continues at the backend's
+  own default effort. Settable from both user-global and project TOML
+  (same risk profile as `model`: no command execution or env forwarding).
+
+### Fixed
+
+- Documentation still described the default Claude agent timeout as 240
+  seconds; README (all languages), the design document, and the example
+  config now reflect the 300-second default introduced in 0.6.0.
+
 ## [0.6.0] - 2026-07-08
 
 ### Added

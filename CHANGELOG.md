@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-09
+
+### Changed
+
+- Update `@agentclientprotocol/sdk` from 1.1.0 to 1.2.0: ACP schema 1.19.0,
+  linear-time `ndJsonStream` receive path, and unified JSON-RPC message
+  validation across transports.
+
 ## [0.7.0] - 2026-07-09
 
 ### Added

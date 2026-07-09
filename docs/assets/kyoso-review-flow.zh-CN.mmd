@@ -1,0 +1,33 @@
+%% 评审执行流程(简体中文)
+%% 重新生成 SVG: bunx -p @mermaid-js/mermaid-cli mmdc -i docs/assets/kyoso-review-flow.zh-CN.mmd -o docs/assets/kyoso-review-flow.zh-CN.svg -b white
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}} }%%
+flowchart TD
+    Client["AI 编码代理<br/>(Claude Code / Codex / ...)"]
+    Client -->|"MCP 工具或 CLI:<br/>plan_review / security_review / diff_review"| Validate
+
+    Validate["校验请求并加载配置<br/>(递归防护)"] --> Scan["密钥扫描与脱敏"]
+    Scan -->|"检测到密钥"| Blocked(["block — 不会调用任何代理"])
+    Scan -->|"无密钥 / 已脱敏"| Snapshot["临时只读快照工作区"]
+
+    subgraph Ensemble["通过 ACP 的协奏评审 — 禁止写入与执行命令"]
+        Codex["Codex<br/>实现评审者"]
+        Claude["Claude<br/>架构与安全评审者"]
+    end
+
+    Snapshot --> Codex
+    Snapshot --> Claude
+    Codex --> Aggregate
+    Claude --> Aggregate
+
+    Aggregate["规范化、聚合并<br/>交叉验证发现"] --> Cisa["CISA Secure by Design 门禁<br/>(仅 security_review)"]
+    Cisa --> Decision{"决策策略"}
+    Decision --> Judge["Judge LLM 完善摘要<br/>(可选,支持确定性回退)"]
+    Judge --> Result(["JSON + Markdown 结果:<br/>approve / approve_with_changes / block"])
+    Decision -.-> Trace[("审计追踪<br/>.kyoso/traces/*.jsonl")]
+
+    classDef terminal fill:#f4e8d0,stroke:#8a6d3b,color:#3d2f1a
+    classDef blocked fill:#f8d7da,stroke:#a94442,color:#4a1418
+    classDef side fill:#eef2f7,stroke:#8195ad,color:#2c3a4a,stroke-dasharray: 4 3
+    class Result terminal
+    class Blocked blocked
+    class Trace side

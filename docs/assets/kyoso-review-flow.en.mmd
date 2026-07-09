@@ -1,0 +1,33 @@
+%% Review execution flow (English)
+%% Regenerate SVG: bunx -p @mermaid-js/mermaid-cli mmdc -i docs/assets/kyoso-review-flow.en.mmd -o docs/assets/kyoso-review-flow.en.svg -b white
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}} }%%
+flowchart TD
+    Client["AI coding agent (Claude Code / Codex / ...)"]
+    Client -->|"MCP tool or CLI:<br/>plan_review / security_review / diff_review"| Validate
+
+    Validate["Validate request & load config (recursion guard)"] --> Scan["Secret scan & redaction"]
+    Scan -->|"secret detected"| Blocked(["block — agents never called"])
+    Scan -->|"clean / redacted"| Snapshot["Temporary read-only snapshot workspace"]
+
+    subgraph Ensemble["Ensemble review over ACP — writes & shell denied"]
+        Codex["Codex<br/>implementation reviewer"]
+        Claude["Claude<br/>architecture & security reviewer"]
+    end
+
+    Snapshot --> Codex
+    Snapshot --> Claude
+    Codex --> Aggregate
+    Claude --> Aggregate
+
+    Aggregate["Normalize, aggregate & cross-verify findings"] --> Cisa["CISA Secure by Design gate<br/>(security_review only)"]
+    Cisa --> Decision{"Decision policy"}
+    Decision --> Judge["Judge LLM refines summary<br/>(optional, deterministic fallback)"]
+    Judge --> Result(["JSON + Markdown result:<br/>approve / approve_with_changes / block"])
+    Decision -.-> Trace[("Audit trace<br/>.kyoso/traces/*.jsonl")]
+
+    classDef terminal fill:#f4e8d0,stroke:#8a6d3b,color:#3d2f1a
+    classDef blocked fill:#f8d7da,stroke:#a94442,color:#4a1418
+    classDef side fill:#eef2f7,stroke:#8195ad,color:#2c3a4a,stroke-dasharray: 4 3
+    class Result terminal
+    class Blocked blocked
+    class Trace side

@@ -22,6 +22,16 @@ Kyo-so (Kyoso / 協奏) 是面向 AI coding workflows 的 MCP-native、ACP-power
 
 Kyoso 不会应用代码更改。
 
+## Review Flow
+
+三个 review tool 都运行同一条流水线：先进行 secret scan，在 read-only 的临时快照上通过 ACP 并行运行 reviewer ensemble，然后聚合发现、应用门禁并作出决定。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-review-flow.zh-CN.svg" alt="Kyo-so 评审执行流程：从 MCP/CLI 请求到 secret scan、快照、协奏评审、聚合、门禁与最终决定" width="640">
+</p>
+
+当只启用一个 backend 时，会由 1 个 agent 以 `combined_reviewer` 运行，替代双角色 ensemble。此图的 Mermaid 源文件位于 [docs/assets/](docs/assets/)。
+
 ## Quick Start
 
 无需全局安装。通过 `npx` 或 `bunx` 运行 Kyoso。

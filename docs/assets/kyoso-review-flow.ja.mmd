@@ -1,0 +1,33 @@
+%% レビュー実行フロー(日本語)
+%% SVG 再生成: bunx -p @mermaid-js/mermaid-cli mmdc -i docs/assets/kyoso-review-flow.ja.mmd -o docs/assets/kyoso-review-flow.ja.svg -b white
+%%{init: {"htmlLabels": false, "flowchart": {"htmlLabels": false}} }%%
+flowchart TD
+    Client["AI コーディングエージェント<br/>(Claude Code / Codex / ...)"]
+    Client -->|"MCP ツール または CLI:<br/>plan_review / security_review / diff_review"| Validate
+
+    Validate["リクエスト検証 & 設定読み込み<br/>(再帰ガード)"] --> Scan["シークレットスキャン &<br/>マスキング"]
+    Scan -->|"シークレット検出"| Blocked(["block — エージェント未実行"])
+    Scan -->|"クリーン / マスク済み"| Snapshot["一時的な読み取り専用<br/>スナップショット"]
+
+    subgraph Ensemble["ACP によるアンサンブルレビュー — 書き込み・シェル実行は拒否"]
+        Codex["Codex<br/>実装レビュアー"]
+        Claude["Claude<br/>アーキテクチャ & セキュリティレビュアー"]
+    end
+
+    Snapshot --> Codex
+    Snapshot --> Claude
+    Codex --> Aggregate
+    Claude --> Aggregate
+
+    Aggregate["所見の正規化・集約・<br/>相互検証"] --> Cisa["CISA Secure by Design ゲート<br/>(security_review のみ)"]
+    Cisa --> Decision{"決定ポリシー"}
+    Decision --> Judge["Judge LLM によるサマリー補強<br/>(任意)"]
+    Judge --> Result(["JSON + Markdown の結果:<br/>approve / approve_with_changes / block"])
+    Decision -.-> Trace[("監査トレース<br/>.kyoso/traces/*.jsonl")]
+
+    classDef terminal fill:#f4e8d0,stroke:#8a6d3b,color:#3d2f1a
+    classDef blocked fill:#f8d7da,stroke:#a94442,color:#4a1418
+    classDef side fill:#eef2f7,stroke:#8195ad,color:#2c3a4a,stroke-dasharray: 4 3
+    class Result terminal
+    class Blocked blocked
+    class Trace side

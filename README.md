@@ -20,6 +20,16 @@ It coordinates Codex and Claude reviewers for:
 
 Kyoso does not apply code changes.
 
+## Review Flow
+
+All three review tools run the same pipeline: scan for secrets, snapshot the workspace read-only, run the reviewer ensemble in parallel over ACP, then aggregate findings, apply gates, and decide.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-review-flow.en.svg" alt="Kyo-so review execution flow, from MCP/CLI request through secret scan, snapshot, ensemble review, aggregation, gates, and final decision" width="640">
+</p>
+
+With a single backend enabled, one agent runs as `combined_reviewer` instead of the two-role ensemble. The Mermaid sources for this diagram live in [docs/assets/](docs/assets/).
+
 ## Quick Start
 
 No global install is required. Run Kyoso through `npx` or `bunx`.

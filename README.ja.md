@@ -22,6 +22,16 @@ Kyo-so は Codex と Claude の reviewer を連携させ、次のレビューを
 
 Kyoso はコード変更を適用しません。
 
+## Review Flow
+
+3 つの review tool はすべて同じパイプラインで動きます。secret scan の後、read-only の一時スナップショット上で reviewer ensemble を ACP 経由で並列実行し、所見の集約・ゲート適用・決定を行います。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-review-flow.ja.svg" alt="Kyo-so のレビュー実行フロー。MCP/CLI リクエストから secret scan、スナップショット、アンサンブルレビュー、集約、ゲート、最終決定まで" width="640">
+</p>
+
+backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 1 agent が `combined_reviewer` として実行されます。この図の Mermaid ソースは [docs/assets/](docs/assets/) にあります。
+
 ## Quick Start
 
 グローバルインストールは不要です。Kyoso は `npx` または `bunx` で実行します。

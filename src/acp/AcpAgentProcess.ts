@@ -120,7 +120,7 @@ async function runSubprocessAgent(
       abortController.signal,
       resolveEffortConfigOption(agent, agentConfig.effort),
     )
-      .then((rawText) => {
+      .then(({ rawText, warnings }) => {
         stdout = rawText;
         resolveOnce({
           agent,
@@ -130,6 +130,7 @@ async function runSubprocessAgent(
           normalized: normalizeAgentOutput(agent, input.role, rawText),
           startedAt,
           completedAt: new Date().toISOString(),
+          ...(warnings.length > 0 ? { warnings } : {}),
         });
       })
       .catch((error) => {
@@ -172,7 +173,7 @@ async function runAcpClientWorkflow(
   input: AgentRunInput,
   signal: AbortSignal,
   configOption: { configId: string; value: string } | undefined,
-): Promise<string> {
+): Promise<{ rawText: string; warnings: string[] }> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
   }
@@ -240,13 +241,15 @@ async function runAcpClientWorkflow(
         },
       })
       .withSession(async (session) => {
+        const warnings: string[] = [];
         if (configOption) {
           // Backend agents throw the same error both when a model doesn't
           // support effort levels (a normal, expected case) and when the
           // value is invalid (a misconfiguration). ACP gives no way to tell
           // these apart, so failing loud here would break reviews for models
-          // that simply don't support effort. Log to stderr so a rejected
-          // effort isn't silently indistinguishable from an applied one.
+          // that simply don't support effort. Record a warning (and log to
+          // stderr) so a rejected effort isn't silently indistinguishable
+          // from an applied one, for CLI and MCP/JSON callers alike.
           await ctx
             .request(
               methods.agent.session.setConfigOption,
@@ -255,12 +258,13 @@ async function runAcpClientWorkflow(
             )
             .catch((error) => {
               if (signal.aborted) return;
+              const sanitizedValue = sanitizeTextForDisplay(configOption.value);
               const detail = sanitizeTextForDisplay(
-                error instanceof Error ? error.message : String(error),
+                formatAgentErrorDetail(error),
               );
-              console.error(
-                `kyoso: rejected effort config option (configId=${configOption.configId}, value=${configOption.value}); continuing without it: ${detail}`,
-              );
+              const warning = `rejected effort config option (configId=${configOption.configId}, value=${sanitizedValue}); continuing without it: ${detail}`;
+              warnings.push(warning);
+              console.error(`kyoso: ${warning}`);
             });
         }
         const promptResponse = session.prompt(input.prompt, {
@@ -268,7 +272,7 @@ async function runAcpClientWorkflow(
         });
         const text = await session.readText();
         await promptResponse;
-        return text;
+        return { rawText: text, warnings };
       });
   });
 }

@@ -153,6 +153,7 @@ export type AgentRunResult = {
     message: string;
     detail?: string;
   };
+  warnings?: string[];
   startedAt: string;
   completedAt?: string;
 };

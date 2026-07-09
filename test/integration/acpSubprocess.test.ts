@@ -114,6 +114,8 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.normalized?.summary).not.toContain("configOption=");
     expect(errorCalls).toHaveLength(1);
     expect(errorCalls[0]?.[0]).toContain("configId=reasoning_effort");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toContain("configId=reasoning_effort");
   });
 
   test("times out hung ACP sessions and terminates the child process", async () => {

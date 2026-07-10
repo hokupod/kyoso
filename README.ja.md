@@ -203,6 +203,8 @@ MCP stdout は protocol messages 専用です。logs は stderr または local 
 
 同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
 
+skill は、利用可能な場合は Kyoso MCP tools を優先します。MCP server が未登録の場合は、記載された CLI fallback に従い、`npx -y @kyo-so/cli` または `bunx @kyo-so/cli` から JSON output を取得します。
+
 `npx @kyo-so/cli setup codex --write` と `bunx @kyo-so/cli setup codex --write` は、既定で `.agents/skills/kyoso-review/` にコピーします。`--global` を追加すると `~/.agents/skills/kyoso-review/` にコピーします。
 
 `npx @kyo-so/cli setup claude-code --write` と `bunx @kyo-so/cli setup claude-code --write` は、既定で `.claude/skills/kyoso-review/` にコピーします。`--global` を追加すると `~/.claude/skills/kyoso-review/` にコピーします。

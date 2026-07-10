@@ -196,7 +196,7 @@ Usage:
   kyoso mcp [--config kyoso.toml|kyoso.config.ts] [--ignore-config] [--trust-config] [--allow-unknown-config] [--network model_only|unrestricted]
   kyoso setup [codex|claude-code] [--write] [--runner npx|bunx] [--command <command>] [--global]
   kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--set <key>=<value>]... [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--set <key>=<value>]... [--json] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
   kyoso diff --base main --head HEAD [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
   kyoso doctor [--trust-config] [--allow-unknown-config]
   kyoso init [--force]

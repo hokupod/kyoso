@@ -1625,10 +1625,19 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - selected files
    - unified diff if available
    - constraints
-4. Call the appropriate Kyoso MCP tool:
-   - `plan_review`
-   - `security_review`
-   - `diff_review`
+4. Run the review through the first available path:
+   - Prefer the corresponding Kyoso MCP tool when it is available:
+     - `plan_review`
+     - `security_review`
+     - `diff_review`
+   - If the MCP tools are unavailable, use the CLI fallback with JSON output:
+     - `plan_review` -> `npx -y @kyo-so/cli plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
+     - `security_review` -> `npx -y @kyo-so/cli security --goal <text> [--diff <path>] [--file <path>] --json`
+     - `diff_review` -> `npx -y @kyo-so/cli diff --base <ref> --head <ref> --json`
+   - `bunx @kyo-so/cli` may be used instead of `npx -y @kyo-so/cli`.
+   - The CLI also accepts `--repo-summary`, repeatable `--constraint`, and repeatable `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
+   - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
+   - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
 5. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
 6. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
 7. Do not claim Kyoso modified files. Kyoso only reviews.

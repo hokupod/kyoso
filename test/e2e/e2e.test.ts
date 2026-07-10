@@ -8,7 +8,7 @@ import { runDoctor } from "../../src/cli/doctor.js";
 import { runInit } from "../../src/cli/init.js";
 
 describe("e2e surfaces", () => {
-  test("CLI help lists repeatable --set for every review command", async () => {
+  test("CLI help lists review command output and override flags", async () => {
     const proc = Bun.spawn(
       ["bun", "run", join(process.cwd(), "src/cli/main.ts")],
       { stdout: "pipe", stderr: "pipe" },
@@ -22,6 +22,58 @@ describe("e2e surfaces", () => {
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
     expect(stdout.match(/\[--set <key>=<value>\]\.\.\./g)).toHaveLength(3);
+    expect(stdout).toContain(
+      "[--set <key>=<value>]... [--json] [--allow-secret-redaction]",
+    );
+  });
+
+  test("CLI JSON exposes skipped untrusted config warnings", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-untrusted-json-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-untrusted-home-"));
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      'throw new Error("config should not execute without trust");\nexport default {};\n',
+      "utf8",
+    );
+
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review config trust reporting",
+        "--json",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+          KYOSO_TEST_FAKE_AGENTS: "1",
+          KYOSO_TRUST_STORE_PATH: join(home, "trusted-configs.json"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const result = JSON.parse(stdout);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(result.audit.warnings).toContainEqual(
+      expect.stringContaining("untrusted config was not executed"),
+    );
   });
 
   test("MCP registers stable tool names", () => {

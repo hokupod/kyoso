@@ -204,6 +204,8 @@ MCP stdout is reserved for protocol messages. Logs go to stderr or local audit t
 
 The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
 
+The skill prefers the Kyoso MCP tools when available. If the MCP server is not registered, it follows its documented CLI fallback and requests JSON output from `npx -y @kyo-so/cli` or `bunx @kyo-so/cli`.
+
 `npx @kyo-so/cli setup codex --write` and `bunx @kyo-so/cli setup codex --write` copy it to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
 
 `npx @kyo-so/cli setup claude-code --write` and `bunx @kyo-so/cli setup claude-code --write` copy it to `.claude/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.claude/skills/kyoso-review/`.

@@ -371,7 +371,10 @@ Options:
 --json
 --markdown
 --network model_only|unrestricted
+--set <key>=<value>         # repeatable
 ```
+
+`--set` is available on `plan`, `security`, and `diff`.
 
 ### 6.4 `kyoso security`
 
@@ -670,6 +673,14 @@ TOML config is declarative and does not require trust approval. The user global 
 - `securityReview.cisaSecureByDesign.* = true`
 
 Global-only keys include agent `command`, `args`, `env`, `auth`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, and `verification.allowDemotion`.
+
+Review CLI overrides use repeatable `--set <key>=<value>` arguments and are limited to:
+
+- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
+- `verification.enabled`, `maxFindings`, `timeoutMs`
+- `judge.mode`, `provider`, `timeoutMs`
+
+CLI overrides are applied after config files. They do not execute code or require config trust. Unknown keys are rejected, boolean and numeric keys are converted according to their existing config type, string keys stay strings, and the complete config is schema-validated after application.
 
 Legacy `kyoso.config.ts` can execute arbitrary code when loaded. Therefore:
 

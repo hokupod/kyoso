@@ -8,6 +8,22 @@ import { runDoctor } from "../../src/cli/doctor.js";
 import { runInit } from "../../src/cli/init.js";
 
 describe("e2e surfaces", () => {
+  test("CLI help lists repeatable --set for every review command", async () => {
+    const proc = Bun.spawn(
+      ["bun", "run", join(process.cwd(), "src/cli/main.ts")],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(stdout.match(/\[--set <key>=<value>\]\.\.\./g)).toHaveLength(3);
+  });
+
   test("MCP registers stable tool names", () => {
     expect(listKyosoMcpTools()).toEqual([
       "plan_review",
@@ -458,6 +474,213 @@ export default defineConfig({
     expect(stdout).toBe("");
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("Missing value for --network");
+  });
+
+  test("CLI diff applies repeatable --set overrides to ACP config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-set-effort-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-set-home-"));
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    await mkdir(join(cwd, "src"), { recursive: true });
+    await writeFile(join(cwd, "src", "foo.ts"), "export const foo = 1;\n");
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+enabled = false
+
+[agents.claude]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+`,
+      "utf8",
+    );
+
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "diff",
+        "--goal",
+        "review diff",
+        "--diff",
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--file",
+        "src/foo.ts",
+        "--set",
+        "agents.claude.effort=high",
+        "--set",
+        "agents.claude.timeoutMs=4000",
+        "--json",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const result = JSON.parse(stdout);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(result.agentsUsed).toEqual(["claude"]);
+    expect(result.agentOpinions[0].summary).toContain(
+      "configOption=effort:high",
+    );
+  });
+
+  test("CLI applies --set with --ignore-config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-set-ignore-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review",
+        "--repo-summary",
+        "repo",
+        "--ignore-config",
+        "--set",
+        "agents.codex.enabled=false",
+        "--json",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+          KYOSO_TEST_FAKE_AGENTS: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).agentsUsed).toEqual(["claude"]);
+  });
+
+  test("CLI security applies --set overrides", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-set-security-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "security",
+        "--goal",
+        "review security",
+        "--diff",
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--ignore-config",
+        "--set",
+        "agents.codex.enabled=false",
+        "--json",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+          KYOSO_TEST_FAKE_AGENTS: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).agentsUsed).toEqual(["claude"]);
+  });
+
+  test("CLI rejects malformed, unknown, and schema-invalid --set values", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-set-invalid-"));
+    const cases = [
+      {
+        args: ["--set", "agents.claude.effort"],
+        message: "Expected key=value",
+      },
+      {
+        args: ["--set", "workspace.root=/tmp/elsewhere"],
+        message: 'Unknown --set key "workspace.root"',
+      },
+      {
+        args: ["--set", "agents.claude.timeoutMs=-1"],
+        message: 'Invalid --set value "agents.claude.timeoutMs=-1"',
+      },
+      {
+        args: ["--set"],
+        message: "Missing value for --set. Expected key=value.",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const proc = Bun.spawn(
+        [
+          "bun",
+          "run",
+          join(process.cwd(), "src/cli/main.ts"),
+          "plan",
+          "--goal",
+          "review",
+          "--ignore-config",
+          ...testCase.args,
+        ],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            OPENAI_API_KEY: "",
+            CODEX_API_KEY: "",
+            ANTHROPIC_API_KEY: "",
+            KYOSO_TEST_FAKE_AGENTS: "1",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect(stdout).toBe("");
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain(testCase.message);
+    }
   });
 });
 

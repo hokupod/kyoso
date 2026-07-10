@@ -136,7 +136,7 @@ Nix dev shell 会 pin Node.js 24 和 nixpkgs 提供的 Bun version。确认 `.en
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD
+kyoso diff --base main --head HEAD --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -281,7 +281,15 @@ Kyoso 按以下顺序 load config：
 - built-in defaults
 - user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`，或 `~/.config/kyoso/config.toml`
 - project TOML: `<cwd>/kyoso.toml`
-- `--network` 等 CLI flags
+- `--network` 等 CLI flags，以及 `--set agents.claude.effort=high` 等可重复的 overrides
+
+`plan`、`security` 和 `diff` 接受可重复的 `--set <key>=<value>` overrides。CLI 指定的值优先于 config files，也可以与 `--ignore-config` 一起使用。
+
+- Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`
+- Verification keys: `verification.<enabled|maxFindings|timeoutMs>`
+- Judge keys: `judge.<mode|provider|timeoutMs>`
+
+未知 key 会被拒绝。Boolean / numeric config keys 会转换为 schema 类型，string keys 保持字符串，然后重新验证完整 config。
 
 Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network settings。
 

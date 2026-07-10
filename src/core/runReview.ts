@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { kyosoConfigSchema, type KyosoConfig } from "../config/schema.js";
 import { defaultConfig } from "../config/defaultConfig.js";
 import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
+import { applyConfigOverrides } from "../config/configOverrides.js";
 import type { AcpAgentManager } from "../acp/AcpAgentManager.js";
 import { SubprocessAcpAgentManager } from "../acp/AcpAgentProcess.js";
 import { FakeAgentManager } from "../acp/FakeAgentManager.js";
@@ -58,6 +59,7 @@ import {
 
 export type RunReviewOptions = LoadConfigOptions & {
   config?: KyosoConfig;
+  configOverrides?: string[];
   configHash?: string;
   agentManager?: AcpAgentManager;
   env?: NodeJS.ProcessEnv;
@@ -115,7 +117,7 @@ export async function runReview(
     throw error;
   }
 
-  const loaded =
+  const baseLoaded =
     options.config !== undefined
       ? {
           config: options.config,
@@ -135,6 +137,16 @@ export async function runReview(
           env: options.env,
           trustPrompt: options.trustPrompt,
         });
+  const loaded =
+    options.configOverrides && options.configOverrides.length > 0
+      ? {
+          ...baseLoaded,
+          config: applyConfigOverrides(
+            baseLoaded.config,
+            options.configOverrides,
+          ),
+        }
+      : baseLoaded;
 
   const trace = createTraceWriter({
     enabled: loaded.config.audit.enabled,

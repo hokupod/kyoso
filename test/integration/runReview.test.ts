@@ -44,6 +44,38 @@ afterAll(() => {
 });
 
 describe("runReview", () => {
+  test("applies config overrides to enabled agents and their timeouts", async () => {
+    const cwd = await tempCwd();
+    const manager = new FakeAgentManager();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: { ...baseConfig.agents.codex, enabled: false },
+      },
+    };
+
+    await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "do it" },
+      {
+        cwd,
+        config,
+        configOverrides: [
+          "agents.codex.enabled=true",
+          "agents.codex.timeoutMs=1234",
+          "agents.claude.enabled=false",
+        ],
+        agentManager: manager,
+      },
+    );
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.agent).toBe("codex");
+    expect(manager.calls[0]?.timeoutMs).toBe(1_234);
+  });
+
   test("secret detection blocks before agents run", async () => {
     const cwd = await tempCwd();
     const manager = new FakeAgentManager();

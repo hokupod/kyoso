@@ -81,6 +81,7 @@ async function main(): Promise<void> {
       ignoreConfig,
       trustConfig,
       allowUnknownConfig,
+      configOverrides: configOverrideFlags(parsed.flags),
       promptForTrust: canPromptForConfigTrust(),
     });
     console.log(
@@ -176,6 +177,15 @@ function parseNetworkFlag(value: string | undefined): NetworkMode | undefined {
   );
 }
 
+function configOverrideFlags(
+  flags: Record<string, string | boolean | string[]>,
+): string[] {
+  if (flags.set === true) {
+    throw new Error("Missing value for --set. Expected key=value.");
+  }
+  return stringArrayFlag(flags, "set");
+}
+
 function canPromptForConfigTrust(): boolean {
   return process.stdin.isTTY === true && process.stderr.isTTY === true;
 }
@@ -185,9 +195,9 @@ const HELP = `Kyoso
 Usage:
   kyoso mcp [--config kyoso.toml|kyoso.config.ts] [--ignore-config] [--trust-config] [--allow-unknown-config] [--network model_only|unrestricted]
   kyoso setup [codex|claude-code] [--write] [--runner npx|bunx] [--command <command>] [--global]
-  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--json] [--trust-config] [--allow-unknown-config]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
-  kyoso diff --base main --head HEAD [--json] [--trust-config] [--allow-unknown-config]
+  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--set <key>=<value>]... [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
+  kyoso diff --base main --head HEAD [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
   kyoso doctor [--trust-config] [--allow-unknown-config]
   kyoso init [--force]
 `;

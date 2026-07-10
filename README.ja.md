@@ -136,7 +136,7 @@ Nix dev shell は Node.js 24 と nixpkgs が提供する Bun version を固定�
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD
+kyoso diff --base main --head HEAD --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -281,7 +281,15 @@ Kyoso は次の順に config を load します。
 - built-in defaults
 - user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`、または `~/.config/kyoso/config.toml`
 - project TOML: `<cwd>/kyoso.toml`
-- `--network` などの CLI flags
+- `--network` などの CLI flags と `--set agents.claude.effort=high` などの反復可能な overrides
+
+`plan`、`security`、`diff` は、反復可能な `--set <key>=<value>` overrides を受け付けます。CLI で指定した値は config files より優先され、`--ignore-config` との併用も可能です。
+
+- Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`
+- Verification keys: `verification.<enabled|maxFindings|timeoutMs>`
+- Judge keys: `judge.<mode|provider|timeoutMs>`
+
+未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
 
 Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
 

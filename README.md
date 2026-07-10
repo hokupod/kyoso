@@ -137,7 +137,7 @@ Known distribution risk: `@modelcontextprotocol/server` has no stable release ye
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD
+kyoso diff --base main --head HEAD --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -282,7 +282,15 @@ Kyoso loads config in this order:
 - built-in defaults
 - user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`, or `~/.config/kyoso/config.toml`
 - project TOML: `<cwd>/kyoso.toml`
-- CLI flags such as `--network`
+- CLI flags such as `--network` and repeatable overrides such as `--set agents.claude.effort=high`
+
+`plan`, `security`, and `diff` accept repeatable `--set <key>=<value>` overrides. Values set on the CLI take precedence over config files, including when `--ignore-config` is used.
+
+- Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`
+- Verification keys: `verification.<enabled|maxFindings|timeoutMs>`
+- Judge keys: `judge.<mode|provider|timeoutMs>`
+
+Unknown keys are rejected. Boolean and numeric config keys are converted to their schema types; string keys remain strings. The complete config is then validated.
 
 Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as tool toggles, agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network settings.
 

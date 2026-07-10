@@ -11,6 +11,31 @@ type Violation = {
   reason?: string;
 };
 
+export const kyosoConfigOverridePaths = [
+  "agents.codex.enabled",
+  "agents.codex.model",
+  "agents.codex.effort",
+  "agents.codex.role",
+  "agents.codex.timeoutMs",
+  "agents.claude.enabled",
+  "agents.claude.model",
+  "agents.claude.effort",
+  "agents.claude.role",
+  "agents.claude.timeoutMs",
+  "verification.enabled",
+  "verification.maxFindings",
+  "verification.timeoutMs",
+  "judge.mode",
+  "judge.provider",
+  "judge.timeoutMs",
+] as const;
+
+const CONFIG_OVERRIDE_PATHS = new Set<string>(kyosoConfigOverridePaths);
+
+export function isAllowedConfigOverridePath(path: string[]): boolean {
+  return CONFIG_OVERRIDE_PATHS.has(path.join("."));
+}
+
 export function mergeProjectTomlConfig(
   baseConfig: unknown,
   projectConfig: unknown,
@@ -55,25 +80,11 @@ export function collectProjectScopeViolations(config: unknown): Violation[] {
 
 function isAllowedProjectPath(path: string[]): boolean {
   const [top, second, third, fourth] = path;
+  if (isAllowedConfigOverridePath(path)) return true;
   if (
     top === "tools" &&
     path.length === 2 &&
     ["planReview", "securityReview", "diffReview"].includes(second ?? "")
-  ) {
-    return true;
-  }
-  if (
-    top === "agents" &&
-    path.length === 3 &&
-    ["codex", "claude"].includes(second ?? "") &&
-    ["enabled", "model", "effort", "role", "timeoutMs"].includes(third ?? "")
-  ) {
-    return true;
-  }
-  if (
-    top === "verification" &&
-    path.length === 2 &&
-    ["enabled", "maxFindings", "timeoutMs"].includes(second ?? "")
   ) {
     return true;
   }
@@ -91,13 +102,6 @@ function isAllowedProjectPath(path: string[]): boolean {
     top === "secrets" &&
     path.length === 2 &&
     ["blockOnDetectedSecret", "allowOverride"].includes(second ?? "")
-  ) {
-    return true;
-  }
-  if (
-    top === "judge" &&
-    path.length === 2 &&
-    ["mode", "provider", "timeoutMs"].includes(second ?? "")
   ) {
     return true;
   }

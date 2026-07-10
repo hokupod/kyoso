@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureManagedSkill } from "./skillInstall.js";
 
 export type SetupClient = "codex" | "claude-code";
 export type SetupRunner = "npx" | "bunx";
@@ -16,6 +17,8 @@ export type SetupOptions = {
   global: boolean;
   runner?: string;
   command?: string;
+  skillOnly?: boolean;
+  force?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -26,7 +29,7 @@ type McpCommand = {
 
 type StepResult = {
   title: string;
-  status: "dry-run" | "created" | "updated" | "skipped";
+  status: "dry-run" | "created" | "updated" | "skipped" | "conflict";
   path?: string;
   detail?: string;
 };
@@ -34,25 +37,34 @@ type StepResult = {
 type SetupContext = {
   cwd: string;
   home: string;
+  codexHome: string;
   env: NodeJS.ProcessEnv;
   write: boolean;
   scope: SetupScope;
+  skillOnly: boolean;
+  force: boolean;
   mcpCommand: McpCommand;
   sourceSkillDir: string;
 };
 
 export async function runSetup(options: SetupOptions): Promise<string> {
   const client = parseClient(options.client);
+  validateSkillOnlyOptions(options, client);
   const runner = parseRunner(options.runner);
   const command = options.command
     ? parseCommandSpec(options.command)
     : commandForRunner(runner);
+  const env = options.env ?? process.env;
+  const home = env.HOME ?? homedir();
   const context: SetupContext = {
     cwd: options.cwd,
-    home: options.env?.HOME ?? homedir(),
-    env: options.env ?? process.env,
+    home,
+    codexHome: resolveCodexHome(options.cwd, home, env),
+    env,
     write: options.write,
     scope: options.global ? "global" : "project",
+    skillOnly: options.skillOnly ?? false,
+    force: options.force ?? false,
     mcpCommand: command,
     sourceSkillDir: resolveBundledSkillDir(),
   };
@@ -113,11 +125,13 @@ export function skillDestination(
 export function detectSetup(options: {
   cwd: string;
   home?: string;
+  codexHome?: string;
 }): Record<SetupClient, { mcp: boolean; skill: boolean }> {
   const home = options.home ?? homedir();
+  const codexHome = options.codexHome ?? join(home, ".codex");
   return {
     codex: {
-      mcp: hasCodexMcp(join(home, ".codex", "config.toml")),
+      mcp: hasCodexMcp(join(codexHome, "config.toml")),
       skill:
         existsSync(
           join(options.cwd, ".agents", "skills", "kyoso-review", "SKILL.md"),
@@ -138,43 +152,35 @@ export function detectSetup(options: {
 }
 
 async function setupCodex(context: SetupContext): Promise<StepResult[]> {
+  if (context.skillOnly) {
+    return [
+      await ensureSkill(context, "codex", "Codex skill"),
+      ...singleAgentAdvice(context, "codex"),
+    ];
+  }
   return [
     await ensureCodexMcp(context),
-    await ensureSkill({
-      title: "Codex skill",
-      sourceDir: context.sourceSkillDir,
-      destinationDir: skillDestination(
-        "codex",
-        context.scope,
-        context.cwd,
-        context.home,
-      ),
-      write: context.write,
-    }),
+    await ensureSkill(context, "codex", "Codex skill"),
     ...singleAgentAdvice(context, "codex"),
   ];
 }
 
 async function setupClaudeCode(context: SetupContext): Promise<StepResult[]> {
+  if (context.skillOnly) {
+    return [
+      await ensureSkill(context, "claude-code", "Claude Code skill"),
+      ...singleAgentAdvice(context, "claude-code"),
+    ];
+  }
   return [
     await ensureClaudeMcp(context),
-    await ensureSkill({
-      title: "Claude Code skill",
-      sourceDir: context.sourceSkillDir,
-      destinationDir: skillDestination(
-        "claude-code",
-        context.scope,
-        context.cwd,
-        context.home,
-      ),
-      write: context.write,
-    }),
+    await ensureSkill(context, "claude-code", "Claude Code skill"),
     ...singleAgentAdvice(context, "claude-code"),
   ];
 }
 
 async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
-  const configPath = join(context.home, ".codex", "config.toml");
+  const configPath = join(context.codexHome, "config.toml");
   const snippet = buildCodexMcpToml(context.mcpCommand);
   const current = await readOptionalFile(configPath);
   if (hasCodexMcpContent(current)) {
@@ -280,50 +286,35 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
   };
 }
 
-async function ensureSkill(options: {
-  title: string;
-  sourceDir: string;
-  destinationDir: string;
-  write: boolean;
-}): Promise<StepResult> {
-  const destinationSkill = join(options.destinationDir, "SKILL.md");
-  if (existsSync(destinationSkill)) {
-    return {
-      title: options.title,
-      status: "skipped",
-      path: options.destinationDir,
-      detail: "existing kyoso-review skill kept",
-    };
-  }
-
-  const detail = [
-    `copy ${options.sourceDir}`,
-    `to   ${options.destinationDir}`,
-  ].join("\n");
-  if (!options.write) {
-    return {
-      title: options.title,
-      status: "dry-run",
-      path: options.destinationDir,
-      detail,
-    };
-  }
-
-  await mkdir(dirname(options.destinationDir), { recursive: true });
-  await cp(options.sourceDir, options.destinationDir, {
-    recursive: true,
-    force: false,
+async function ensureSkill(
+  context: SetupContext,
+  client: SetupClient,
+  title: string,
+): Promise<StepResult> {
+  const result = await ensureManagedSkill({
+    sourceDir: context.sourceSkillDir,
+    destinationDir: skillDestination(
+      client,
+      context.scope,
+      context.cwd,
+      context.home,
+    ),
+    trustedRoot: context.scope === "global" ? context.home : context.cwd,
+    write: context.write,
+    force: context.force,
   });
   return {
-    title: options.title,
-    status: "created",
-    path: options.destinationDir,
-    detail,
+    title,
+    ...result,
   };
 }
 
 function renderSetupOverview(context: SetupContext): string {
-  const detected = detectSetup({ cwd: context.cwd, home: context.home });
+  const detected = detectSetup({
+    cwd: context.cwd,
+    home: context.home,
+    codexHome: context.codexHome,
+  });
   return [
     "Kyoso setup",
     "",
@@ -332,8 +323,10 @@ function renderSetupOverview(context: SetupContext): string {
     `  claude-code: MCP ${statusWord(detected["claude-code"].mcp)}, skill ${statusWord(detected["claude-code"].skill)}`,
     "",
     "Commands",
-    "  kyoso setup codex [--write] [--runner npx|bunx] [--global]",
-    "  kyoso setup claude-code [--write] [--runner npx|bunx] [--global]",
+    "  kyoso setup codex [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]",
+    "  kyoso setup claude-code [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]",
+    "  kyoso setup codex --skill-only [--write] [--global] [--force]",
+    "  kyoso setup claude-code --skill-only [--write] [--global] [--force]",
     "",
     `Default MCP command: ${context.mcpCommand.command} ${context.mcpCommand.args.join(" ")}`,
     "Dry-run is the default. Add --write to modify files.",
@@ -357,6 +350,30 @@ function parseClient(client: string | undefined): SetupClient | undefined {
   throw new Error(
     `Invalid setup client "${client}". Expected codex or claude-code.`,
   );
+}
+
+function validateSkillOnlyOptions(
+  options: SetupOptions,
+  client: SetupClient | undefined,
+): void {
+  if (!options.skillOnly) return;
+  if (!client) {
+    throw new Error("--skill-only requires setup client codex or claude-code.");
+  }
+  if (options.runner !== undefined) {
+    throw new Error("--skill-only cannot be combined with --runner.");
+  }
+  if (options.command !== undefined) {
+    throw new Error("--skill-only cannot be combined with --command.");
+  }
+}
+
+function resolveCodexHome(
+  cwd: string,
+  home: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  return env.CODEX_HOME ? resolve(cwd, env.CODEX_HOME) : join(home, ".codex");
 }
 
 function parseRunner(runner: string | undefined): SetupRunner {

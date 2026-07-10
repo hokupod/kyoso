@@ -43,6 +43,7 @@
     "lint": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "plugin:runtime:verify": "node scripts/plugin-runtime-probe.mjs --expect docs/compatibility/codex-plugin-runtime.json",
     "pack:verify": "node scripts/verify-pack.mjs",
     "prepack": "bun run build"
   },

@@ -25,6 +25,94 @@ describe("e2e surfaces", () => {
     expect(stdout).toContain(
       "[--set <key>=<value>]... [--json] [--allow-secret-redaction]",
     );
+    expect(stdout).toContain(
+      "setup codex|claude-code --skill-only [--write] [--global] [--force]",
+    );
+  });
+
+  test("CLI parses --skill-only without producing an MCP step", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-skill-only-cli-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-skill-only-home-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "setup",
+        "codex",
+        "--skill-only",
+      ],
+      {
+        cwd,
+        env: { ...process.env, HOME: home, CODEX_HOME: join(home, "state") },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Codex skill: dry-run");
+    expect(stdout).not.toContain("Codex MCP");
+  });
+
+  test("CLI parses --force and rejects invalid --skill-only combinations", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-skill-force-cli-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-skill-force-home-"));
+    const skillDir = join(cwd, ".agents", "skills", "kyoso-review");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "user copy", "utf8");
+
+    const forced = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "setup",
+        "codex",
+        "--skill-only",
+        "--force",
+      ],
+      {
+        cwd,
+        env: { ...process.env, HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const forcedOutput = await new Response(forced.stdout).text();
+    expect(await forced.exited).toBe(0);
+    expect(forcedOutput).toContain("Codex skill: dry-run");
+    expect(forcedOutput).toContain("force replace");
+
+    for (const args of [
+      ["setup", "--skill-only"],
+      ["setup", "codex", "--skill-only", "--runner", "npx"],
+      ["setup", "codex", "--skill-only", "--command", "node server.js"],
+    ]) {
+      const invalid = Bun.spawn(
+        ["bun", "run", join(process.cwd(), "src/cli/main.ts"), ...args],
+        {
+          cwd,
+          env: { ...process.env, HOME: home },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      expect(await invalid.exited).toBe(1);
+      expect(await new Response(invalid.stderr).text()).toContain(
+        args.includes("--runner")
+          ? "cannot be combined with --runner"
+          : args.includes("--command")
+            ? "cannot be combined with --command"
+            : "requires setup client",
+      );
+    }
   });
 
   test("CLI JSON exposes skipped untrusted config warnings", async () => {

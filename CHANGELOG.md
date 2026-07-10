@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Codex Marketplace fixture with a version-pinned local stdio MCP, bundled
+  `kyoso-review` Skill, isolated runtime probe, and compatibility records for
+  Codex CLI 0.144.0-alpha.4 and 0.144.1.
+- `kyoso setup codex|claude-code --skill-only` for installing the canonical
+  Skill without reading or writing MCP configuration. The setup surface also
+  supports `--force` for Skill-only replacement and rejects MCP-only option
+  combinations.
+- Managed Skill updates with deterministic directory digests,
+  `.kyoso-install.json`, published 0.8.0 legacy adoption, user-change conflict
+  detection, symlink rejection, and staged backup/rename replacement.
+
+### Changed
+
+- Recover interrupted managed-Skill replacements from a fixed backup, fail
+  closed on ambiguous recovery state, and guard rename operations against
+  parent-directory replacement.
+- The bundled Skill now tries Kyoso MCP tools, an installed `kyoso` on `PATH`,
+  `npx`, then `bunx`, and no longer declares MCP as a required dependency.
+- Codex MCP configuration resolves from `CODEX_HOME`, while global Codex Skill
+  installation continues to resolve from `HOME`.
+
 ## [0.8.0] - 2026-07-10
 
 ### Added

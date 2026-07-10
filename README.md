@@ -34,6 +34,48 @@ With a single backend enabled, one agent runs as `combined_reviewer` instead of 
 
 No global install is required. Run Kyoso through `npx` or `bunx`.
 
+### Integration modes
+
+| Mode                | Installs                           | MCP | Clients             |
+| ------------------- | ---------------------------------- | --: | ------------------- |
+| Marketplace Plugin  | Skill plus local stdio MCP         | Yes | Codex               |
+| CLI plus Skill-only | npm CLI plus Skill                 |  No | Codex / Claude Code |
+| Manual setup        | Manual MCP registration plus Skill | Yes | Codex / Claude Code |
+
+#### Codex Marketplace Plugin
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin list --marketplace kyoso --available --json
+codex plugin add kyoso@kyoso
+codex plugin list --marketplace kyoso --json
+```
+
+You can also select Kyoso from the Codex desktop Plugins page or `/plugins`. Refresh or restart the desktop app if a newly added marketplace is not visible. Remove the Plugin with `codex plugin remove kyoso@kyoso`.
+
+The Plugin bundles the Skill and an MCP definition pinned to `@kyo-so/cli@0.8.0`; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
+
+#### CLI plus Skill-only
+
+```bash
+# Global CLI and Codex Skill
+npm install -g @kyo-so/cli
+kyoso setup codex --write --skill-only --global
+
+# Project CLI and Codex Skill
+npm install -D @kyo-so/cli
+npx kyoso setup codex --write --skill-only
+```
+
+Replace `codex` with `claude-code` for Claude Code. Dry-run remains the default. `--skill-only` never reads or writes MCP configuration and cannot be combined with `--runner` or `--command`.
+
+#### Migration
+
+- Manual MCP to CLI plus Skill: install the CLI and Skill first, then run `codex mcp remove kyoso` or `claude mcp remove kyoso --scope local|project|user`.
+- CLI plus Skill to Plugin: add the Plugin, confirm it is enabled, then remove the manual MCP registration. Manually copied Skills are not removed automatically.
+- Plugin to CLI plus Skill: install the CLI and Skill first, then run `codex plugin remove kyoso@kyoso`.
+- CLI plus Skill back to manual MCP: run `kyoso setup codex --write` or `kyoso setup claude-code --write`.
+
 ### Claude Only / Codex Only
 
 Kyoso can run when only Claude or only Codex is available. Disable the missing backend in `kyoso.toml` using `examples/claude-only.toml` or `examples/codex-only.toml`.
@@ -142,6 +184,8 @@ kyoso doctor
 kyoso init
 kyoso setup codex
 kyoso setup claude-code
+kyoso setup codex --skill-only
+kyoso setup claude-code --skill-only
 ```
 
 ## Usage Examples
@@ -204,11 +248,13 @@ MCP stdout is reserved for protocol messages. Logs go to stderr or local audit t
 
 The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
 
-The skill prefers the Kyoso MCP tools when available. If the MCP server is not registered, it follows its documented CLI fallback and requests JSON output from `npx -y @kyo-so/cli` or `bunx @kyo-so/cli`.
+The Skill uses the first available path: Kyoso MCP tools, an installed `kyoso` on `PATH`, `npx -y @kyo-so/cli`, then `bunx @kyo-so/cli`. The package-runner fallbacks may need network access and can drift to a newer version, so an installed CLI is the normal MCP-less path.
 
-`npx @kyo-so/cli setup codex --write` and `bunx @kyo-so/cli setup codex --write` copy it to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
+`kyoso setup codex --write --skill-only` copies the canonical Skill directory to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
 
-`npx @kyo-so/cli setup claude-code --write` and `bunx @kyo-so/cli setup claude-code --write` copy it to `.claude/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.claude/skills/kyoso-review/`.
+`kyoso setup claude-code --write --skill-only` copies it to `.claude/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.claude/skills/kyoso-review/`.
+
+Managed installs record the canonical directory digest and CLI version in `.kyoso-install.json`. Exact current or known historical copies are adopted and updated automatically. A changed or unknown copy is reported as a conflict and left untouched; `--force` replaces only that Skill directory and never removes or overwrites MCP configuration.
 
 ## Safety Model
 

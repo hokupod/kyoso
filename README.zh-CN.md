@@ -36,6 +36,48 @@ Kyoso 不会应用代码更改。
 
 无需全局安装。通过 `npx` 或 `bunx` 运行 Kyoso。
 
+### 集成模式
+
+| 模式               | 安装内容             | MCP | 客户端             |
+| ------------------ | -------------------- | --: | ------------------ |
+| Marketplace Plugin | Skill＋本地stdio MCP |  有 | Codex              |
+| CLI＋Skill-only    | npm CLI＋Skill       |  无 | Codex／Claude Code |
+| 手动setup          | 手动MCP注册＋Skill   |  有 | Codex／Claude Code |
+
+#### Codex Marketplace Plugin
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin list --marketplace kyoso --available --json
+codex plugin add kyoso@kyoso
+codex plugin list --marketplace kyoso --json
+```
+
+也可以在Codex desktop的Plugins page或`/plugins`中选择Kyoso。若新添加的Marketplace未显示，请refresh／restart desktop app。使用`codex plugin remove kyoso@kyoso`删除Plugin。
+
+Plugin包含Skill和pin到`@kyo-so/cli@0.8.0`的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
+
+#### CLI＋Skill-only
+
+```bash
+# Global CLI＋Codex Skill
+npm install -g @kyo-so/cli
+kyoso setup codex --write --skill-only --global
+
+# Project CLI＋Codex Skill
+npm install -D @kyo-so/cli
+npx kyoso setup codex --write --skill-only
+```
+
+Claude Code请将`codex`替换为`claude-code`。默认仍为dry-run。`--skill-only`不会读写MCP配置，也不能与`--runner`／`--command`组合使用。
+
+#### 迁移
+
+- 从手动MCP迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex mcp remove kyoso`或`claude mcp remove kyoso --scope local|project|user`。
+- 从CLI＋Skill迁移到Plugin：添加Plugin并确认enabled后，再删除手动MCP注册。手动复制的Skill不会自动删除。
+- 从Plugin迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex plugin remove kyoso@kyoso`。
+- 从CLI＋Skill恢复到手动MCP：运行`kyoso setup codex --write`或`kyoso setup claude-code --write`。
+
 ### Claude Only / Codex Only
 
 Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.toml` 中禁用缺失的 backend；示例见 `examples/claude-only.toml` 和 `examples/codex-only.toml`。
@@ -141,6 +183,8 @@ kyoso doctor
 kyoso init
 kyoso setup codex
 kyoso setup claude-code
+kyoso setup codex --skill-only
+kyoso setup claude-code --skill-only
 ```
 
 ## Usage Examples
@@ -203,11 +247,13 @@ MCP stdout 专用于 protocol messages。Logs 会写到 stderr 或 local audit t
 
 内置的 `kyoso-review` skill 有意保持范围很窄。只有当你明确请求 Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review 或 diff review 时，才应触发它。
 
-当 Kyoso MCP tools 可用时，skill 会优先使用它们。如果尚未注册 MCP server，skill 会按照文档中的 CLI fallback，通过 `npx -y @kyo-so/cli` 或 `bunx @kyo-so/cli` 获取 JSON output。
+Skill使用第一个可用路径，顺序是Kyoso MCP tools、PATH上已安装的`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`。package runner fallback可能需要network access，也可能发生version drift，因此MCP-less正常路径应使用已安装CLI。
 
-`npx @kyo-so/cli setup codex --write` 和 `bunx @kyo-so/cli setup codex --write` 默认将其复制到 `.agents/skills/kyoso-review/`。添加 `--global` 会复制到 `~/.agents/skills/kyoso-review/`。
+`kyoso setup codex --write --skill-only`默认将canonical Skill directory复制到`.agents/skills/kyoso-review/`。添加`--global`后复制到`~/.agents/skills/kyoso-review/`。
 
-`npx @kyo-so/cli setup claude-code --write` 和 `bunx @kyo-so/cli setup claude-code --write` 默认将其复制到 `.claude/skills/kyoso-review/`。添加 `--global` 会复制到 `~/.claude/skills/kyoso-review/`。
+`kyoso setup claude-code --write --skill-only`默认复制到`.claude/skills/kyoso-review/`。添加`--global`后复制到`~/.claude/skills/kyoso-review/`。
+
+managed install会把canonical directory digest和CLI version记录到`.kyoso-install.json`。当前或已知historical copy会被adopt并自动更新；修改过或未知的copy会报告conflict并保持不变。`--force`只替换该Skill directory，不会删除或覆盖MCP配置。
 
 ## Safety Model
 

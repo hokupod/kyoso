@@ -1,8 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { CURRENT_SKILL_DIGEST } from "../../src/cli/knownSkillDigests.js";
+import { KYOSO_VERSION } from "../../src/core/constants.js";
 import {
   buildCodexMcpToml,
   buildClaudeMcpEntry,
@@ -11,6 +23,20 @@ import {
   runSetup,
   skillDestination,
 } from "../../src/cli/setup.js";
+import {
+  ensureManagedSkill,
+  hashSkillDirectory,
+  SKILL_INSTALL_BACKUP,
+  SKILL_INSTALL_MARKER,
+  SKILL_INSTALL_TRANSACTION,
+} from "../../src/cli/skillInstall.js";
+
+const historicalSkillDir = resolve(
+  import.meta.dir,
+  "..",
+  "fixtures",
+  "skill-v0.8.0",
+);
 
 describe("setup", () => {
   test("builds npx and bunx MCP commands", () => {
@@ -69,6 +95,22 @@ describe("setup", () => {
         join(skillDestination("codex", "project", cwd, home), "SKILL.md"),
       ),
     ).toBe(true);
+    expect(
+      JSON.parse(
+        await readFile(
+          join(
+            skillDestination("codex", "project", cwd, home),
+            SKILL_INSTALL_MARKER,
+          ),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      schemaVersion: 1,
+      installer: "@kyo-so/cli",
+      cliVersion: KYOSO_VERSION,
+      digest: CURRENT_SKILL_DIGEST,
+    });
   });
 
   test("merges Claude Code project MCP without removing existing servers", async () => {
@@ -126,7 +168,7 @@ describe("setup", () => {
     ).toBe(true);
   });
 
-  test("keeps existing setup entries", async () => {
+  test("reports a conflict for an unrecognized existing skill", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-skip-");
     await mkdir(join(home, ".codex"), { recursive: true });
     await writeFile(
@@ -147,8 +189,357 @@ describe("setup", () => {
     });
 
     expect(output).toContain("Codex MCP: skipped");
-    expect(output).toContain("Codex skill: skipped");
+    expect(output).toContain("Codex skill: conflict");
+    expect(output).toContain("Rerun with --force");
     expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe("existing");
+  });
+
+  test("writes only the Codex skill when --skill-only is selected", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-skill-only-");
+    const codexHome = join(home, "separate-codex-home");
+    const configPath = join(codexHome, "config.toml");
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(configPath, "not valid toml [[", "utf8");
+
+    const output = await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home, CODEX_HOME: codexHome },
+    });
+
+    const destination = skillDestination("codex", "project", cwd, home);
+    expect(output).toContain("Codex skill: created");
+    expect(output).not.toContain("Codex MCP");
+    expect(await readFile(configPath, "utf8")).toBe("not valid toml [[");
+    expect(existsSync(join(destination, "SKILL.md"))).toBe(true);
+    expect(existsSync(join(destination, "agents", "openai.yaml"))).toBe(true);
+    expect(existsSync(join(destination, SKILL_INSTALL_MARKER))).toBe(true);
+  });
+
+  test("requires a client and rejects MCP-only options for --skill-only", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-skill-flags-");
+    const base = {
+      cwd,
+      write: false,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+
+    await expect(runSetup(base)).rejects.toThrow("requires setup client");
+    await expect(
+      runSetup({ ...base, client: "codex", runner: "bunx" }),
+    ).rejects.toThrow("cannot be combined with --runner");
+    await expect(
+      runSetup({ ...base, client: "codex", command: "node server.js" }),
+    ).rejects.toThrow("cannot be combined with --command");
+  });
+
+  test("shows Skill-only syntax in setup overview and every README", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-overview-");
+    const overview = await runSetup({
+      cwd,
+      write: false,
+      global: false,
+      env: { HOME: home },
+    });
+    expect(overview).toContain(
+      "kyoso setup codex --skill-only [--write] [--global] [--force]",
+    );
+    expect(overview).toContain(
+      "kyoso setup claude-code --skill-only [--write] [--global] [--force]",
+    );
+
+    for (const readme of ["README.md", "README.ja.md", "README.zh-CN.md"]) {
+      const content = await readFile(join(process.cwd(), readme), "utf8");
+      expect(content).toContain(
+        "kyoso setup codex --write --skill-only --global",
+      );
+      expect(content).toContain("kyoso setup claude-code --write --skill-only");
+    }
+  });
+
+  test("adopts and updates the published 0.8.0 skill", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-adopt-");
+    const destination = skillDestination("codex", "project", cwd, home);
+    await mkdir(join(destination, ".."), { recursive: true });
+    await cp(historicalSkillDir, destination, { recursive: true });
+
+    expect(await hashSkillDirectory(destination)).toBe(
+      "sha256:b16ea3f8141a01399b96dee650365d99df2b8c5fc99184d9cb22d5d72c106fd8",
+    );
+    const output = await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    });
+
+    expect(output).toContain("Codex skill: updated");
+    expect(output).toContain("adopt known 0.8.0 historical skill");
+    expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
+    expect(existsSync(join(destination, SKILL_INSTALL_MARKER))).toBe(true);
+  });
+
+  test("detects managed user changes and --force replaces only the skill", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-force-");
+    const configPath = join(home, ".codex", "config.toml");
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(configPath, "user config", "utf8");
+    const options = {
+      cwd,
+      client: "codex" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("codex", "project", cwd, home);
+    await writeFile(join(destination, "SKILL.md"), "user change", "utf8");
+
+    const conflict = await runSetup(options);
+    expect(conflict).toContain("Codex skill: conflict");
+    expect(conflict).toContain("managed digest");
+    expect(await readFile(join(destination, "SKILL.md"), "utf8")).toBe(
+      "user change",
+    );
+
+    const forced = await runSetup({ ...options, force: true });
+    expect(forced).toContain("Codex skill: updated");
+    expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
+    expect(await readFile(configPath, "utf8")).toBe("user config");
+    expect(
+      (await readdir(join(destination, ".."))).some(
+        (name) =>
+          name.startsWith(".kyoso-review.stage-") ||
+          name === SKILL_INSTALL_BACKUP ||
+          name === SKILL_INSTALL_TRANSACTION,
+      ),
+    ).toBe(false);
+  });
+
+  test("recovers a hard-killed replacement before applying another update", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-recover-");
+    const options = {
+      cwd,
+      client: "codex" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("codex", "project", cwd, home);
+    const backup = join(destination, "..", SKILL_INSTALL_BACKUP);
+    await writeFile(join(destination, "SKILL.md"), "preserve me", "utf8");
+    await rename(destination, backup);
+    await writeInterruptedTransaction(destination);
+
+    const dryRun = await runSetup({ ...options, write: false });
+    expect(dryRun).toContain("Codex skill: dry-run");
+    expect(dryRun).toContain("recover interrupted skill replacement");
+    expect(existsSync(destination)).toBe(false);
+    expect(await readFile(join(backup, "SKILL.md"), "utf8")).toBe(
+      "preserve me",
+    );
+
+    const recovered = await runSetup(options);
+    expect(recovered).toContain("Codex skill: updated");
+    expect(recovered).toContain("recovered interrupted skill replacement");
+    expect(await readFile(join(destination, "SKILL.md"), "utf8")).toBe(
+      "preserve me",
+    );
+    expect(existsSync(backup)).toBe(false);
+  });
+
+  test("fails closed when an interrupted backup and destination both exist", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-ambiguous-");
+    const options = {
+      cwd,
+      client: "codex" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("codex", "project", cwd, home);
+    const backup = join(destination, "..", SKILL_INSTALL_BACKUP);
+    await cp(destination, backup, { recursive: true });
+    await writeFile(join(backup, "SKILL.md"), "backup copy", "utf8");
+    await writeInterruptedTransaction(destination);
+
+    await expect(runSetup(options)).rejects.toThrow(
+      "Interrupted Skill replacement is ambiguous",
+    );
+    expect(existsSync(destination)).toBe(true);
+    expect(await readFile(join(backup, "SKILL.md"), "utf8")).toBe(
+      "backup copy",
+    );
+  });
+
+  test("does not adopt an unmarked fixed-name backup", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-unmarked-backup-");
+    const destination = skillDestination("codex", "project", cwd, home);
+    const backup = join(destination, "..", SKILL_INSTALL_BACKUP);
+    await mkdir(backup, { recursive: true });
+    await writeFile(join(backup, "SKILL.md"), "unrelated", "utf8");
+
+    await expect(
+      runSetup({
+        cwd,
+        client: "codex",
+        write: true,
+        global: false,
+        skillOnly: true,
+        env: { HOME: home },
+      }),
+    ).rejects.toThrow("transaction marker is not a regular file");
+    expect(existsSync(destination)).toBe(false);
+    expect(await readFile(join(backup, "SKILL.md"), "utf8")).toBe("unrelated");
+  });
+
+  test("cleans a transaction marker left after the replacement committed", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-marker-cleanup-");
+    const options = {
+      cwd,
+      client: "codex" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("codex", "project", cwd, home);
+    const transaction = join(destination, "..", SKILL_INSTALL_TRANSACTION);
+    await writeInterruptedTransaction(destination);
+
+    const dryRun = await runSetup({ ...options, write: false });
+    expect(dryRun).toContain("Codex skill: dry-run");
+    expect(dryRun).toContain("clean completed Skill replacement marker");
+    expect(existsSync(transaction)).toBe(true);
+
+    const cleaned = await runSetup(options);
+    expect(cleaned).toContain("Codex skill: updated");
+    expect(cleaned).toContain("cleaned completed Skill replacement marker");
+    expect(existsSync(transaction)).toBe(false);
+    expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
+  });
+
+  test("does not trust an invalid managed marker", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-invalid-marker-");
+    const options = {
+      cwd,
+      client: "codex" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("codex", "project", cwd, home);
+    await writeFile(
+      join(destination, SKILL_INSTALL_MARKER),
+      '{"schemaVersion":2}\n',
+      "utf8",
+    );
+
+    const output = await runSetup(options);
+    expect(output).toContain("Codex skill: conflict");
+    expect(output).toContain("has an invalid schema");
+    expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
+  });
+
+  test("adopts a current legacy copy without replacing its files", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-current-adopt-");
+    const options = {
+      cwd,
+      client: "claude-code" as const,
+      write: true,
+      global: false,
+      skillOnly: true,
+      env: { HOME: home },
+    };
+    await runSetup(options);
+    const destination = skillDestination("claude-code", "project", cwd, home);
+    await rm(join(destination, SKILL_INSTALL_MARKER));
+
+    const output = await runSetup(options);
+    expect(output).toContain("Claude Code skill: updated");
+    expect(output).toContain("adopt existing 0.8.0 skill");
+    expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
+  });
+
+  test("does not add a managed marker when canonical source is the destination", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kyoso-setup-canonical-self-"));
+    const destination = join(root, ".agents", "skills", "kyoso-review");
+    await mkdir(join(root, ".agents", "skills"), { recursive: true });
+    await cp(
+      join(process.cwd(), ".agents", "skills", "kyoso-review"),
+      destination,
+      { recursive: true },
+    );
+
+    const result = await ensureManagedSkill({
+      sourceDir: destination,
+      destinationDir: destination,
+      trustedRoot: root,
+      write: true,
+      force: true,
+    });
+
+    expect(result.status).toBe("skipped");
+    expect(result.detail).toContain(
+      "canonical source is already the destination",
+    );
+    expect(existsSync(join(destination, SKILL_INSTALL_MARKER))).toBe(false);
+  });
+
+  test("rejects symlinks in the destination path", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-symlink-");
+    const outside = join(home, "outside");
+    await mkdir(outside);
+    await symlink(outside, join(cwd, ".agents"));
+
+    await expect(
+      runSetup({
+        cwd,
+        client: "codex",
+        write: true,
+        global: false,
+        skillOnly: true,
+        env: { HOME: home },
+      }),
+    ).rejects.toThrow("contains a symlink");
+    expect(existsSync(join(outside, "skills"))).toBe(false);
+  });
+
+  test("uses CODEX_HOME for MCP while global Codex skill stays under HOME", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-codex-home-");
+    const codexHome = join(cwd, "codex-state");
+    await mkdir(codexHome);
+
+    await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: true,
+      env: { HOME: home, CODEX_HOME: codexHome },
+    });
+
+    expect(existsSync(join(codexHome, "config.toml"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "config.toml"))).toBe(false);
+    expect(
+      existsSync(
+        join(skillDestination("codex", "global", cwd, home), "SKILL.md"),
+      ),
+    ).toBe(true);
   });
 
   test("detects quoted Codex MCP table and nested Claude MCP config", async () => {
@@ -218,4 +609,21 @@ async function setupTempDirs(prefix: string): Promise<{
   await mkdir(cwd, { recursive: true });
   await mkdir(home, { recursive: true });
   return { cwd, home };
+}
+
+async function writeInterruptedTransaction(destination: string): Promise<void> {
+  await writeFile(
+    join(destination, "..", SKILL_INSTALL_TRANSACTION),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        installer: "@kyo-so/cli",
+        destinationName: "kyoso-review",
+        backupName: SKILL_INSTALL_BACKUP,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }

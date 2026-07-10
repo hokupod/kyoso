@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-10
+
+### Added
+
+- Repeatable `--set <config-key>=<value>` option on the `plan`, `security`,
+  and `diff` commands for overriding config values such as
+  `agents.<agent>.model`, `agents.<agent>.effort`, and `timeoutMs` from the
+  command line. Overrides are restricted to the shared project-scope
+  allowlist, applied after config files (including with `--ignore-config`),
+  and schema-validated.
+- CLI fallback in the bundled `kyoso-review` skill: when the Kyoso MCP
+  server is not registered, the skill falls back to
+  `npx`/`bunx @kyo-so/cli plan|security|diff --json`. The fallback runs
+  without config trust flags first and requires user confirmation before
+  `--trust-config` or `--ignore-config`. Documented in all README languages.
+
 ## [0.7.1] - 2026-07-09
 
 ### Changed

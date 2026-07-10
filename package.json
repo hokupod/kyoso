@@ -1,6 +1,6 @@
 {
   "name": "@kyo-so/cli",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Kyo-so: MCP-native, ACP-powered multi-agent review gates for AI coding workflows.",
   "license": "AGPL-3.0-or-later",
   "repository": {

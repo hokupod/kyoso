@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cp,
   chmod,
   mkdir,
   mkdtemp,
@@ -13,8 +14,14 @@ import { join } from "node:path";
 import { type CodexPluginInspection } from "../../src/cli/codexPluginDetector.js";
 import { runDoctor } from "../../src/cli/doctor.js";
 import { detectCli } from "../../src/cli/integration.js";
+import {
+  CURRENT_SKILL_DIGEST,
+  knownSkillDigest,
+} from "../../src/cli/knownSkillDigests.js";
 import { runSetup } from "../../src/cli/setup.js";
+import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
 
+const repositoryRoot = process.cwd();
 const pluginUnsupported: CodexPluginInspection = {
   status: "unsupported",
   failure: { operation: "plugin_list", reason: "unavailable" },
@@ -206,8 +213,15 @@ describe("doctor integration modes", () => {
     );
   });
 
-  test("confirms a disabled Plugin MCP override with the effective MCP list", async () => {
+  test("reports remediation for a disabled Plugin MCP without digest-checking transformed local Plugin source", async () => {
     const context = await doctorFixture();
+    const pluginSkill = await copyPluginSourceFixture(context);
+    const digest = await hashSkillDirectory(pluginSkill);
+    expect(
+      await readFile(join(pluginSkill, "agents", "openai.yaml"), "utf8"),
+    ).toContain("dependencies:");
+    expect(digest).not.toBe(CURRENT_SKILL_DIGEST);
+    expect(knownSkillDigest(digest)).toBeUndefined();
     await mkdir(context.codexHome, { recursive: true });
     await writeFile(
       join(context.codexHome, "config.toml"),
@@ -229,6 +243,11 @@ describe("doctor integration modes", () => {
 
     expect(output).toContain("Codex integration: plugin-skill");
     expect(output).toContain("Plugin MCP: disabled");
+    expect(output).toContain(
+      "status: bundled Plugin MCP is disabled; re-enable it or remove the Plugin and use CLI plus Skill-only.",
+    );
+    expect(output).not.toContain("unmanaged skill digest");
+    expect(output).not.toContain("Plugin Skill and manual Skill copy coexist");
     expect(mcpListCalls).toBe(1);
   });
 
@@ -506,6 +525,24 @@ async function createSkill(
       : join(context.cwd, ".claude", "skills", "kyoso-review");
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "SKILL.md"), "skill", "utf8");
+}
+
+async function copyPluginSourceFixture(
+  context: DoctorFixture,
+): Promise<string> {
+  await mkdir(join(context.cwd, ".agents"), { recursive: true });
+  await mkdir(join(context.cwd, "plugins"), { recursive: true });
+  await cp(
+    join(repositoryRoot, ".agents", "plugins"),
+    join(context.cwd, ".agents", "plugins"),
+    { recursive: true },
+  );
+  await cp(
+    join(repositoryRoot, "plugins", "kyoso"),
+    join(context.cwd, "plugins", "kyoso"),
+    { recursive: true },
+  );
+  return join(context.cwd, "plugins", "kyoso", "skills", "kyoso-review");
 }
 
 async function createInstalledCli(context: DoctorFixture): Promise<void> {

@@ -67,9 +67,23 @@
       }
     },
     "appServer": {
-      "serverFound": true,
-      "toolNames": ["probe_environment"],
-      "authStatus": "unsupported"
+      "default": {
+        "serverFound": true,
+        "toolNames": ["probe_environment"],
+        "authStatus": "unsupported",
+        "skillFound": false,
+        "skillEnabled": null,
+        "skillHasKyosoMcpDependency": false
+      },
+      "pluginOverride": {
+        "serverFound": true,
+        "toolNames": [],
+        "authStatus": "unsupported",
+        "skillFound": false,
+        "skillEnabled": null,
+        "skillHasKyosoMcpDependency": false,
+        "mcpObservationWritten": false
+      }
     },
     "environment": {
       "cwdIsWorkspace": true,
@@ -94,13 +108,13 @@
   "probes": [
     {
       "codexVersion": "0.144.0-alpha.4",
-      "verifiedAt": "2026-07-10",
+      "verifiedAt": "2026-07-11",
       "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
       "fixtureSchemaVersion": 1
     },
     {
       "codexVersion": "0.144.1",
-      "verifiedAt": "2026-07-10",
+      "verifiedAt": "2026-07-11",
       "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
       "fixtureSchemaVersion": 1
     }

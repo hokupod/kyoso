@@ -10,6 +10,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
@@ -22,9 +23,19 @@ export const repositoryRoot = resolve(
 );
 
 const pluginId = "kyoso@kyoso";
+const pluginMcpServerName = "kyoso";
 const canonicalSkillRelativePath = ".agents/skills/kyoso-review";
 const pluginSkillRelativePath = "plugins/kyoso/skills/kyoso-review";
 const pluginRootRelativePath = "plugins/kyoso";
+const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
+const pluginMcpDependencyBlock = [
+  "dependencies:",
+  "  tools:",
+  '    - type: "mcp"',
+  `      value: "${pluginMcpServerName}"`,
+  '      description: "Kyoso MCP server"',
+  '      transport: "stdio"',
+].join("\n");
 const allowedMcpEnvVars = [
   "OPENAI_API_KEY",
   "CODEX_API_KEY",
@@ -77,6 +88,26 @@ export function distributionPaths(root = repositoryRoot) {
     pluginSkill: join(root, pluginSkillRelativePath),
     runtimeContract: join(root, "src", "cli", "pluginRuntimeContract.ts"),
   };
+}
+
+/**
+ * Apply the Plugin-only Skill metadata contract to canonical Skill content.
+ * The canonical Skill remains MCP-optional for skill-only installation.
+ */
+function transformCanonicalToPlugin(relativePath, content) {
+  if (relativePath !== pluginOpenAiMetadataRelativePath) return content;
+
+  const metadata = content.toString("utf8");
+  if (metadata.endsWith(`${pluginMcpDependencyBlock}\n`)) return content;
+  if (/^dependencies:\s*$/m.test(metadata)) {
+    throw new Error(
+      `Canonical Skill ${relativePath} must not declare Plugin dependencies`,
+    );
+  }
+  return Buffer.from(
+    `${metadata.trimEnd()}\n\n${pluginMcpDependencyBlock}\n`,
+    "utf8",
+  );
 }
 
 /**
@@ -176,6 +207,7 @@ export function syncPluginSkill(root = repositoryRoot, options = {}) {
       force: false,
       recursive: true,
     });
+    applyCanonicalPluginTransforms(canonicalSkill, stage);
     assertSkillDirectoriesEqual(canonicalSkill, stage);
 
     if (existsSync(pluginSkill)) {
@@ -213,13 +245,20 @@ export function syncPluginSkill(root = repositoryRoot, options = {}) {
     }
   }
 
+  const canonicalDigest = hashSkillDirectory(canonicalSkill);
+  const pluginDigest = hashSkillDirectory(pluginSkill);
   return {
     destination: pluginSkill,
-    digest: hashSkillDirectory(canonicalSkill),
+    digest: canonicalDigest,
+    canonicalDigest,
+    pluginDigest,
   };
 }
 
-/** Assert canonical-to-mirror equality, including files excluded from install hashes. */
+/**
+ * Assert that the Plugin Skill matches canonical content after Plugin-only
+ * transforms, including files excluded from install hashes.
+ */
 export function assertPluginSkillMirror(root = repositoryRoot) {
   const { canonicalSkill, pluginSkill } = distributionPaths(root);
   assertSkillDirectoriesEqual(canonicalSkill, pluginSkill);
@@ -393,11 +432,15 @@ function validateMcp(mcp, failures) {
     failures.push("Plugin MCP config must be a JSON object");
     return { packageName: "", packageVersion: "" };
   }
-  if (Object.keys(mcp).length !== 1 || !isObject(mcp.kyoso)) {
-    failures.push("Plugin MCP config must be a direct map with only kyoso");
+  // The transform uses this same name for the Plugin Skill dependency, and
+  // the transform-aware mirror check verifies the generated metadata bytes.
+  if (Object.keys(mcp).length !== 1 || !isObject(mcp[pluginMcpServerName])) {
+    failures.push(
+      `Plugin MCP config must be a direct map with only ${pluginMcpServerName}`,
+    );
     return { packageName: "", packageVersion: "" };
   }
-  const server = mcp.kyoso;
+  const server = mcp[pluginMcpServerName];
   const allowedKeys = new Set([
     "command",
     "args",
@@ -511,15 +554,18 @@ function validateSkillMirror(paths, failures) {
   try {
     const sourceDigest = hashSkillDirectory(paths.canonicalSkill);
     const mirrorDigest = hashSkillDirectory(paths.pluginSkill);
+    const expectedPluginDigest = hashTransformedPluginSkillDirectory(
+      paths.canonicalSkill,
+    );
     const currentDigest = readCurrentSkillDigest(paths.root);
     if (sourceDigest !== currentDigest) {
       failures.push(
         `Canonical Skill digest ${sourceDigest} does not match CURRENT_SKILL_DIGEST ${currentDigest}`,
       );
     }
-    if (mirrorDigest !== currentDigest) {
+    if (mirrorDigest !== expectedPluginDigest) {
       failures.push(
-        `Plugin Skill digest ${mirrorDigest} does not match CURRENT_SKILL_DIGEST ${currentDigest}`,
+        `Plugin Skill digest ${mirrorDigest} does not match transformed canonical Skill digest ${expectedPluginDigest}`,
       );
     }
     assertSkillDirectoriesEqual(paths.canonicalSkill, paths.pluginSkill);
@@ -668,8 +714,21 @@ function validateRelativePath(root, value, label, failures) {
 }
 
 function hashSkillDirectory(directory) {
+  return hashSkillFiles(listSkillFiles(directory, { includeMarker: false }));
+}
+
+function hashTransformedPluginSkillDirectory(directory) {
+  return hashSkillFiles(
+    listSkillFiles(directory, { includeMarker: false }).map((file) => ({
+      ...file,
+      contents: transformCanonicalToPlugin(file.relativePath, file.contents),
+    })),
+  );
+}
+
+function hashSkillFiles(files) {
   const hash = createHash("sha256");
-  for (const file of listSkillFiles(directory, { includeMarker: false })) {
+  for (const file of files) {
     hash.update(file.relativePath);
     hash.update("\0");
     hash.update(String(file.contents.byteLength));
@@ -690,13 +749,29 @@ function assertSkillDirectoriesEqual(source, mirror) {
   for (let index = 0; index < sourceFiles.length; index += 1) {
     const canonical = sourceFiles[index];
     const plugin = mirrorFiles[index];
+    const expectedContents = transformCanonicalToPlugin(
+      canonical.relativePath,
+      canonical.contents,
+    );
     if (
       canonical.relativePath !== plugin.relativePath ||
-      !canonical.contents.equals(plugin.contents)
+      !expectedContents.equals(plugin.contents)
     ) {
       throw new Error(
-        `Plugin Skill mirror differs from canonical Skill at ${canonical.relativePath}`,
+        `Plugin Skill mirror differs from transformed canonical Skill at ${canonical.relativePath}`,
       );
+    }
+  }
+}
+
+function applyCanonicalPluginTransforms(source, destination) {
+  for (const file of listSkillFiles(source, { includeMarker: true })) {
+    const transformed = transformCanonicalToPlugin(
+      file.relativePath,
+      file.contents,
+    );
+    if (!transformed.equals(file.contents)) {
+      writeFileSync(join(destination, file.relativePath), transformed);
     }
   }
 }

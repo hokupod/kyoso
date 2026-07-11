@@ -76,9 +76,23 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
     },
   },
   appServer: {
-    serverFound: true,
-    toolNames: ["probe_environment"],
-    authStatus: "unsupported",
+    default: {
+      serverFound: true,
+      toolNames: ["probe_environment"],
+      authStatus: "unsupported",
+      skillFound: false,
+      skillEnabled: null,
+      skillHasKyosoMcpDependency: false,
+    },
+    pluginOverride: {
+      serverFound: true,
+      toolNames: [],
+      authStatus: "unsupported",
+      skillFound: false,
+      skillEnabled: null,
+      skillHasKyosoMcpDependency: false,
+      mcpObservationWritten: false,
+    },
   },
   environment: {
     cwdIsWorkspace: true,

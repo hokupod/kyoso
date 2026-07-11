@@ -333,6 +333,11 @@ function verifyPackedSkillOnlySetup(binPath, tempDir, packageVersion) {
   if (!existsSync(join(skillDir, "SKILL.md")) || !existsSync(metadataPath)) {
     throw new Error("packed Skill-only setup omitted canonical Skill files");
   }
+  if (readFileSync(metadataPath, "utf8").includes("dependencies:")) {
+    throw new Error(
+      "packed Skill-only setup unexpectedly included a Plugin MCP dependency",
+    );
+  }
   const marker = JSON.parse(readFileSync(markerPath, "utf8"));
   if (
     marker.installer !== "@kyo-so/cli" ||

@@ -1676,7 +1676,22 @@ policy:
   allow_implicit_invocation: false
 ```
 
-The MCP dependency is intentionally absent. Explicit invocation remains disabled by policy, while the Skill can select an installed CLI or package-runner fallback when MCP is unavailable.
+This is the canonical metadata bundled with npm and copied by `--skill-only`; its MCP dependency is intentionally absent. Explicit invocation remains disabled by policy, while the Skill can select an installed CLI or package-runner fallback when MCP is unavailable.
+
+The Marketplace Plugin mirror is generated from this canonical directory by `scripts/plugin-distribution.mjs`. It appends only the following Plugin-specific dependency to `agents/openai.yaml`:
+
+```yaml
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "kyoso"
+      description: "Kyoso MCP server"
+      transport: "stdio"
+```
+
+The dependency `value` must match the server name in the Plugin `.mcp.json`. No other Plugin Skill file may differ from the canonical Skill.
+
+A Plugin with its bundled `kyoso` MCP disabled is not a CLI-fallback mode. Doctor directs users to re-enable that MCP or remove the Plugin and install the canonical CLI plus Skill-only distribution instead.
 
 ---
 

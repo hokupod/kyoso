@@ -55,6 +55,10 @@ You can also select Kyoso from the Codex desktop Plugins page or `/plugins`. Ref
 
 The Plugin bundles the Skill and an MCP definition pinned to an exact published Kyoso CLI version; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
 
+The Plugin Skill declares the bundled `kyoso` MCP server as a dependency, so explicit Kyoso reviews are directed through MCP rather than a CLI fallback. In Codex Auto mode, the first MCP invocation can still require approval because Kyoso tools do not declare annotations; choose "Allow and don't ask me again" to retain that approval.
+
+If you disable the bundled Plugin MCP, treat the Plugin Skill as unavailable: re-enable it, or remove the Plugin and install CLI plus Skill-only instead. The Plugin is not a CLI-fallback mode.
+
 #### CLI plus Skill-only
 
 ```bash
@@ -68,6 +72,8 @@ npx kyoso setup codex --write --skill-only
 ```
 
 Replace `codex` with `claude-code` for Claude Code. Dry-run remains the default. `--skill-only` never reads or writes MCP configuration and cannot be combined with `--runner` or `--command`.
+
+Skill-only intentionally does not declare an MCP dependency. When it reaches an `npx` or `bunx` package-runner fallback, Codex Auto mode can request a sandbox network escalation approval; installing `kyoso` on `PATH` avoids that fallback.
 
 #### Migration
 

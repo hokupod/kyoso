@@ -11,7 +11,6 @@ import {
 import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
 
 const root = process.cwd();
-
 describe("Codex Plugin fixture", () => {
   test("uses the fixed marketplace, plugin, and MCP identities", async () => {
     const packageMetadata = await readJson(join(root, "package.json"));
@@ -66,18 +65,33 @@ describe("Codex Plugin fixture", () => {
     expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  test("keeps the Plugin Skill identical to the canonical MCP-optional Skill", async () => {
+  test("keeps the Plugin MCP dependency separate from the canonical Skill", async () => {
     const canonical = join(root, ".agents", "skills", "kyoso-review");
     const plugin = join(root, "plugins", "kyoso", "skills", "kyoso-review");
+    const canonicalMetadata = await readFile(
+      join(canonical, "agents", "openai.yaml"),
+      "utf8",
+    );
+    const pluginMetadata = await readFile(
+      join(plugin, "agents", "openai.yaml"),
+      "utf8",
+    );
+    const canonicalSnapshot = await directorySnapshot(canonical);
 
     expect(await hashSkillDirectory(canonical)).toBe(CURRENT_SKILL_DIGEST);
-    expect(await hashSkillDirectory(plugin)).toBe(CURRENT_SKILL_DIGEST);
-    expect(await directorySnapshot(plugin)).toEqual(
-      await directorySnapshot(canonical),
-    );
+    expect(await hashSkillDirectory(plugin)).not.toBe(CURRENT_SKILL_DIGEST);
+    expect(canonicalMetadata).not.toContain("dependencies:");
     expect(
-      await readFile(join(canonical, "agents", "openai.yaml"), "utf8"),
-    ).not.toContain("dependencies:");
+      pluginMetadata.startsWith(`${canonicalMetadata.trimEnd()}\n\n`),
+    ).toBe(true);
+    expect(pluginMetadata).toContain("dependencies:");
+    expect(pluginMetadata).toContain('type: "mcp"');
+    expect(pluginMetadata).toContain('value: "kyoso"');
+    expect(pluginMetadata).toContain('transport: "stdio"');
+    expect(await directorySnapshot(plugin)).toEqual({
+      ...canonicalSnapshot,
+      "agents/openai.yaml": pluginMetadata,
+    });
   });
 
   test("records both probed Codex CLI versions and the minimum version", async () => {
@@ -104,6 +118,15 @@ describe("Codex Plugin fixture", () => {
     expect(compatibility.expectedContract.mcp.pluginOverride.envVars).toEqual(
       envVars,
     );
+    expect(compatibility.expectedContract.appServer.pluginOverride).toEqual({
+      serverFound: true,
+      toolNames: [],
+      authStatus: "unsupported",
+      skillFound: false,
+      skillEnabled: null,
+      skillHasKyosoMcpDependency: false,
+      mcpObservationWritten: false,
+    });
   });
 
   test("keeps the bundled runtime contract structurally synchronized with its record", async () => {
@@ -132,6 +155,45 @@ describe("Codex Plugin fixture", () => {
     expect(result.stdout).toContain("plugin skill mirror is synchronized");
   });
 
+  test("applies the Plugin Skill metadata transform idempotently", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { syncPluginSkill } from "./scripts/plugin-distribution.mjs";
+
+          const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-sync-idempotent-"));
+          try {
+            const skills = join(fixture, ".agents", "skills");
+            mkdirSync(skills, { recursive: true });
+            cpSync(".agents/skills/kyoso-review", join(skills, "kyoso-review"), { recursive: true });
+            const first = syncPluginSkill(fixture);
+            const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
+            const firstMetadata = readFileSync(metadataPath, "utf8");
+            const second = syncPluginSkill(fixture);
+            if (
+              first.canonicalDigest !== second.canonicalDigest ||
+              first.pluginDigest !== second.pluginDigest ||
+              firstMetadata !== readFileSync(metadataPath, "utf8")
+            ) {
+              throw new Error("Plugin Skill sync is not idempotent");
+            }
+          } finally {
+            rmSync(fixture, { force: true, recursive: true });
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   test("rejects a hand-edited Plugin Skill mirror", () => {
     const result = spawnSync(
       "node",
@@ -139,7 +201,7 @@ describe("Codex Plugin fixture", () => {
         "--input-type=module",
         "--eval",
         `
-          import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+          import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
           import { tmpdir } from "node:os";
           import { join } from "node:path";
           import { assertPluginSkillMirror } from "./scripts/plugin-distribution.mjs";
@@ -148,11 +210,15 @@ describe("Codex Plugin fixture", () => {
           try {
             cpSync(".agents/skills", join(fixture, ".agents", "skills"), { recursive: true });
             cpSync("plugins/kyoso/skills", join(fixture, "plugins", "kyoso", "skills"), { recursive: true });
-            writeFileSync(join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "SKILL.md"), "manual edit");
+            const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
+            writeFileSync(
+              metadataPath,
+              readFileSync(metadataPath, "utf8").replace('value: "kyoso"', 'value: "other"'),
+            );
             assertPluginSkillMirror(fixture);
             process.exitCode = 1;
           } catch (error) {
-            if (!String(error).includes("Plugin Skill mirror differs from canonical Skill")) {
+            if (!String(error).includes("Plugin Skill mirror differs from transformed canonical Skill")) {
               throw error;
             }
           } finally {
@@ -193,7 +259,7 @@ describe("Codex Plugin fixture", () => {
               });
               process.exitCode = 1;
             } catch (error) {
-              if (!String(error).includes("Plugin Skill mirror differs from canonical Skill")) {
+              if (!String(error).includes("Plugin Skill mirror differs from transformed canonical Skill")) {
                 throw error;
               }
             }

@@ -11,8 +11,12 @@ if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) {
 
 if (args[0] === "--check") {
   const result = assertPluginSkillMirror(repositoryRoot);
-  console.log(`plugin skill mirror is synchronized: ${result.canonicalDigest}`);
+  console.log(
+    `plugin skill mirror is synchronized: canonical=${result.canonicalDigest}; plugin=${result.pluginDigest}`,
+  );
 } else {
   const result = syncPluginSkill(repositoryRoot);
-  console.log(`plugin skill mirror synchronized: ${result.digest}`);
+  console.log(
+    `plugin skill mirror synchronized: canonical=${result.canonicalDigest}; plugin=${result.pluginDigest}`,
+  );
 }

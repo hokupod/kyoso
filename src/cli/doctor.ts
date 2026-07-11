@@ -546,7 +546,7 @@ function integrationAdvice(
     return "status: ready";
   }
   if (mode === "plugin-skill") {
-    return "status: MCP disabled; verify an installed CLI or package-runner fallback.";
+    return "status: bundled Plugin MCP is disabled; re-enable it or remove the Plugin and use CLI plus Skill-only.";
   }
   if (mode === "cli-skill") {
     return "status: ready; MCP is optional for CLI plus Skill mode.";

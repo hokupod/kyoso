@@ -96,7 +96,7 @@ async function runProbe() {
     runCodexJson(["plugin", "list", "--marketplace", "kyoso", "--json"]),
   );
   const defaultMcp = mcpEntry(runCodexJson(["mcp", "list", "--json"]));
-  const appServerStatus = await runAppServerProbe();
+  const appServerStatus = await runAppServerProbe({ expectMcpLaunch: true });
   const observation = readJson(observationPath);
 
   setPluginEnabled(false);
@@ -107,6 +107,11 @@ async function runProbe() {
 
   appendConfig('[plugins."kyoso@kyoso".mcp_servers.kyoso]\nenabled = false\n');
   const pluginOverride = mcpEntry(runCodexJson(["mcp", "list", "--json"]));
+  rmSync(observationPath, { force: true });
+  const disabledAppServerStatus = await runAppServerProbe({
+    expectMcpLaunch: false,
+  });
+  const disabledMcpStarted = existsSync(observationPath);
 
   appendConfig(
     '[mcp_servers.kyoso]\ncommand = "manual-kyoso"\nargs = ["mcp"]\nenabled = true\n',
@@ -156,7 +161,13 @@ async function runProbe() {
         pluginOverride: summarizeMcp(pluginOverride),
         manualOverride: summarizeMcp(manualOverride),
       },
-      appServer: summarizeAppServerStatus(appServerStatus),
+      appServer: {
+        default: summarizeAppServerStatus(appServerStatus),
+        pluginOverride: {
+          ...summarizeAppServerStatus(disabledAppServerStatus),
+          mcpObservationWritten: disabledMcpStarted,
+        },
+      },
       environment: summarizeEnvironment(observation),
       isolation: {
         distinctHomeAndCodexHome: home !== codexHome,
@@ -224,7 +235,7 @@ function runCodexJson(args) {
   }
 }
 
-async function runAppServerProbe() {
+async function runAppServerProbe(options) {
   const child = spawn(
     "npx",
     [
@@ -280,9 +291,19 @@ async function runAppServerProbe() {
       method: "mcpServerStatus/list",
       params: { detail: "full" },
     });
-    const status = await responseFor(2, 30_000);
-    await waitForFile(observationPath, 10_000);
-    return status.result;
+    const mcpStatus = await responseFor(2, 30_000);
+    send({
+      id: 3,
+      method: "skills/list",
+      params: { cwds: [workspace], forceReload: true },
+    });
+    const skills = await responseFor(3, 30_000);
+    if (options.expectMcpLaunch) {
+      await waitForFile(observationPath, 10_000);
+    } else {
+      await delay(1_000);
+    }
+    return { mcpStatus: mcpStatus.result, skills: skills.result };
   } finally {
     child.stdin.end();
     child.kill("SIGTERM");
@@ -397,11 +418,23 @@ function summarizeMcp(entry) {
 }
 
 function summarizeAppServerStatus(result) {
-  const server = result?.data?.find((entry) => entry.name === "kyoso");
+  const server = result.mcpStatus?.data?.find(
+    (entry) => entry.name === "kyoso",
+  );
+  const skill = result.skills?.data
+    ?.flatMap((entry) => entry.skills ?? [])
+    .find((entry) => entry.name === "kyoso-review");
   return {
     serverFound: Boolean(server),
     toolNames: Object.keys(server?.tools ?? {}).sort(),
     authStatus: server?.authStatus ?? null,
+    skillFound: Boolean(skill),
+    skillEnabled: skill?.enabled ?? null,
+    skillHasKyosoMcpDependency:
+      skill?.dependencies?.tools?.some(
+        (dependency) =>
+          dependency.type === "mcp" && dependency.value === "kyoso",
+      ) ?? false,
   };
 }
 

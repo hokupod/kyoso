@@ -297,6 +297,9 @@ describe("setup", () => {
     expect(await readFile(configPath, "utf8")).toBe("not valid toml [[");
     expect(existsSync(join(destination, "SKILL.md"))).toBe(true);
     expect(existsSync(join(destination, "agents", "openai.yaml"))).toBe(true);
+    expect(
+      await readFile(join(destination, "agents", "openai.yaml"), "utf8"),
+    ).not.toContain("dependencies:");
     expect(existsSync(join(destination, SKILL_INSTALL_MARKER))).toBe(true);
   });
 

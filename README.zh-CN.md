@@ -57,6 +57,10 @@ codex plugin list --marketplace kyoso --json
 
 Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
+Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。在Codex Auto mode中，Kyoso tools未声明annotations，首次MCP调用仍可能需要approval；选择“Allow and don't ask me again”即可保留该许可。
+
+如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
+
 #### CLI＋Skill-only
 
 ```bash
@@ -70,6 +74,8 @@ npx kyoso setup codex --write --skill-only
 ```
 
 Claude Code请将`codex`替换为`claude-code`。默认仍为dry-run。`--skill-only`不会读写MCP配置，也不能与`--runner`／`--command`组合使用。
+
+Skill-only有意不声明MCP dependency。当它到达`npx`或`bunx`的package-runner fallback时，Codex Auto mode可能要求sandbox network escalation approval；在PATH上安装`kyoso`可以避免该fallback。
 
 #### 迁移
 

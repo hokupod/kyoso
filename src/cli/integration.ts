@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import {
   delimiter,
   dirname,
+  extname,
   isAbsolute,
   join,
   relative,
@@ -48,12 +49,14 @@ export type NonPluginIntegration = {
 export function detectCli(options: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 }): CliDetection {
   const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
   return {
-    kyoso: detectInstalledKyoso(options.cwd, env),
-    npx: commandExists("npx", env),
-    bunx: commandExists("bunx", env),
+    kyoso: detectInstalledKyoso(options.cwd, env, platform),
+    npx: commandExists("npx", env, platform),
+    bunx: commandExists("bunx", env, platform),
   };
 }
 
@@ -119,8 +122,9 @@ export function formatCliAvailability(cli: CliAvailability): string {
 function detectInstalledKyoso(
   cwd: string,
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): CliAvailability {
-  const executable = resolveCommand("kyoso", env);
+  const executable = resolveCommand("kyoso", env, platform);
   if (!executable) return { kind: "missing" };
 
   let realExecutable: string;
@@ -160,7 +164,8 @@ function findKyosoPackage(
           return { directory, version: parsed.version };
         }
       } catch {
-        return undefined;
+        // Keep looking for the owning package above malformed or unreadable
+        // package metadata in an intermediate directory.
       }
     }
     const parent = dirname(directory);
@@ -209,25 +214,53 @@ function cliIdentityWarnings(cli: CliAvailability): string[] {
   return [];
 }
 
-function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
-  return resolveCommand(command, env) !== undefined;
+function commandExists(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): boolean {
+  return resolveCommand(command, env, platform) !== undefined;
 }
 
 function resolveCommand(
   command: string,
   env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): string | undefined {
   for (const path of env.PATH?.split(delimiter) ?? []) {
     if (path.length === 0) continue;
-    const candidate = join(path, command);
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Continue with the next PATH entry.
+    for (const name of commandNames(command, env, platform)) {
+      const candidate = join(path, name);
+      try {
+        accessSync(candidate, constants.X_OK);
+        return candidate;
+      } catch {
+        // Continue with the next candidate.
+      }
     }
   }
   return undefined;
+}
+
+function commandNames(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform !== "win32" || extname(command).length > 0) return [command];
+
+  const names = [command];
+  const seen = new Set([command.toLowerCase()]);
+  for (const extension of env.PATHEXT?.split(";") ?? []) {
+    const normalized = extension.trim();
+    if (!normalized.startsWith(".") || /[\\/]/.test(normalized)) continue;
+    const candidate = `${command}${normalized}`;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(candidate);
+  }
+  return names;
 }
 
 function isWithin(path: string, parent: string): boolean {

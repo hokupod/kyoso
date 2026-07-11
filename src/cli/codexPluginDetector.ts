@@ -333,11 +333,12 @@ function parseMcpList(value: unknown): CodexMcpStatus | undefined {
 }
 
 function parseCodexVersion(output: string): string | undefined {
-  const match = /^codex-cli\s+(\S+)\s*$/.exec(output);
-  if (!match) return undefined;
-  const version = match[1];
-  if (!version || !parseSemver(version)) return undefined;
-  return version;
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^codex-cli\s+(\S+)\s*$/.exec(line.trim());
+    const version = match?.[1];
+    if (version && parseSemver(version)) return version;
+  }
+  return undefined;
 }
 
 function compareSemver(left: string, right: string): number {

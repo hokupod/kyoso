@@ -765,6 +765,34 @@ describe("setup", () => {
     expect(detectCodexPluginMcpOverride({ cwd, env }).status).toBe("missing");
   });
 
+  test("normalizes current-project config paths conservatively", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-project-path-");
+    const codexHome = join(cwd, "codex-state");
+    const configPath = join(codexHome, "config.toml");
+    const alias = join(home, "workspace-alias");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+    await mkdir(codexHome, { recursive: true });
+    await symlink(cwd, alias, "dir");
+
+    await writeFile(
+      configPath,
+      `[projects.${JSON.stringify(`${alias}/`)}.mcp_servers.kyoso]\nenabled = true\n`,
+      "utf8",
+    );
+    expect(detectSetup({ cwd, env }).codex.manualMcpStatus).toBe("unknown");
+
+    const homeProject = join(home, "project");
+    await mkdir(homeProject, { recursive: true });
+    await writeFile(
+      configPath,
+      '[projects."~/project/".mcp_servers.kyoso]\nenabled = true\n',
+      "utf8",
+    );
+    expect(detectSetup({ cwd: homeProject, env }).codex.manualMcpStatus).toBe(
+      "unknown",
+    );
+  });
+
   test("reports disabled and malformed manual MCP configuration safely", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-mcp-status-");
     const codexHome = join(cwd, "codex-state");
@@ -846,6 +874,43 @@ describe("setup", () => {
     expect(detected["claude-code"].mcpPaths).toEqual([
       join(home, ".claude.json"),
     ]);
+  });
+
+  test("scopes nested Claude MCP config to the current project", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-claude-scope-");
+    const configPath = join(home, ".claude.json");
+    const otherProject = join(cwd, "other-project");
+
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        projects: {
+          [otherProject]: { mcpServers: { kyoso: { enabled: true } } },
+        },
+      }),
+      "utf8",
+    );
+    expect(detectSetup({ cwd, home })["claude-code"]).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "missing",
+      mcpPaths: [],
+    });
+
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        projects: {
+          [cwd]: { mcpServers: { kyoso: { enabled: false } } },
+          [otherProject]: { mcpServers: { kyoso: { enabled: true } } },
+        },
+      }),
+      "utf8",
+    );
+    expect(detectSetup({ cwd, home })["claude-code"]).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "disabled",
+      mcpPaths: [configPath],
+    });
   });
 
   test("builds Claude MCP entry with provider env placeholders", () => {

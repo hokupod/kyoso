@@ -76,6 +76,13 @@ describe("Codex Plugin fixture", () => {
       join(plugin, "agents", "openai.yaml"),
       "utf8",
     );
+    const canonicalInstructions = await readFile(
+      join(canonical, "SKILL.md"),
+      "utf8",
+    );
+    const pluginInstructions = await readFile(join(plugin, "SKILL.md"), "utf8");
+    const mcp = await readJson(join(root, "plugins", "kyoso", ".mcp.json"));
+    const cliPackagePin = mcp.kyoso.args[1];
     const canonicalSnapshot = await directorySnapshot(canonical);
 
     expect(await hashSkillDirectory(canonical)).toBe(CURRENT_SKILL_DIGEST);
@@ -88,8 +95,14 @@ describe("Codex Plugin fixture", () => {
     expect(pluginMetadata).toContain('type: "mcp"');
     expect(pluginMetadata).toContain('value: "kyoso"');
     expect(pluginMetadata).toContain('transport: "stdio"');
+    expect(canonicalInstructions).toContain("`npx -y @kyo-so/cli`");
+    expect(canonicalInstructions).toContain("`bunx @kyo-so/cli`");
+    expect(canonicalInstructions).not.toContain(cliPackagePin);
+    expect(pluginInstructions).toContain(`\`npx -y ${cliPackagePin}\``);
+    expect(pluginInstructions).toContain(`\`bunx ${cliPackagePin}\``);
     expect(await directorySnapshot(plugin)).toEqual({
       ...canonicalSnapshot,
+      "SKILL.md": pluginInstructions,
       "agents/openai.yaml": pluginMetadata,
     });
   });
@@ -172,6 +185,8 @@ describe("Codex Plugin fixture", () => {
             const skills = join(fixture, ".agents", "skills");
             mkdirSync(skills, { recursive: true });
             cpSync(".agents/skills/kyoso-review", join(skills, "kyoso-review"), { recursive: true });
+            mkdirSync(join(fixture, "plugins", "kyoso"), { recursive: true });
+            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
             const first = syncPluginSkill(fixture);
             const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
             const firstMetadata = readFileSync(metadataPath, "utf8");
@@ -210,6 +225,7 @@ describe("Codex Plugin fixture", () => {
           try {
             cpSync(".agents/skills", join(fixture, ".agents", "skills"), { recursive: true });
             cpSync("plugins/kyoso/skills", join(fixture, "plugins", "kyoso", "skills"), { recursive: true });
+            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
             const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
             writeFileSync(
               metadataPath,
@@ -250,11 +266,15 @@ describe("Codex Plugin fixture", () => {
             const mirror = join(fixture, "plugins", "kyoso", "skills", "kyoso-review");
             cpSync(".agents/skills/kyoso-review", canonical, { recursive: true });
             cpSync("plugins/kyoso/skills/kyoso-review", mirror, { recursive: true });
+            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
             writeFileSync(join(mirror, "SKILL.md"), "previous mirror");
             try {
               syncPluginSkill(fixture, {
                 afterInstall: ({ canonicalSkill }) => {
-                  writeFileSync(join(canonicalSkill, "SKILL.md"), "changed during sync");
+                  writeFileSync(
+                    join(canonicalSkill, "agents", "openai.yaml"),
+                    "changed during sync",
+                  );
                 },
               });
               process.exitCode = 1;
@@ -436,6 +456,36 @@ describe("Codex Plugin fixture", () => {
           }
           if (compareSemver("0.2.0", "0.2.0-beta.1") <= 0) {
             throw new Error("stable version must sort after prerelease");
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
+  test("promotes the Plugin Skill fallback pin with the MCP pin", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { join } from "node:path";
+          import { createUpdates } from "./scripts/plugin-promote.mjs";
+
+          const updates = createUpdates(
+            { cliVersion: "0.9.0", pluginVersion: "0.2.0" },
+            process.cwd(),
+          );
+          const skillPath = join("plugins", "kyoso", "skills", "kyoso-review", "SKILL.md");
+          const skill = updates.find((entry) => entry.path.endsWith(skillPath));
+          if (
+            !skill?.next.includes("npx -y @kyo-so/cli@0.9.0") ||
+            !skill.next.includes("bunx @kyo-so/cli@0.9.0")
+          ) {
+            throw new Error("Plugin promotion did not update both Skill fallback pins");
           }
         `,
       ],

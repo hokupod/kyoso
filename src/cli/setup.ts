@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -167,7 +167,13 @@ export function detectCodexPluginMcpOverride(options: {
 
   try {
     const parsed = parse(readTextSync(path));
-    if (hasUnprobedProjectIntegrationOverride(parsed, options.cwd)) {
+    if (
+      hasUnprobedProjectIntegrationOverride(
+        parsed,
+        options.cwd,
+        resolveUserHome(env),
+      )
+    ) {
       return { status: "unknown", path };
     }
     return {
@@ -197,10 +203,10 @@ export function detectSetup(options: {
     : options.home
       ? join(home, ".codex", "config.toml")
       : resolveCodexConfigPath(env, options.cwd);
-  const codexMcp = detectCodexMcp(codexConfigPath, options.cwd);
+  const codexMcp = detectCodexMcp(codexConfigPath, options.cwd, home);
   const claudeMcp = mergeMcpDetections([
-    detectClaudeMcp(join(options.cwd, ".mcp.json")),
-    detectClaudeMcp(join(home, ".claude.json")),
+    detectClaudeMcp(join(options.cwd, ".mcp.json"), options.cwd, home),
+    detectClaudeMcp(join(home, ".claude.json"), options.cwd, home),
   ]);
   const codexSkillPaths = existingSkillPaths([
     join(options.cwd, ".agents", "skills", "kyoso-review"),
@@ -335,7 +341,7 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
 
 function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
   const configPath = join(context.home, ".claude.json");
-  const existingMcp = detectClaudeMcp(configPath);
+  const existingMcp = detectClaudeMcp(configPath, context.cwd, context.home);
   if (existingMcp.status !== "missing") {
     return {
       title: "Claude Code MCP",
@@ -563,12 +569,12 @@ type McpDetection = {
   paths: string[];
 };
 
-function detectCodexMcp(path: string, cwd: string): McpDetection {
+function detectCodexMcp(path: string, cwd: string, home: string): McpDetection {
   if (!existsSync(path)) return { status: "missing", paths: [] };
 
   try {
     const parsed = parse(readTextSync(path));
-    if (hasUnprobedProjectIntegrationOverride(parsed, cwd)) {
+    if (hasUnprobedProjectIntegrationOverride(parsed, cwd, home)) {
       return { status: "unknown", paths: [path] };
     }
     if (!isRecord(parsed)) return { status: "unknown", paths: [path] };
@@ -585,12 +591,16 @@ function detectCodexMcp(path: string, cwd: string): McpDetection {
   }
 }
 
-function detectClaudeMcp(path: string): McpDetection {
+function detectClaudeMcp(
+  path: string,
+  cwd: string,
+  home: string,
+): McpDetection {
   if (!existsSync(path)) return { status: "missing", paths: [] };
 
   try {
     const parsed: unknown = JSON.parse(readTextSync(path));
-    const statuses = jsonMcpStatuses(parsed);
+    const statuses = jsonMcpStatuses(parsed, cwd, home);
     if (statuses.length === 0) return { status: "missing", paths: [] };
     return { status: mergeMcpStatuses(statuses), paths: [path] };
   } catch {
@@ -598,9 +608,30 @@ function detectClaudeMcp(path: string): McpDetection {
   }
 }
 
-function jsonMcpStatuses(value: unknown): ManualMcpStatus[] {
+function jsonMcpStatuses(
+  value: unknown,
+  cwd: string,
+  home: string,
+): ManualMcpStatus[] {
   if (!isRecord(value)) return ["unknown"];
 
+  const statuses = directMcpStatuses(value);
+  if (!("projects" in value)) return statuses;
+  if (!isRecord(value.projects)) return [...statuses, "unknown"];
+
+  const currentProject = normalizeProjectPath(cwd, home);
+  for (const [projectPath, projectConfig] of Object.entries(value.projects)) {
+    if (normalizeProjectPath(projectPath, home) !== currentProject) continue;
+    if (!isRecord(projectConfig)) {
+      statuses.push("unknown");
+      continue;
+    }
+    statuses.push(...directMcpStatuses(projectConfig));
+  }
+  return statuses;
+}
+
+function directMcpStatuses(value: Record<string, unknown>): ManualMcpStatus[] {
   const statuses: ManualMcpStatus[] = [];
   if ("mcpServers" in value) {
     if (!isRecord(value.mcpServers)) {
@@ -608,9 +639,6 @@ function jsonMcpStatuses(value: unknown): ManualMcpStatus[] {
     } else if ("kyoso" in value.mcpServers) {
       statuses.push(mcpEntryStatus(value.mcpServers.kyoso));
     }
-  }
-  for (const child of Object.values(value)) {
-    if (isRecord(child)) statuses.push(...jsonMcpStatuses(child));
   }
   return statuses;
 }
@@ -628,11 +656,15 @@ function nestedMcpEntryStatus(value: unknown, path: string[]): ManualMcpStatus {
 function hasUnprobedProjectIntegrationOverride(
   value: unknown,
   cwd: string,
+  home: string,
 ): boolean {
   if (!isRecord(value) || !isRecord(value.projects)) return false;
-  const currentProject = resolve(cwd);
+  const currentProject = normalizeProjectPath(cwd, home);
   for (const [projectPath, projectConfig] of Object.entries(value.projects)) {
-    if (resolve(projectPath) !== currentProject || !isRecord(projectConfig)) {
+    if (
+      normalizeProjectPath(projectPath, home) !== currentProject ||
+      !isRecord(projectConfig)
+    ) {
       continue;
     }
     if ("mcp_servers" in projectConfig || "plugins" in projectConfig) {
@@ -640,6 +672,24 @@ function hasUnprobedProjectIntegrationOverride(
     }
   }
   return false;
+}
+
+function normalizeProjectPath(path: string, home: string): string | undefined {
+  if (path.trim().length === 0) return undefined;
+  const expanded =
+    path === "~"
+      ? home
+      : path.startsWith("~/") || path.startsWith("~\\")
+        ? join(home, path.slice(2))
+        : path;
+  const resolved = resolve(expanded);
+  let normalized: string;
+  try {
+    normalized = realpathSync(resolved);
+  } catch {
+    normalized = resolved;
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function mcpEntryStatus(value: unknown): ManualMcpStatus {

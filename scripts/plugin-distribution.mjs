@@ -27,7 +27,9 @@ const pluginMcpServerName = "kyoso";
 const canonicalSkillRelativePath = ".agents/skills/kyoso-review";
 const pluginSkillRelativePath = "plugins/kyoso/skills/kyoso-review";
 const pluginRootRelativePath = "plugins/kyoso";
+const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
+const unpinnedCliFallbacks = ["`npx -y @kyo-so/cli`", "`bunx @kyo-so/cli`"];
 const pluginMcpDependencyBlock = [
   "dependencies:",
   "  tools:",
@@ -94,11 +96,38 @@ export function distributionPaths(root = repositoryRoot) {
  * Apply the Plugin-only Skill metadata contract to canonical Skill content.
  * The canonical Skill remains MCP-optional for skill-only installation.
  */
-function transformCanonicalToPlugin(relativePath, content) {
-  if (relativePath !== pluginOpenAiMetadataRelativePath) return content;
+export function transformCanonicalToPlugin(
+  relativePath,
+  content,
+  cliPackagePin,
+) {
+  let transformed = content;
+  if (relativePath === pluginSkillInstructionsRelativePath) {
+    if (!parsePackagePin(cliPackagePin)) {
+      throw new Error(
+        "Plugin Skill transform requires an exact @kyo-so/cli SemVer pin",
+      );
+    }
+    let instructions = content.toString("utf8");
+    for (const fallback of unpinnedCliFallbacks) {
+      const occurrences = instructions.split(fallback).length - 1;
+      if (occurrences !== 1) {
+        throw new Error(
+          `Canonical Skill ${relativePath} must contain exactly one ${fallback} fallback`,
+        );
+      }
+      instructions = instructions.replace(
+        fallback,
+        fallback.replace("@kyo-so/cli", cliPackagePin),
+      );
+    }
+    transformed = Buffer.from(instructions, "utf8");
+  }
 
-  const metadata = content.toString("utf8");
-  if (metadata.endsWith(`${pluginMcpDependencyBlock}\n`)) return content;
+  if (relativePath !== pluginOpenAiMetadataRelativePath) return transformed;
+
+  const metadata = transformed.toString("utf8");
+  if (metadata.endsWith(`${pluginMcpDependencyBlock}\n`)) return transformed;
   if (/^dependencies:\s*$/m.test(metadata)) {
     throw new Error(
       `Canonical Skill ${relativePath} must not declare Plugin dependencies`,
@@ -146,7 +175,7 @@ export function verifyPluginDistribution(options = {}) {
     failures,
     expectedPackageVersion,
   );
-  validateSkillMirror(paths, failures);
+  validateSkillMirror(paths, pin, failures);
   validateRuntimeContract(paths, compatibility, manifest, pin, failures);
 
   if (failures.length === 0 && verifyPackageArchive) {
@@ -176,7 +205,9 @@ export function verifyPluginDistribution(options = {}) {
 
 /** Generate the Plugin Skill mirror from the canonical Skill directory. */
 export function syncPluginSkill(root = repositoryRoot, options = {}) {
-  const { canonicalSkill, pluginSkill } = distributionPaths(root);
+  const paths = distributionPaths(root);
+  const { canonicalSkill, pluginSkill } = paths;
+  const cliPackagePin = readPluginPackagePin(paths.mcp);
   const sourceFiles = listSkillFiles(canonicalSkill, { includeMarker: true });
   if (sourceFiles.length === 0) {
     throw new Error("Canonical kyoso-review Skill is empty");
@@ -207,8 +238,8 @@ export function syncPluginSkill(root = repositoryRoot, options = {}) {
       force: false,
       recursive: true,
     });
-    applyCanonicalPluginTransforms(canonicalSkill, stage);
-    assertSkillDirectoriesEqual(canonicalSkill, stage);
+    applyCanonicalPluginTransforms(canonicalSkill, stage, cliPackagePin);
+    assertSkillDirectoriesEqual(canonicalSkill, stage, cliPackagePin);
 
     if (existsSync(pluginSkill)) {
       renameSync(pluginSkill, backup);
@@ -217,7 +248,7 @@ export function syncPluginSkill(root = repositoryRoot, options = {}) {
     renameSync(stage, pluginSkill);
     installed = true;
     options.afterInstall?.({ canonicalSkill, pluginSkill });
-    assertSkillDirectoriesEqual(canonicalSkill, pluginSkill);
+    assertSkillDirectoriesEqual(canonicalSkill, pluginSkill, cliPackagePin);
     synchronized = true;
   } catch (error) {
     if (movedExisting || installed) {
@@ -260,8 +291,10 @@ export function syncPluginSkill(root = repositoryRoot, options = {}) {
  * transforms, including files excluded from install hashes.
  */
 export function assertPluginSkillMirror(root = repositoryRoot) {
-  const { canonicalSkill, pluginSkill } = distributionPaths(root);
-  assertSkillDirectoriesEqual(canonicalSkill, pluginSkill);
+  const paths = distributionPaths(root);
+  const { canonicalSkill, pluginSkill } = paths;
+  const cliPackagePin = readPluginPackagePin(paths.mcp);
+  assertSkillDirectoriesEqual(canonicalSkill, pluginSkill, cliPackagePin);
   return {
     canonicalDigest: hashSkillDirectory(canonicalSkill),
     pluginDigest: hashSkillDirectory(pluginSkill),
@@ -550,12 +583,17 @@ function validatePackageVersion(
   }
 }
 
-function validateSkillMirror(paths, failures) {
+function validateSkillMirror(paths, pin, failures) {
   try {
+    const cliPackagePin = packagePin(pin);
+    if (!cliPackagePin) {
+      throw new Error("Plugin Skill mirror requires a valid Plugin MCP pin");
+    }
     const sourceDigest = hashSkillDirectory(paths.canonicalSkill);
     const mirrorDigest = hashSkillDirectory(paths.pluginSkill);
     const expectedPluginDigest = hashTransformedPluginSkillDirectory(
       paths.canonicalSkill,
+      cliPackagePin,
     );
     const currentDigest = readCurrentSkillDigest(paths.root);
     if (sourceDigest !== currentDigest) {
@@ -568,7 +606,11 @@ function validateSkillMirror(paths, failures) {
         `Plugin Skill digest ${mirrorDigest} does not match transformed canonical Skill digest ${expectedPluginDigest}`,
       );
     }
-    assertSkillDirectoriesEqual(paths.canonicalSkill, paths.pluginSkill);
+    assertSkillDirectoriesEqual(
+      paths.canonicalSkill,
+      paths.pluginSkill,
+      cliPackagePin,
+    );
   } catch (error) {
     failures.push(errorMessage(error));
   }
@@ -717,11 +759,15 @@ function hashSkillDirectory(directory) {
   return hashSkillFiles(listSkillFiles(directory, { includeMarker: false }));
 }
 
-function hashTransformedPluginSkillDirectory(directory) {
+function hashTransformedPluginSkillDirectory(directory, cliPackagePin) {
   return hashSkillFiles(
     listSkillFiles(directory, { includeMarker: false }).map((file) => ({
       ...file,
-      contents: transformCanonicalToPlugin(file.relativePath, file.contents),
+      contents: transformCanonicalToPlugin(
+        file.relativePath,
+        file.contents,
+        cliPackagePin,
+      ),
     })),
   );
 }
@@ -738,7 +784,7 @@ function hashSkillFiles(files) {
   return `sha256:${hash.digest("hex")}`;
 }
 
-function assertSkillDirectoriesEqual(source, mirror) {
+function assertSkillDirectoriesEqual(source, mirror, cliPackagePin) {
   const sourceFiles = listSkillFiles(source, { includeMarker: true });
   const mirrorFiles = listSkillFiles(mirror, { includeMarker: true });
   if (sourceFiles.length !== mirrorFiles.length) {
@@ -752,6 +798,7 @@ function assertSkillDirectoriesEqual(source, mirror) {
     const expectedContents = transformCanonicalToPlugin(
       canonical.relativePath,
       canonical.contents,
+      cliPackagePin,
     );
     if (
       canonical.relativePath !== plugin.relativePath ||
@@ -764,11 +811,12 @@ function assertSkillDirectoriesEqual(source, mirror) {
   }
 }
 
-function applyCanonicalPluginTransforms(source, destination) {
+function applyCanonicalPluginTransforms(source, destination, cliPackagePin) {
   for (const file of listSkillFiles(source, { includeMarker: true })) {
     const transformed = transformCanonicalToPlugin(
       file.relativePath,
       file.contents,
+      cliPackagePin,
     );
     if (!transformed.equals(file.contents)) {
       writeFileSync(join(destination, file.relativePath), transformed);
@@ -838,6 +886,24 @@ function parsePackagePin(value) {
     return undefined;
   }
   return { packageName, packageVersion };
+}
+
+function readPluginPackagePin(path) {
+  let mcp;
+  try {
+    mcp = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `Plugin MCP config could not be read: ${errorMessage(error)}`,
+    );
+  }
+  const pin = parsePackagePin(mcp?.[pluginMcpServerName]?.args?.[1]);
+  if (!pin) {
+    throw new Error(
+      "Plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+    );
+  }
+  return packagePin(pin);
 }
 
 function packagePin(pin) {

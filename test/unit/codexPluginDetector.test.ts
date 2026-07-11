@@ -59,6 +59,20 @@ describe("Codex Plugin detector", () => {
     ]);
   });
 
+  test("finds the Codex version line among diagnostic output", () => {
+    const runner = scriptedRunner({
+      "--version": completed(
+        "npm warning before version\r\ncodex-cli 0.144.1\r\nupdate notice",
+      ),
+      "plugin list --json": completed(JSON.stringify({ installed: [] })),
+    });
+
+    expect(inspectCodexPlugin({ cwd, runCodex: runner.run })).toMatchObject({
+      status: "supported",
+      codexVersion: "0.144.1",
+    });
+  });
+
   test("reports disabled and not-installed Plugin states without treating them as unsupported", () => {
     const disabled = scriptedRunner({
       "--version": completed("codex-cli 0.144.0-alpha.4"),

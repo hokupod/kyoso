@@ -451,6 +451,42 @@ describe("doctor integration modes", () => {
       kind: "unknown",
     });
   });
+
+  test("continues CLI package discovery above malformed package metadata", async () => {
+    const context = await doctorFixture();
+    const packageRoot = join(context.cwd, "node_modules", "@kyo-so", "cli");
+    const executable = await createCliPackage(packageRoot);
+    await writeFile(join(packageRoot, "dist", "package.json"), "{", "utf8");
+    await symlink(executable, join(context.bin, "kyoso"));
+
+    expect(detectCli({ cwd: context.cwd, env: context.env }).kyoso).toEqual({
+      kind: "installed",
+      version: "9.9.9",
+      scope: "project",
+    });
+  });
+
+  test("resolves Windows command shims through PATHEXT", async () => {
+    const context = await doctorFixture();
+    const packageRoot = join(context.cwd, "node_modules", "@kyo-so", "cli");
+    const bin = join(packageRoot, "dist", "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@kyo-so/cli", version: "9.9.9" }),
+      "utf8",
+    );
+    await createExecutable(join(bin, "kyoso.CMD"));
+    await createExecutable(join(bin, "npx.CMD"));
+    await createExecutable(join(bin, "bunx.EXE"));
+    const env = { PATH: bin, PATHEXT: ".EXE;.CMD" };
+
+    expect(detectCli({ cwd: context.cwd, env, platform: "win32" })).toEqual({
+      kyoso: { kind: "installed", version: "9.9.9", scope: "project" },
+      npx: true,
+      bunx: true,
+    });
+  });
 });
 
 type DoctorFixture = {

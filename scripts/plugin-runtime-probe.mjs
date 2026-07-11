@@ -12,6 +12,7 @@ import {
 import { arch, platform, release, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const options = parseOptions(process.argv.slice(2));
@@ -305,12 +306,7 @@ async function runAppServerProbe(options) {
     }
     return { mcpStatus: mcpStatus.result, skills: skills.result };
   } finally {
-    child.stdin.end();
-    child.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolveExit) => child.once("exit", resolveExit)),
-      delay(2_000),
-    ]);
+    await terminateChild(child);
   }
 
   function send(message) {
@@ -333,6 +329,36 @@ async function runAppServerProbe(options) {
     }
     return response;
   }
+}
+
+async function terminateChild(child) {
+  child.stdin.end();
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  if (await waitForChildExit(child, 2_000)) return;
+  child.kill("SIGKILL");
+  await waitForChildExit(child, 2_000);
+}
+
+function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolveExit) => {
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    const onExit = () => finish(true);
+    child.once("exit", onExit);
+    if (child.exitCode !== null || child.signalCode !== null) finish(true);
+
+    function finish(exited) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+      resolveExit(exited);
+    }
+  });
 }
 
 function probeEnvironment() {
@@ -466,9 +492,7 @@ function updateCompatibilityRecord(path, result) {
         expectedContract: result.contract,
         probes: [],
       };
-  if (
-    JSON.stringify(record.expectedContract) !== JSON.stringify(result.contract)
-  ) {
+  if (!isDeepStrictEqual(record.expectedContract, result.contract)) {
     throw new Error(
       `Codex ${result.codexVersion} runtime contract differs from the recorded contract`,
     );
@@ -498,9 +522,7 @@ function assertCompatibilityRecord(path, result) {
       `compatibility record has no probe for Codex ${result.codexVersion}`,
     );
   }
-  if (
-    JSON.stringify(record.expectedContract) !== JSON.stringify(result.contract)
-  ) {
+  if (!isDeepStrictEqual(record.expectedContract, result.contract)) {
     throw new Error(
       `Codex ${result.codexVersion} runtime contract differs from the compatibility record`,
     );

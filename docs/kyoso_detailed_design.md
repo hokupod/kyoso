@@ -458,7 +458,7 @@ Audit
 
 `doctor` must be best effort and must not read raw credential values.
 
-### 6.7 `kyoso init`
+### 6.8 `kyoso init`
 
 Creates starter files:
 

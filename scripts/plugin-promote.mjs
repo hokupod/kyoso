@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import {
   distributionPaths,
   repositoryRoot,
+  transformCanonicalToPlugin,
   verifyPluginDistribution,
 } from "./plugin-distribution.mjs";
 import { assertPublishedCliVersion } from "./plugin-registry.mjs";
@@ -131,13 +132,21 @@ function parseSemver(version) {
   };
 }
 
-function createUpdates({ cliVersion, pluginVersion }) {
-  const paths = distributionPaths(repositoryRoot);
+export function createUpdates(
+  { cliVersion, pluginVersion },
+  root = repositoryRoot,
+) {
+  const paths = distributionPaths(root);
   const packagePin = `@kyo-so/cli@${cliVersion}`;
   const mcp = readJson(paths.mcp);
   const manifest = readJson(paths.manifest);
   const compatibility = readJson(paths.compatibility);
   const runtimeContract = readFileSync(paths.runtimeContract, "utf8");
+  const pluginSkillInstructions = transformCanonicalToPlugin(
+    "SKILL.md",
+    readFileSync(join(paths.canonicalSkill, "SKILL.md")),
+    packagePin,
+  ).toString("utf8");
 
   mcp.kyoso.args[1] = packagePin;
   manifest.version = pluginVersion;
@@ -154,6 +163,7 @@ function createUpdates({ cliVersion, pluginVersion }) {
     update(paths.manifest, JSON.stringify(manifest, null, 2) + "\n"),
     update(paths.compatibility, JSON.stringify(compatibility, null, 2) + "\n"),
     update(paths.runtimeContract, updatedRuntimeContract),
+    update(join(paths.pluginSkill, "SKILL.md"), pluginSkillInstructions),
   ];
 }
 
@@ -222,17 +232,22 @@ function writeUpdatesAtomically(updates) {
   } catch (error) {
     const rollbackErrors = [];
     for (const entry of committed.reverse()) {
+      const temporary = join(
+        dirname(entry.path),
+        `.${basename(entry.path)}.plugin-rollback-${randomUUID()}`,
+      );
       try {
-        const temporary = join(
-          dirname(entry.path),
-          `.${basename(entry.path)}.plugin-rollback-${randomUUID()}`,
-        );
         writeFileSync(temporary, entry.current, "utf8");
         renameSync(temporary, entry.path);
       } catch (rollbackError) {
         rollbackErrors.push(
           `${entry.path}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
         );
+        try {
+          rmSync(temporary, { force: true });
+        } catch {
+          // Preserve the original rollback error if cleanup also fails.
+        }
       }
     }
     const detail = rollbackErrors.length

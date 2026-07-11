@@ -189,8 +189,8 @@ kyoso doctor
 kyoso init
 kyoso setup codex
 kyoso setup claude-code
-kyoso setup codex --skill-only
-kyoso setup claude-code --skill-only
+kyoso setup codex --write --skill-only
+kyoso setup claude-code --write --skill-only
 ```
 
 ## Usage Examples

@@ -1854,6 +1854,24 @@ describe("child env", () => {
     );
   });
 
+  test("preserves the separated Codex state root and access-token auth", () => {
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        HOME: "/tmp/home",
+        CODEX_HOME: "/tmp/codex-home",
+        CODEX_ACCESS_TOKEN: "access-token",
+      },
+      ["CODEX_HOME", "CODEX_ACCESS_TOKEN"],
+      {},
+      { agent: "codex" },
+    );
+
+    expect(env.HOME).toBe("/tmp/home");
+    expect(env.CODEX_HOME).toBe("/tmp/codex-home");
+    expect(env.CODEX_ACCESS_TOKEN).toBe("access-token");
+  });
+
   test("prefers Claude OAuth token over API key by default", () => {
     const env = buildChildEnv(
       {

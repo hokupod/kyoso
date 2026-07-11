@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "minimumSupportedCodexVersion": "0.144.0-alpha.4",
+  "expectedContract": {
+    "distribution": {
+      "pluginVersion": "0.1.0",
+      "mcpCommand": "npx",
+      "mcpPackagePin": "@kyo-so/cli@0.8.0"
+    },
+    "marketplace": {
+      "name": "kyoso",
+      "listed": true,
+      "pluginId": "kyoso@kyoso",
+      "selector": "kyoso@kyoso",
+      "installPolicy": "AVAILABLE",
+      "authPolicy": "ON_USE"
+    },
+    "transitions": {
+      "beforeAdd": { "installed": false, "enabled": false },
+      "afterAdd": { "installed": true, "enabled": true },
+      "disabled": { "installed": true, "enabled": false },
+      "afterRemove": { "installed": false, "enabled": false },
+      "installPluginId": "kyoso@kyoso",
+      "removePluginId": "kyoso@kyoso"
+    },
+    "mcp": {
+      "default": {
+        "enabled": true,
+        "command": "$NODE",
+        "args": ["$PROBE_SERVER", "$OBSERVATION"],
+        "envVars": [
+          "OPENAI_API_KEY",
+          "CODEX_API_KEY",
+          "CODEX_HOME",
+          "CODEX_ACCESS_TOKEN",
+          "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_OAUTH_TOKEN"
+        ],
+        "cwd": null,
+        "startupTimeoutSec": 20,
+        "toolTimeoutSec": 360
+      },
+      "pluginOverride": {
+        "enabled": false,
+        "command": "$NODE",
+        "args": ["$PROBE_SERVER", "$OBSERVATION"],
+        "envVars": [
+          "OPENAI_API_KEY",
+          "CODEX_API_KEY",
+          "CODEX_HOME",
+          "CODEX_ACCESS_TOKEN",
+          "ANTHROPIC_API_KEY",
+          "CLAUDE_CODE_OAUTH_TOKEN"
+        ],
+        "cwd": null,
+        "startupTimeoutSec": 20,
+        "toolTimeoutSec": 360
+      },
+      "manualOverride": {
+        "enabled": true,
+        "command": "manual-kyoso",
+        "args": ["mcp"],
+        "envVars": [],
+        "cwd": null,
+        "startupTimeoutSec": null,
+        "toolTimeoutSec": null
+      }
+    },
+    "appServer": {
+      "default": {
+        "serverFound": true,
+        "toolNames": ["probe_environment"],
+        "authStatus": "unsupported",
+        "skillFound": false,
+        "skillEnabled": null,
+        "skillHasKyosoMcpDependency": false
+      },
+      "pluginOverride": {
+        "serverFound": true,
+        "toolNames": [],
+        "authStatus": "unsupported",
+        "skillFound": false,
+        "skillEnabled": null,
+        "skillHasKyosoMcpDependency": false,
+        "mcpObservationWritten": false
+      }
+    },
+    "environment": {
+      "cwdIsWorkspace": true,
+      "homeInherited": true,
+      "codexHomeForwarded": true,
+      "tempDirectoryInherited": true,
+      "pathInherited": true,
+      "allowlistedEnvForwarded": {
+        "OPENAI_API_KEY": true,
+        "CODEX_API_KEY": true,
+        "CODEX_ACCESS_TOKEN": true,
+        "ANTHROPIC_API_KEY": true,
+        "CLAUDE_CODE_OAUTH_TOKEN": true
+      },
+      "deniedSentinelForwarded": false
+    },
+    "isolation": {
+      "distinctHomeAndCodexHome": true,
+      "distinctWorkspace": true
+    }
+  },
+  "probes": [
+    {
+      "codexVersion": "0.144.0-alpha.4",
+      "verifiedAt": "2026-07-11",
+      "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
+      "fixtureSchemaVersion": 1
+    },
+    {
+      "codexVersion": "0.144.1",
+      "verifiedAt": "2026-07-11",
+      "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
+      "fixtureSchemaVersion": 1
+    }
+  ]
+}

@@ -328,6 +328,7 @@ kyoso security
 kyoso diff
 kyoso doctor
 kyoso init
+kyoso setup
 ```
 
 ### 6.2 `kyoso mcp`
@@ -394,7 +395,24 @@ kyoso diff --base main --head HEAD
 
 This command may call `git diff` locally to construct the diff input. It must not modify the repo.
 
-### 6.6 `kyoso doctor`
+### 6.6 `kyoso setup`
+
+Installs the canonical `kyoso-review` directory for Codex or Claude Code and, unless `--skill-only` is selected, registers the Kyoso MCP server.
+
+```bash
+kyoso setup codex [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]
+kyoso setup claude-code [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]
+kyoso setup codex --skill-only [--write] [--global] [--force]
+kyoso setup claude-code --skill-only [--write] [--global] [--force]
+```
+
+Dry-run is the default. `--skill-only` requires an explicit client, never reads or writes MCP configuration, and rejects `--runner` or `--command`. Codex MCP state resolves from `CODEX_HOME/config.toml`, falling back to `HOME/.codex/config.toml`; global Codex Skills always resolve from `HOME/.agents/skills`.
+
+The installer hashes all regular files in the canonical directory except `.kyoso-install.json`, records the digest and CLI version in that marker, adopts exact current or known historical copies, and updates only marker-matching managed copies. Unknown or user-modified copies return a conflict without being overwritten. `--force` replaces only the Skill directory. Replacement rejects symlink path segments, stages within the destination parent, verifies the staged digest, and uses backup/rename rollback so a failed update does not remove the installed Skill. The fixed sibling `.kyoso-review.backup` is paired with `.kyoso-review.install-transaction.json`: when the destination is missing, the next write run validates the transaction, restores that backup, and stops before applying another update; when both paths exist, setup fails closed and preserves both for manual inspection. An unmarked fixed-name backup is never adopted automatically.
+
+Skill installation has a single-user local-CLI threat boundary. It records the destination parent's real path and filesystem identity and rechecks both immediately before and after each rename. Node's path-based filesystem API cannot make that check and rename one fd-relative operation, so install roots writable by mutually untrusted users are unsupported; a future shared or multi-tenant mode must use `openat`/`renameat`-style no-follow operations.
+
+### 6.7 `kyoso doctor`
 
 Checks runtime, config, ACP backend availability, and auth readiness.
 
@@ -440,7 +458,7 @@ Audit
 
 `doctor` must be best effort and must not read raw credential values.
 
-### 6.7 `kyoso init`
+### 6.8 `kyoso init`
 
 Creates starter files:
 
@@ -1630,11 +1648,14 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `plan_review`
      - `security_review`
      - `diff_review`
-   - If the MCP tools are unavailable, use the CLI fallback with JSON output:
-     - `plan_review` -> `npx -y @kyo-so/cli plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
-     - `security_review` -> `npx -y @kyo-so/cli security --goal <text> [--diff <path>] [--file <path>] --json`
-     - `diff_review` -> `npx -y @kyo-so/cli diff --base <ref> --head <ref> --json`
-   - `bunx @kyo-so/cli` may be used instead of `npx -y @kyo-so/cli`.
+   - If the MCP tools are unavailable, use the first available CLI path with JSON output:
+     1. An installed `kyoso` executable on `PATH`.
+     2. `npx -y @kyo-so/cli`.
+     3. `bunx @kyo-so/cli`.
+   - Append the review command to the selected CLI path:
+     - `plan_review` -> `plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
+     - `security_review` -> `security --goal <text> [--diff <path>] [--file <path>] --json`
+     - `diff_review` -> `diff --base <ref> --head <ref> --json`
    - The CLI also accepts `--repo-summary`, repeatable `--constraint`, and repeatable `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
    - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
@@ -1653,7 +1674,13 @@ interface:
 
 policy:
   allow_implicit_invocation: false
+```
 
+This is the canonical metadata bundled with npm and copied by `--skill-only`; its MCP dependency is intentionally absent. Explicit invocation remains disabled by policy, while the Skill can select an installed CLI or package-runner fallback when MCP is unavailable.
+
+The Marketplace Plugin mirror is generated from this canonical directory by `scripts/plugin-distribution.mjs`. It appends only the following Plugin-specific dependency to `agents/openai.yaml`:
+
+```yaml
 dependencies:
   tools:
     - type: "mcp"
@@ -1661,6 +1688,10 @@ dependencies:
       description: "Kyoso MCP server"
       transport: "stdio"
 ```
+
+The dependency `value` must match the server name in the Plugin `.mcp.json`. No other Plugin Skill file may differ from the canonical Skill.
+
+A Plugin with its bundled `kyoso` MCP disabled is not a CLI-fallback mode. Doctor directs users to re-enable that MCP or remove the Plugin and install the canonical CLI plus Skill-only distribution instead.
 
 ---
 

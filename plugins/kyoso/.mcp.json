@@ -1,0 +1,16 @@
+{
+  "kyoso": {
+    "command": "npx",
+    "args": ["-y", "@kyo-so/cli@0.8.0", "mcp"],
+    "env_vars": [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "CODEX_HOME",
+      "CODEX_ACCESS_TOKEN",
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN"
+    ],
+    "startup_timeout_sec": 20,
+    "tool_timeout_sec": 360
+  }
+}

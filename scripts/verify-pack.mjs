@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +20,8 @@ const forbiddenPrefixes = [
   "node_modules/",
   "test/",
   ".github/",
+  "plugins/",
+  ".agents/plugins/",
 ];
 const secretPatterns = [
   /sk-[A-Za-z0-9_-]{20,}/,
@@ -274,5 +283,73 @@ function verifyPackedMcpServer(tarballPath, tempDir, packageVersion) {
   }
   if (stderr.length > 0) {
     throw new Error(`unexpected MCP stderr: ${stderr}`);
+  }
+
+  verifyPackedSkillOnlySetup(binPath, tempDir, packageVersion);
+}
+
+function verifyPackedSkillOnlySetup(binPath, tempDir, packageVersion) {
+  const workspace = join(tempDir, "skill-workspace");
+  const home = join(tempDir, "skill-home");
+  const codexHome = join(tempDir, "skill-codex-home");
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  const configPath = join(codexHome, "config.toml");
+  const existingConfig = "malformed config [[";
+  writeFileSync(configPath, existingConfig, "utf8");
+
+  const run = spawnSync(
+    "node",
+    [binPath, "setup", "codex", "--write", "--skill-only"],
+    {
+      cwd: workspace,
+      env: { ...process.env, HOME: home, CODEX_HOME: codexHome },
+      encoding: "utf8",
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (run.error) {
+    throw new Error(`packed Skill-only setup failed: ${run.error.message}`);
+  }
+  if (run.status !== 0) {
+    throw new Error(
+      `packed Skill-only setup exited ${run.status}: ${run.stderr || run.stdout}`,
+    );
+  }
+  if (!run.stdout.includes("Codex skill: created")) {
+    throw new Error(
+      `packed Skill-only setup did not create the Skill: ${run.stdout}`,
+    );
+  }
+  if (run.stdout.includes("Codex MCP")) {
+    throw new Error("packed Skill-only setup unexpectedly ran an MCP step");
+  }
+
+  const skillDir = join(workspace, ".agents", "skills", "kyoso-review");
+  const markerPath = join(skillDir, ".kyoso-install.json");
+  const metadataPath = join(skillDir, "agents", "openai.yaml");
+  if (!existsSync(join(skillDir, "SKILL.md")) || !existsSync(metadataPath)) {
+    throw new Error("packed Skill-only setup omitted canonical Skill files");
+  }
+  if (readFileSync(metadataPath, "utf8").includes("dependencies:")) {
+    throw new Error(
+      "packed Skill-only setup unexpectedly included a Plugin MCP dependency",
+    );
+  }
+  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  if (
+    marker.installer !== "@kyo-so/cli" ||
+    marker.cliVersion !== packageVersion ||
+    !/^sha256:[0-9a-f]{64}$/.test(marker.digest)
+  ) {
+    throw new Error("packed Skill-only setup wrote an invalid install marker");
+  }
+  if (readFileSync(configPath, "utf8") !== existingConfig) {
+    throw new Error("packed Skill-only setup changed Codex MCP configuration");
+  }
+  if (existsSync(join(home, ".codex", "config.toml"))) {
+    throw new Error("packed Skill-only setup created fallback Codex config");
   }
 }

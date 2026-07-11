@@ -1,0 +1,20 @@
+{
+  "name": "kyoso",
+  "interface": {
+    "displayName": "Kyoso"
+  },
+  "plugins": [
+    {
+      "name": "kyoso",
+      "source": {
+        "source": "local",
+        "path": "./plugins/kyoso"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "kyoso",
+  "version": "0.1.0",
+  "description": "Multi-agent review gates powered by Codex and Claude.",
+  "author": {
+    "name": "hokupod",
+    "url": "https://github.com/hokupod"
+  },
+  "homepage": "https://github.com/hokupod/kyoso",
+  "repository": "https://github.com/hokupod/kyoso",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["review", "multi-agent", "codex", "claude"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Kyoso",
+    "shortDescription": "Multi-agent plan, security, and diff review",
+    "longDescription": "Run review-only plan, security, and diff gates through Codex and Claude.",
+    "developerName": "hokupod",
+    "category": "Engineering",
+    "capabilities": ["Read"],
+    "websiteUrl": "https://github.com/hokupod/kyoso"
+  }
+}

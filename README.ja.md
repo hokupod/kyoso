@@ -36,6 +36,54 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 
 グローバルインストールは不要です。Kyoso は `npx` または `bunx` で実行します。
 
+### 導入モード
+
+| モード             | 導入物                   |  MCP | 対象               |
+| ------------------ | ------------------------ | ---: | ------------------ |
+| Marketplace Plugin | Skill＋ローカルstdio MCP | あり | Codex              |
+| CLI＋Skill-only    | npm CLI＋Skill           | なし | Codex／Claude Code |
+| 手動setup          | 手動MCP登録＋Skill       | あり | Codex／Claude Code |
+
+#### Codex Marketplace Plugin
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin list --marketplace kyoso --available --json
+codex plugin add kyoso@kyoso
+codex plugin list --marketplace kyoso --json
+```
+
+Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。削除は`codex plugin remove kyoso@kyoso`です。
+
+PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
+
+PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。Codex Auto modeでは、Kyoso toolsがannotationsを宣言していないため、最初のMCP呼び出しでapprovalが必要になることがあります。以後も許可する場合は「Allow and don't ask me again」を選択してください。
+
+同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
+
+#### CLI＋Skill-only
+
+```bash
+# Global CLI＋Codex Skill
+npm install -g @kyo-so/cli
+kyoso setup codex --write --skill-only --global
+
+# Project CLI＋Codex Skill
+npm install -D @kyo-so/cli
+npx kyoso setup codex --write --skill-only
+```
+
+Claude Codeでは`codex`を`claude-code`へ置き換えます。既定はdry-runです。`--skill-only`はMCP設定を読み書きせず、`--runner`／`--command`とは併用できません。
+
+Skill-onlyは意図的にMCP dependencyを宣言しません。`npx`または`bunx`のpackage-runner fallbackに到達すると、Codex Auto modeはsandbox network escalation approvalを要求することがあります。PATH上に`kyoso`を導入すると、このfallbackを避けられます。
+
+#### 移行
+
+- 手動MCPからCLI＋Skill: CLIとSkillを先に導入し、`codex mcp remove kyoso`または`claude mcp remove kyoso --scope local|project|user`を実行します。
+- CLI＋SkillからPlugin: Pluginを追加してenabledを確認してから、手動MCP登録を削除します。手動コピーSkillは自動削除しません。
+- PluginからCLI＋Skill: CLIとSkillを先に導入し、`codex plugin remove kyoso@kyoso`を実行します。
+- CLI＋Skillから手動MCPへ戻す: `kyoso setup codex --write`または`kyoso setup claude-code --write`を実行します。
+
 ### Claude Only / Codex Only
 
 Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.toml` で無効化してください。例は `examples/claude-only.toml` と `examples/codex-only.toml` にあります。
@@ -141,6 +189,8 @@ kyoso doctor
 kyoso init
 kyoso setup codex
 kyoso setup claude-code
+kyoso setup codex --write --skill-only
+kyoso setup claude-code --write --skill-only
 ```
 
 ## Usage Examples
@@ -203,11 +253,13 @@ MCP stdout は protocol messages 専用です。logs は stderr または local 
 
 同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
 
-skill は、利用可能な場合は Kyoso MCP tools を優先します。MCP server が未登録の場合は、記載された CLI fallback に従い、`npx -y @kyo-so/cli` または `bunx @kyo-so/cli` から JSON output を取得します。
+Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。
 
-`npx @kyo-so/cli setup codex --write` と `bunx @kyo-so/cli setup codex --write` は、既定で `.agents/skills/kyoso-review/` にコピーします。`--global` を追加すると `~/.agents/skills/kyoso-review/` にコピーします。
+`kyoso setup codex --write --skill-only`はcanonical Skill directoryを既定で`.agents/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.agents/skills/kyoso-review/`へコピーします。
 
-`npx @kyo-so/cli setup claude-code --write` と `bunx @kyo-so/cli setup claude-code --write` は、既定で `.claude/skills/kyoso-review/` にコピーします。`--global` を追加すると `~/.claude/skills/kyoso-review/` にコピーします。
+`kyoso setup claude-code --write --skill-only`は既定で`.claude/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.claude/skills/kyoso-review/`へコピーします。
+
+managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのSkill directoryだけを置換し、MCP設定を削除・上書きしません。
 
 ## Safety Model
 

@@ -3,9 +3,9 @@
   "minimumSupportedCodexVersion": "0.144.0-alpha.4",
   "expectedContract": {
     "distribution": {
-      "pluginVersion": "0.1.0",
+      "pluginVersion": "0.2.0",
       "mcpCommand": "npx",
-      "mcpPackagePin": "@kyo-so/cli@0.8.0"
+      "mcpPackagePin": "@kyo-so/cli@0.9.0"
     },
     "marketplace": {
       "name": "kyoso",
@@ -16,10 +16,22 @@
       "authPolicy": "ON_USE"
     },
     "transitions": {
-      "beforeAdd": { "installed": false, "enabled": false },
-      "afterAdd": { "installed": true, "enabled": true },
-      "disabled": { "installed": true, "enabled": false },
-      "afterRemove": { "installed": false, "enabled": false },
+      "beforeAdd": {
+        "installed": false,
+        "enabled": false
+      },
+      "afterAdd": {
+        "installed": true,
+        "enabled": true
+      },
+      "disabled": {
+        "installed": true,
+        "enabled": false
+      },
+      "afterRemove": {
+        "installed": false,
+        "enabled": false
+      },
       "installPluginId": "kyoso@kyoso",
       "removePluginId": "kyoso@kyoso"
     },
@@ -109,13 +121,21 @@
     {
       "codexVersion": "0.144.0-alpha.4",
       "verifiedAt": "2026-07-11",
-      "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
+      "os": {
+        "platform": "darwin",
+        "release": "25.5.0",
+        "arch": "arm64"
+      },
       "fixtureSchemaVersion": 1
     },
     {
       "codexVersion": "0.144.1",
       "verifiedAt": "2026-07-11",
-      "os": { "platform": "darwin", "release": "25.5.0", "arch": "arm64" },
+      "os": {
+        "platform": "darwin",
+        "release": "25.5.0",
+        "arch": "arm64"
+      },
       "fixtureSchemaVersion": 1
     }
   ]

@@ -9,8 +9,39 @@ import {
   PLUGIN_RUNTIME_EXPECTED_CONTRACT,
 } from "../../src/cli/pluginRuntimeContract.js";
 import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
+// @ts-expect-error plain .mjs script without type declarations
+import { parseNpmPackJson } from "../../scripts/plugin-distribution.mjs";
 
 const root = process.cwd();
+
+describe("parseNpmPackJson", () => {
+  const metadata = JSON.stringify([
+    { files: [{ path: "dist/index.js" }, { path: "README.md" }] },
+  ]);
+
+  test("parses npm pack output wrapped in shim log lines with brackets", () => {
+    const polluted = `[safe-chain] intercepting npm [v1]\n${metadata}\n[safe-chain] scanned 42 packages [ok]`;
+    const parsed = parseNpmPackJson(polluted);
+    expect(parsed.files.map((file: { path: string }) => file.path)).toEqual([
+      "dist/index.js",
+      "README.md",
+    ]);
+  });
+
+  test("keeps brackets inside string values intact", () => {
+    const withBracketPath = JSON.stringify([
+      { files: [{ path: "weird[1].js" }] },
+    ]);
+    const parsed = parseNpmPackJson(`${withBracketPath}\n[wrapper] tail ]`);
+    expect(parsed.files[0].path).toBe("weird[1].js");
+  });
+
+  test("throws when no pack metadata is present", () => {
+    expect(() => parseNpmPackJson("no json here [broken")).toThrow(
+      "did not emit JSON metadata",
+    );
+  });
+});
 describe("Codex Plugin fixture", () => {
   test("uses the fixed marketplace, plugin, and MCP identities", async () => {
     const packageMetadata = await readJson(join(root, "package.json"));

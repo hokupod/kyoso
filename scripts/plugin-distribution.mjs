@@ -719,18 +719,57 @@ function assertPackageArchiveExcludesPluginPaths(root) {
   }
 }
 
-function parseNpmPackJson(stdout) {
-  const start = stdout.indexOf("[");
-  const end = stdout.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error("npm pack --dry-run did not emit JSON metadata");
+// Wrappers such as safe-chain append log lines (which may themselves contain
+// brackets) to npm's stdout, so neither raw JSON.parse nor a first-"["/
+// last-"]" slice is reliable. Scan bracket depth (string- and escape-aware)
+// from each "[" candidate and parse the first balanced array that carries
+// pack metadata.
+export function parseNpmPackJson(stdout) {
+  for (
+    let start = stdout.indexOf("[");
+    start !== -1;
+    start = stdout.indexOf("[", start + 1)
+  ) {
+    const candidate = extractBalancedArray(stdout, start);
+    if (candidate === undefined) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const metadata = Array.isArray(parsed) ? parsed[0] : undefined;
+    if (Array.isArray(metadata?.files)) return metadata;
   }
-  const parsed = JSON.parse(stdout.slice(start, end + 1));
-  const metadata = parsed[0];
-  if (!Array.isArray(metadata?.files)) {
-    throw new Error("npm pack --dry-run metadata is missing files");
+  throw new Error("npm pack --dry-run did not emit JSON metadata");
+}
+
+function extractBalancedArray(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+    } else if (character === "[") {
+      depth += 1;
+    } else if (character === "]") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
   }
-  return metadata;
+  return undefined;
 }
 
 function validateRelativePath(root, value, label, failures) {

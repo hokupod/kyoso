@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -46,15 +47,19 @@ if (kyosoVersion !== packageVersion) {
 const tempDir = mkdtempSync(join(tmpdir(), "kyoso-pack-"));
 
 try {
+  // npm's stdout is unreliable under interposing shims (safe-chain in CI
+  // interleaves its own output with --json payloads), so derive everything
+  // from the packed archive itself instead of parsing pack metadata.
+  const archiveDir = join(tempDir, "archive");
+  mkdirSync(archiveDir, { recursive: true });
   const pack = spawnSync(
     "npm",
     [
       "--cache",
       join(tempDir, "npm-cache"),
       "pack",
-      "--json",
       "--pack-destination",
-      tempDir,
+      archiveDir,
     ],
     { encoding: "utf8" },
   );
@@ -65,9 +70,18 @@ try {
     process.exit(pack.status ?? 1);
   }
 
-  const metadata = parsePackJson(pack.stdout);
-  const filePaths = metadata.files.map((file) => file.path);
-  const tarballPath = join(tempDir, metadata.filename);
+  const archives = readdirSync(archiveDir).filter((name) =>
+    name.endsWith(".tgz"),
+  );
+  if (archives.length !== 1) {
+    console.error(
+      `pack verify failed: npm pack produced ${archives.length} archives; expected exactly 1`,
+    );
+    process.exit(1);
+  }
+  const tarballPath = join(archiveDir, archives[0]);
+  const packageEntries = listTarEntriesVerbose(tarballPath);
+  const filePaths = packageEntries.map((entry) => entry.path);
   const failures = [];
 
   for (const prefix of requiredPrefixes) {
@@ -82,12 +96,12 @@ try {
     }
   }
 
-  const binFile = metadata.files.find(
-    (file) => file.path === "dist/bin/kyoso.js",
+  const binFile = packageEntries.find(
+    (entry) => entry.path === "dist/bin/kyoso.js",
   );
   if (!binFile) {
     failures.push("missing CLI bin file: dist/bin/kyoso.js");
-  } else if ((binFile.mode & 0o111) === 0) {
+  } else if (!/x/.test(binFile.mode)) {
     failures.push("CLI bin file is not executable: dist/bin/kyoso.js");
   }
 
@@ -129,30 +143,30 @@ try {
     process.exit(1);
   }
 
-  console.log(
-    `pack verify ok: ${metadata.filename} (${filePaths.length} files)`,
-  );
+  console.log(`pack verify ok: ${archives[0]} (${filePaths.length} files)`);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
 }
 
-function parsePackJson(stdout) {
-  const start = stdout.indexOf("[");
-  const end = stdout.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error(`npm pack did not emit JSON metadata: ${stdout}`);
+// Parse `tar -tvf` lines (mode is the first column, the entry name the last
+// whitespace-separated field) and strip the leading "package/" prefix so
+// callers see npm-pack-style relative paths.
+function listTarEntriesVerbose(tarballPath) {
+  const result = spawnSync("tar", ["-tvf", tarballPath], { encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || `failed to list ${tarballPath}`);
   }
 
-  const parsed = JSON.parse(stdout.slice(start, end + 1));
-  const metadata = parsed[0];
-  if (
-    typeof metadata?.filename !== "string" ||
-    !Array.isArray(metadata.files)
-  ) {
-    throw new Error("npm pack metadata is missing filename or files.");
-  }
-
-  return metadata;
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const fields = line.split(/\s+/);
+      const name = fields[fields.length - 1];
+      return { mode: fields[0], path: name.replace(/^package\//, "") };
+    })
+    .filter((entry) => entry.path.length > 0 && !entry.path.endsWith("/"));
 }
 
 function listTarEntries(tarballPath) {

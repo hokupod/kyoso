@@ -42,17 +42,19 @@ export function assertPublishedCliVersion({
     );
   }
 
-  let publishedVersion;
-  try {
-    publishedVersion = JSON.parse(result.stdout.trim());
-  } catch (error) {
+  // npm's stdout is unreliable under interposing shims (safe-chain in CI
+  // appends its own lines), so look for a line that is exactly the expected
+  // version instead of JSON-parsing the whole payload.
+  const lines = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const matched = lines.some(
+    (line) => line === packageVersion || line === `"${packageVersion}"`,
+  );
+  if (!matched) {
     throw new Error(
-      `npm view ${requested} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (publishedVersion !== packageVersion) {
-    throw new Error(
-      `npm registry returned ${JSON.stringify(publishedVersion)} for ${requested}; expected ${packageVersion}`,
+      `npm registry did not confirm ${requested}; expected version ${packageVersion} in output: ${lines.join(" | ").slice(0, 300)}`,
     );
   }
 

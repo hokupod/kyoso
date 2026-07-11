@@ -556,7 +556,7 @@ describe("setup", () => {
 
     const output = await runSetup(options);
     expect(output).toContain("Claude Code skill: updated");
-    expect(output).toContain("adopt existing 0.8.0 skill");
+    expect(output).toContain(`adopt existing ${KYOSO_VERSION} skill`);
     expect(await hashSkillDirectory(destination)).toBe(CURRENT_SKILL_DIGEST);
   });
 

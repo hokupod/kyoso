@@ -315,19 +315,46 @@ describe("Codex Plugin fixture", () => {
     const result = spawnSync(
       "node",
       [
-        "scripts/verify-plugin.mjs",
-        "--skip-pack",
-        "--expect-package-version",
-        "0.8.0",
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-promotion-match-"));
+          try {
+            cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+            cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+            mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+            cpSync("package.json", join(fixture, "package.json"));
+            cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+            cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+            const mcpPath = join(fixture, "plugins", "kyoso", ".mcp.json");
+            const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
+            const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
+            const packagePath = join(fixture, "package.json");
+            const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
+            packageMetadata.version = pinVersion;
+            writeFileSync(packagePath, JSON.stringify(packageMetadata));
+            verifyPluginDistribution({
+              root: fixture,
+              verifyPackageArchive: false,
+              expectedPackageVersion: pinVersion,
+            });
+          } finally {
+            rmSync(fixture, { force: true, recursive: true });
+          }
+        `,
       ],
-      {
-        cwd: root,
-        encoding: "utf8",
-      },
+      { cwd: root, encoding: "utf8" },
     );
 
+    expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("plugin verify ok: kyoso@kyoso");
   });
 
   test("rejects camelCase approval, sandbox, and trust policy keys", () => {

@@ -677,99 +677,75 @@ function validateRuntimeContract(
   }
 }
 
+// npm's stdout cannot be parsed reliably here: credential/scanner shims such
+// as safe-chain interpose the npm command in CI and interleave their own
+// output with the --json payload. Pack a real archive instead and list its
+// entries with tar, which the shims do not touch.
 function assertPackageArchiveExcludesPluginPaths(root) {
   const cacheRoot = mkdtempSync(join(tmpdir(), "kyoso-plugin-pack-"));
   try {
+    const archiveDir = join(cacheRoot, "archive");
+    mkdirSync(archiveDir, { recursive: true });
     const result = spawnSync(
       "npm",
       [
         "--cache",
         join(cacheRoot, "npm-cache"),
         "pack",
-        "--dry-run",
-        "--json",
         "--ignore-scripts",
+        "--pack-destination",
+        archiveDir,
       ],
       {
         cwd: root,
         encoding: "utf8",
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 60_000,
+        timeout: 120_000,
       },
     );
     if (result.error) {
-      throw new Error(`npm pack --dry-run failed: ${result.error.message}`);
+      throw new Error(`npm pack failed: ${result.error.message}`);
     }
     if (result.status !== 0) {
       throw new Error(
-        `npm pack --dry-run failed (${result.status}): ${(result.stderr || result.stdout).trim()}`,
+        `npm pack failed (${result.status}): ${(result.stderr || result.stdout).trim()}`,
       );
     }
-    const metadata = parseNpmPackJson(result.stdout);
-    const paths = metadata.files.map((file) => file.path);
+    const archives = readdirSync(archiveDir).filter((name) =>
+      name.endsWith(".tgz"),
+    );
+    if (archives.length !== 1) {
+      throw new Error(
+        `npm pack produced ${archives.length} archives; expected exactly 1`,
+      );
+    }
+    const listing = spawnSync("tar", ["-tzf", join(archiveDir, archives[0])], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 60_000,
+    });
+    if (listing.error || listing.status !== 0) {
+      throw new Error(
+        `tar listing failed: ${listing.error?.message ?? listing.stderr.trim()}`,
+      );
+    }
+    const paths = listing.stdout
+      .split("\n")
+      .map((entry) => entry.trim().replace(/^package\//, ""))
+      .filter((entry) => entry.length > 0);
+    if (paths.length === 0) {
+      throw new Error("tar listing returned no package entries");
+    }
     for (const prefix of ["plugins/", ".agents/plugins/"]) {
       if (paths.some((path) => path.startsWith(prefix))) {
         throw new Error(
-          `npm pack dry-run includes forbidden Plugin path: ${prefix}`,
+          `npm pack archive includes forbidden Plugin path: ${prefix}`,
         );
       }
     }
   } finally {
     rmSync(cacheRoot, { force: true, recursive: true });
   }
-}
-
-// Wrappers such as safe-chain append log lines (which may themselves contain
-// brackets) to npm's stdout, so neither raw JSON.parse nor a first-"["/
-// last-"]" slice is reliable. Scan bracket depth (string- and escape-aware)
-// from each "[" candidate and parse the first balanced array that carries
-// pack metadata.
-export function parseNpmPackJson(stdout) {
-  for (
-    let start = stdout.indexOf("[");
-    start !== -1;
-    start = stdout.indexOf("[", start + 1)
-  ) {
-    const candidate = extractBalancedArray(stdout, start);
-    if (candidate === undefined) continue;
-    let parsed;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-    const metadata = Array.isArray(parsed) ? parsed[0] : undefined;
-    if (Array.isArray(metadata?.files)) return metadata;
-  }
-  throw new Error("npm pack --dry-run did not emit JSON metadata");
-}
-
-function extractBalancedArray(text, start) {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const character = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      inString = true;
-    } else if (character === "[") {
-      depth += 1;
-    } else if (character === "]") {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, index + 1);
-    }
-  }
-  return undefined;
 }
 
 function validateRelativePath(root, value, label, failures) {

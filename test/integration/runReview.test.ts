@@ -7,6 +7,7 @@ import {
   FakeAgentManager,
   type FakeAgentScenario,
 } from "../../src/acp/FakeAgentManager.js";
+import type { TraceWriter, TraceWriterOptions } from "../../src/audit/trace.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
 import {
   type KyosoConfig,
@@ -18,6 +19,7 @@ import type {
   AgentRunResult,
   NormalizedAgentOpinion,
 } from "../../src/core/types.js";
+import { auditTracePath } from "../helpers/auditState.js";
 
 const originalJudgeEnv = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
@@ -25,8 +27,12 @@ const originalJudgeEnv = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
 };
+const originalAuditStateHome = process.env.XDG_STATE_HOME;
+let auditStateHome = "";
 
-beforeAll(() => {
+beforeAll(async () => {
+  auditStateHome = await mkdtemp(join(tmpdir(), "kyoso-audit-state-"));
+  process.env.XDG_STATE_HOME = auditStateHome;
   delete process.env.OPENAI_API_KEY;
   delete process.env.CODEX_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
@@ -41,6 +47,7 @@ afterAll(() => {
     "CLAUDE_CODE_OAUTH_TOKEN",
     originalJudgeEnv.CLAUDE_CODE_OAUTH_TOKEN,
   );
+  restoreEnv("XDG_STATE_HOME", originalAuditStateHome);
 });
 
 describe("runReview", () => {
@@ -100,6 +107,107 @@ describe("runReview", () => {
     expect(result.decision).toBe("block");
     expect(result.findings[0]?.category).toBe("secret");
     expect(manager.calls).toHaveLength(0);
+  });
+
+  test("late audit failures reach JSON and Markdown on every result path", async () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const normal = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new FakeAgentManager(),
+        traceWriterFactory: lateWarningTraceWriter,
+      },
+    );
+    const secret = await runReview(
+      "plan_review",
+      {
+        goal: "review secret",
+        selectedFiles: [
+          {
+            path: "src/config.ts",
+            content:
+              "export const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';",
+          },
+        ],
+      },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new FakeAgentManager(),
+        traceWriterFactory: lateWarningTraceWriter,
+      },
+    );
+    const policy = await runReview(
+      "plan_review",
+      { goal: "review policy" },
+      {
+        cwd: await tempCwd(),
+        config,
+        env: { KYOSO_CHILD_AGENT: "1" },
+        traceWriterFactory: lateWarningTraceWriter,
+      },
+    );
+
+    for (const result of [normal, secret, policy]) {
+      expect(result.audit.warnings).toContain("AUDIT_WRITE_FAILED: late");
+      expect(result.audit.warnings).toContain("AUDIT_FINALIZE_FAILED: late");
+      expect(result.summaryMarkdown).toContain("AUDIT\\_WRITE\\_FAILED: late");
+      expect(result.summaryMarkdown).toContain(
+        "AUDIT\\_FINALIZE\\_FAILED: late",
+      );
+    }
+  });
+
+  test("validation errors finalize an already-open audit writer without masking the error", async () => {
+    let finalized = false;
+    const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
+      warnings: [],
+      async write() {
+        return;
+      },
+      async finalize() {
+        finalized = true;
+      },
+    });
+
+    await expect(
+      runReview("plan_review", {} as never, {
+        cwd: await tempCwd(),
+        config: kyosoConfigSchema.parse(defaultConfig),
+        traceWriterFactory,
+      }),
+    ).rejects.toThrow();
+    expect(finalized).toBe(true);
+  });
+
+  test("recursive policy errors finalize the trace writer before propagating", async () => {
+    let finalized = false;
+    const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
+      warnings: [],
+      async write() {
+        throw new Error("simulated audit write failure");
+      },
+      async finalize() {
+        finalized = true;
+      },
+    });
+
+    await expect(
+      runReview(
+        "plan_review",
+        { goal: "review policy" },
+        {
+          cwd: await tempCwd(),
+          config: kyosoConfigSchema.parse(defaultConfig),
+          env: { KYOSO_CHILD_AGENT: "1" },
+          traceWriterFactory,
+        },
+      ),
+    ).rejects.toThrow("simulated audit write failure");
+    expect(finalized).toBe(true);
   });
 
   test("secret detection blocks token-like selected file paths before agents run", async () => {
@@ -453,12 +561,13 @@ export default {};
 
     const config = kyosoConfigSchema.parse(defaultConfig);
     const traceText = await readFile(
-      join(
+      await auditTracePath({
+        stateHome: auditStateHome,
         cwd,
-        config.audit.directory,
-        result.audit.startedAt.slice(0, 10),
-        `${result.audit.traceId}.jsonl`,
-      ),
+        directory: config.audit.directory,
+        date: result.audit.startedAt.slice(0, 10),
+        traceId: result.audit.traceId,
+      }),
       "utf8",
     );
     expect(traceText).toContain('"configTrustStatus":"untrusted_skipped"');
@@ -1217,12 +1326,13 @@ enabled = true
       },
     );
     const traceText = await readFile(
-      join(
+      await auditTracePath({
+        stateHome: auditStateHome,
         cwd,
-        config.audit.directory,
-        result.audit.startedAt.slice(0, 10),
-        `${result.audit.traceId}.jsonl`,
-      ),
+        directory: config.audit.directory,
+        date: result.audit.startedAt.slice(0, 10),
+        traceId: result.audit.traceId,
+      }),
       "utf8",
     );
 
@@ -1260,12 +1370,13 @@ enabled = true
       },
     );
     const traceText = await readFile(
-      join(
+      await auditTracePath({
+        stateHome: auditStateHome,
         cwd,
-        config.audit.directory,
-        result.audit.startedAt.slice(0, 10),
-        `${result.audit.traceId}.jsonl`,
-      ),
+        directory: config.audit.directory,
+        date: result.audit.startedAt.slice(0, 10),
+        traceId: result.audit.traceId,
+      }),
       "utf8",
     );
 
@@ -1561,12 +1672,13 @@ model = "claude-from-toml"
       "ANTHROPIC_MODEL=claude-from-toml",
     );
     const traceText = await readFile(
-      join(
+      await auditTracePath({
+        stateHome: auditStateHome,
         cwd,
-        kyosoConfigSchema.parse(defaultConfig).audit.directory,
-        result.audit.startedAt.slice(0, 10),
-        `${result.audit.traceId}.jsonl`,
-      ),
+        directory: kyosoConfigSchema.parse(defaultConfig).audit.directory,
+        date: result.audit.startedAt.slice(0, 10),
+        traceId: result.audit.traceId,
+      }),
       "utf8",
     );
     expect(traceText).toContain('"layer":"global_toml"');
@@ -2070,12 +2182,13 @@ async function readTraceEvents(
   result: Awaited<ReturnType<typeof runReview>>,
 ): Promise<Record<string, unknown>[]> {
   const traceText = await readFile(
-    join(
+    await auditTracePath({
+      stateHome: auditStateHome,
       cwd,
-      config.audit.directory,
-      result.audit.startedAt.slice(0, 10),
-      `${result.audit.traceId}.jsonl`,
-    ),
+      directory: config.audit.directory,
+      date: result.audit.startedAt.slice(0, 10),
+      traceId: result.audit.traceId,
+    }),
     "utf8",
   );
   return traceText
@@ -2090,6 +2203,24 @@ function restoreEnv(key: string, value: string | undefined): void {
   } else {
     process.env[key] = value;
   }
+}
+
+function lateWarningTraceWriter(_options: TraceWriterOptions): TraceWriter {
+  const warnings: string[] = [];
+  let finalized = false;
+  return {
+    warnings,
+    async write(event) {
+      if (event.type === "response_sent") {
+        warnings.push("AUDIT_WRITE_FAILED: late");
+      }
+    },
+    async finalize() {
+      if (finalized) return;
+      finalized = true;
+      warnings.push("AUDIT_FINALIZE_FAILED: late");
+    },
+  };
 }
 
 function isProcessAlive(pid: number): boolean {

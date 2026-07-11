@@ -140,6 +140,7 @@ describe("e2e surfaces", () => {
           ...process.env,
           HOME: home,
           XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_STATE_HOME: join(home, "state"),
           OPENAI_API_KEY: "",
           CODEX_API_KEY: "",
           ANTHROPIC_API_KEY: "",
@@ -189,6 +190,7 @@ describe("e2e surfaces", () => {
     );
     expect(output).toContain("provider: deterministic_fallback");
     expect(output).toContain("billing: none (deterministic fallback)");
+    expect(output).toContain("state root: available");
     expect(output).toContain("raw agent output: disabled");
   });
 

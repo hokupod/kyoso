@@ -273,6 +273,10 @@ Repository content、plans、diffs 和 selected files 在 backend prompts 中被
 
 Finding title 会为 aggregation 规范化为简洁英文；evidence、recommendations 和 summaries 可以继续使用用户的语言。
 
+Audit trace 写入受信任的 user state root，而不是由 workspace 控制的 path。在受支持的 POSIX runtime 上，Kyoso 会在可用时使用 absolute `$XDG_STATE_HOME`，否则使用 `$HOME/.local/state`；只有 owner、permission、containment 和 symlink 检查均成功时才会写入。验证或 safe open 失败时，它不会静默 fallback 到其他 location：会为该 review fail-close 禁用 Audit 写入，返回 sanitized warning，并继续 review。
+
+Windows，以及无法证明所需 filesystem capability 的环境，会 fail-close 禁用 Audit 写入。能够修改 trusted state root 或 rename 已验证 inode 的 same OS user hostile process 不在此保证范围内；防御该威胁需要 OS sandbox 或 native dirfd-based support。
+
 ## Agent Auth
 
 可用时，Codex 使用 local `codex` login。默认 subscription-backed path 不需要 API key。
@@ -318,15 +322,15 @@ effort 的工作方式不同：Kyoso 不会为它设置 env var，而是在每�
 
 ## Audit
 
-Audit traces 写入：
+在受支持的 POSIX runtime 上，Audit traces 会写入 user state base（absolute `$XDG_STATE_HOME`，否则 `$HOME/.local/state`）下：
 
 ```text
-.kyoso/traces/<yyyy-mm-dd>/<traceId>.jsonl
+<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
 ```
 
-Raw agent output 和 raw file contents 默认禁用。
+`audit.directory`是 logical relative directory（默认：`.kyoso/traces`），不是 workspace 内的 directory。现有 workspace `.kyoso/traces`不会被自动迁移或删除。
 
-不要将 `.kyoso/traces/` 提交到 Git。`kyoso init` 会把 `.kyoso/` 添加到 `.gitignore`，本 repository 也同样如此。如果启用 `audit.includeRawAgentOutput`，traces 可能会保留 sensitive review output；请按照 local retention policy 定期删除旧 traces。
+Raw agent output 和 raw file contents 默认禁用。如果启用 `audit.includeRawAgentOutput`，traces 可能会保留 sensitive review output；请按照 local retention policy 删除旧 traces。在 Windows 或无法证明安全 filesystem capability 的环境中，Audit trace 写入会保持禁用，review 会返回 sanitized warning。
 
 ## Config
 

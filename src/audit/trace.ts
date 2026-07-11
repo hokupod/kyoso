@@ -1,70 +1,209 @@
-import { mkdir, appendFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
-import { normalizeRelativePath } from "../context/pathPolicy.js";
+import type { FileHandle } from "node:fs/promises";
+import {
+  type AuditRuntimeOptions,
+  isResolvedAuditStateRoot,
+  resolveAuditStateRoot,
+} from "./stateRoot.js";
+import {
+  AUDIT_WARNING_UNSUPPORTED_OPEN_CAPABILITY,
+  type AuditOpenConstants,
+  openVerifiedTraceFile,
+  secureOpenFlags,
+} from "./safeTraceFile.js";
 import { sanitizeForAudit } from "./sanitize.js";
 
+export const AUDIT_WARNING_WRITE_FAILED =
+  "AUDIT_WRITE_FAILED: Audit trace writing failed; no further audit events will be written.";
+export const AUDIT_WARNING_FINALIZE_FAILED =
+  "AUDIT_FINALIZE_FAILED: Audit trace close failed.";
+export const AUDIT_WARNING_WRITE_AFTER_FINALIZE =
+  "AUDIT_WRITE_AFTER_FINALIZE: Audit trace is already finalized.";
+
 export type TraceWriter = {
-  tracePath?: string;
+  readonly tracePath?: string;
   warnings: string[];
   write(event: Record<string, unknown>): Promise<void>;
+  finalize(): Promise<void>;
 };
 
-export function createTraceWriter(options: {
+export type TraceWriterOptions = {
   enabled: boolean;
   directory: string;
   traceId: string;
   cwd: string;
   includeRawAgentOutput?: boolean;
-}): TraceWriter {
+  openConstants?: AuditOpenConstants;
+  beforeOpen?: (tracePath: string) => Promise<void> | void;
+  closeHandle?: (handle: FileHandle) => Promise<void>;
+  writeChunk?: (
+    handle: FileHandle,
+    buffer: Buffer,
+    offset: number,
+  ) => Promise<number>;
+} & AuditRuntimeOptions;
+
+export function createTraceWriter(options: TraceWriterOptions): TraceWriter {
   const warnings: string[] = [];
-  if (!options.enabled) {
-    return {
-      warnings,
-      async write() {
-        return;
-      },
-    };
-  }
+  const warningSet = new Set<string>();
   const date = new Date().toISOString().slice(0, 10);
-  const directory = validateAuditDirectory(options.directory, warnings);
-  const tracePath = join(
-    options.cwd,
-    directory,
-    date,
-    `${options.traceId}.jsonl`,
-  );
+  let tracePath: string | undefined;
+  let handle: FileHandle | undefined;
+  let disabled = !options.enabled;
+  let finalizing = false;
+  let finalized = false;
+  let queue = Promise.resolve();
+  let finalizePromise: Promise<void> | undefined;
+
+  const addWarning = (warning: string): void => {
+    if (warningSet.has(warning)) return;
+    warningSet.add(warning);
+    warnings.push(warning);
+  };
+
+  const closeHandle = async (): Promise<void> => {
+    const current = handle;
+    handle = undefined;
+    if (!current) return;
+    try {
+      await (options.closeHandle ?? defaultCloseHandle)(current);
+    } catch {
+      addWarning(AUDIT_WARNING_FINALIZE_FAILED);
+    }
+  };
+
+  const disableAfterWriteFailure = async (): Promise<void> => {
+    disabled = true;
+    addWarning(AUDIT_WARNING_WRITE_FAILED);
+    await closeHandle();
+  };
+
+  const openIfNeeded = async (): Promise<void> => {
+    if (handle || disabled) return;
+    if (secureOpenFlags(options.openConstants) === undefined) {
+      disabled = true;
+      addWarning(AUDIT_WARNING_UNSUPPORTED_OPEN_CAPABILITY);
+      return;
+    }
+
+    const stateRoot = await resolveAuditStateRoot({
+      cwd: options.cwd,
+      directory: options.directory,
+      env: options.env,
+      platform: options.platform,
+      getuid: options.getuid,
+    });
+    for (const warning of stateRoot.warnings) addWarning(warning);
+    if (!isResolvedAuditStateRoot(stateRoot)) {
+      disabled = true;
+      return;
+    }
+
+    try {
+      const opened = await openVerifiedTraceFile({
+        kyosoRoot: stateRoot.kyosoRoot,
+        workspaceHash: stateRoot.workspaceHash,
+        logicalDirectory: stateRoot.logicalDirectory,
+        date,
+        traceId: options.traceId,
+        uid: stateRoot.uid,
+        workspaceRoot: stateRoot.workspaceRoot,
+        openConstants: options.openConstants,
+        beforeOpen: options.beforeOpen,
+      });
+      handle = opened.handle;
+      tracePath = opened.tracePath;
+    } catch {
+      disabled = true;
+      addWarning(AUDIT_WARNING_WRITE_FAILED);
+    }
+  };
+
+  const writeOne = async (event: Record<string, unknown>): Promise<void> => {
+    if (disabled) return;
+    try {
+      await openIfNeeded();
+      if (disabled || !handle) return;
+      const line = Buffer.from(
+        `${JSON.stringify(
+          sanitizeForAudit(event, {
+            includeRawAgentOutput: options.includeRawAgentOutput,
+          }),
+        )}\n`,
+        "utf8",
+      );
+      await writeFully(handle, line, options.writeChunk);
+    } catch {
+      await disableAfterWriteFailure();
+    }
+  };
+
   return {
-    tracePath,
+    get tracePath() {
+      return tracePath;
+    },
     warnings,
-    async write(event) {
-      try {
-        await mkdir(dirname(tracePath), { recursive: true });
-        await appendFile(
-          tracePath,
-          `${JSON.stringify(
-            sanitizeForAudit(event, {
-              includeRawAgentOutput: options.includeRawAgentOutput,
-            }),
-          )}\n`,
-          "utf8",
-        );
-      } catch (error) {
-        warnings.push(
-          `Audit write failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+    write(event) {
+      if (finalizing || finalized) {
+        addWarning(AUDIT_WARNING_WRITE_AFTER_FINALIZE);
+        return Promise.resolve();
       }
+      const task = queue.then(() => writeOne(event));
+      queue = task.catch(async () => {
+        await disableAfterWriteFailure();
+      });
+      return task.catch(() => undefined);
+    },
+    finalize() {
+      if (finalizePromise) return finalizePromise;
+      finalizing = true;
+      finalizePromise = queue
+        .then(async () => {
+          await closeHandle();
+          finalized = true;
+        })
+        .catch(() => {
+          disabled = true;
+          addWarning(AUDIT_WARNING_FINALIZE_FAILED);
+          finalized = true;
+        });
+      return finalizePromise;
     },
   };
 }
 
-function validateAuditDirectory(directory: string, warnings: string[]): string {
-  try {
-    if (isAbsolute(directory) || directory.split(/[\\/]+/).includes("..")) {
-      throw new Error("unsafe path");
+async function writeFully(
+  handle: FileHandle,
+  buffer: Buffer,
+  writeChunk: TraceWriterOptions["writeChunk"],
+): Promise<void> {
+  let offset = 0;
+  while (offset < buffer.byteLength) {
+    const bytesWritten = await (writeChunk ?? defaultWriteChunk)(
+      handle,
+      buffer,
+      offset,
+    );
+    if (!Number.isInteger(bytesWritten) || bytesWritten <= 0) {
+      throw new Error("partial audit write could not advance");
     }
-    return normalizeRelativePath(directory);
-  } catch {
-    warnings.push(`Unsafe audit directory ignored: ${directory}`);
-    return ".kyoso/traces";
+    offset += bytesWritten;
   }
+}
+
+async function defaultWriteChunk(
+  handle: FileHandle,
+  buffer: Buffer,
+  offset: number,
+): Promise<number> {
+  const { bytesWritten } = await handle.write(
+    buffer,
+    offset,
+    buffer.byteLength - offset,
+    null,
+  );
+  return bytesWritten;
+}
+
+async function defaultCloseHandle(handle: FileHandle): Promise<void> {
+  await handle.close();
 }

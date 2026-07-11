@@ -34,6 +34,7 @@ import {
 import { truncateUtf8 } from "../../src/context/truncate.js";
 import { createTraceWriter } from "../../src/audit/trace.js";
 import { sanitizeForAudit } from "../../src/audit/sanitize.js";
+import { auditTracePath } from "../helpers/auditState.js";
 import {
   KYOSO_VERSION,
   RAW_OUTPUT_MAX_CHARS,
@@ -1764,19 +1765,30 @@ describe("CISA gate and decision", () => {
 });
 
 describe("audit sanitize", () => {
-  test("keeps unsafe audit directories inside the repository", async () => {
+  test("keeps unsafe audit directories inside the trusted state root", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-audit-"));
+    const stateHome = await mkdtemp(join(tmpdir(), "kyoso-audit-state-"));
     const trace = createTraceWriter({
       enabled: true,
       directory: "safe/../outside",
       traceId: "trace",
       cwd,
+      env: { XDG_STATE_HOME: stateHome },
     });
     await trace.write({ type: "test" });
+    await trace.finalize();
 
-    expect(trace.tracePath).toContain(join(cwd, ".kyoso/traces"));
+    expect(trace.tracePath).toBe(
+      await auditTracePath({
+        stateHome,
+        cwd,
+        directory: ".kyoso/traces",
+        date: new Date().toISOString().slice(0, 10),
+        traceId: "trace",
+      }),
+    );
     expect(trace.warnings).toContain(
-      "Unsafe audit directory ignored: safe/../outside",
+      "AUDIT_DIRECTORY_IGNORED: Audit directory is invalid; using the default logical directory.",
     );
   });
 

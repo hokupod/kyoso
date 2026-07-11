@@ -19,7 +19,10 @@ import {
   buildCodexMcpToml,
   buildClaudeMcpEntry,
   commandForRunner,
+  detectCodexPluginMcpOverride,
   detectSetup,
+  resolveCodexConfigPath,
+  resolveCodexUserSkillPath,
   runSetup,
   skillDestination,
 } from "../../src/cli/setup.js";
@@ -111,6 +114,84 @@ describe("setup", () => {
       cliVersion: KYOSO_VERSION,
       digest: CURRENT_SKILL_DIGEST,
     });
+  });
+
+  test("keeps disabled manual MCP entries and explains how to re-enable them", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-disabled-mcp-");
+    const codexHome = join(cwd, "codex-state");
+    const codexConfigPath = join(codexHome, "config.toml");
+    const claudeProjectConfigPath = join(cwd, ".mcp.json");
+    const claudeGlobalConfigPath = join(home, ".claude.json");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+    const codexConfig = [
+      "[mcp_servers.kyoso]",
+      'command = "npx"',
+      "enabled = false",
+      "",
+    ].join("\n");
+    const claudeProjectConfig = `${JSON.stringify(
+      { mcpServers: { kyoso: { command: "npx", enabled: false } } },
+      null,
+      2,
+    )}\n`;
+    const claudeGlobalConfig = `${JSON.stringify(
+      { mcpServers: { kyoso: { command: "npx", enabled: false } } },
+      null,
+      2,
+    )}\n`;
+
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(codexConfigPath, codexConfig, "utf8");
+    await writeFile(claudeProjectConfigPath, claudeProjectConfig, "utf8");
+    await writeFile(claudeGlobalConfigPath, claudeGlobalConfig, "utf8");
+
+    const codexOutput = await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: false,
+      env,
+    });
+    const claudeProjectOutput = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: true,
+      global: false,
+      env,
+    });
+    const claudeGlobalOutput = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: true,
+      global: true,
+      env,
+    });
+
+    expect(codexOutput).toContain("Codex MCP: skipped");
+    expect(codexOutput).toContain(codexConfigPath);
+    expect(codexOutput).toContain("is disabled and was kept unchanged");
+    expect(codexOutput).toContain("enabled = false to enabled = true");
+    expect(await readFile(codexConfigPath, "utf8")).toBe(codexConfig);
+
+    expect(claudeProjectOutput).toContain("Claude Code MCP: skipped");
+    expect(claudeProjectOutput).toContain(claudeProjectConfigPath);
+    expect(claudeProjectOutput).toContain("is disabled and was kept unchanged");
+    expect(claudeProjectOutput).toContain(
+      '\"enabled\": false to \"enabled\": true',
+    );
+    expect(await readFile(claudeProjectConfigPath, "utf8")).toBe(
+      claudeProjectConfig,
+    );
+
+    expect(claudeGlobalOutput).toContain("Claude Code MCP: skipped");
+    expect(claudeGlobalOutput).toContain(claudeGlobalConfigPath);
+    expect(claudeGlobalOutput).toContain("is disabled and was kept unchanged");
+    expect(claudeGlobalOutput).toContain(
+      '\"enabled\": false to \"enabled\": true',
+    );
+    expect(await readFile(claudeGlobalConfigPath, "utf8")).toBe(
+      claudeGlobalConfig,
+    );
   });
 
   test("merges Claude Code project MCP without removing existing servers", async () => {
@@ -542,6 +623,192 @@ describe("setup", () => {
     ).toBe(true);
   });
 
+  test("resolves a relative CODEX_HOME from the setup workspace", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-relative-codex-");
+    const env = { HOME: home, CODEX_HOME: "codex-state" };
+
+    await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: false,
+      env,
+    });
+
+    expect(resolveCodexConfigPath(env, cwd)).toBe(
+      join(cwd, "codex-state", "config.toml"),
+    );
+    expect(existsSync(join(cwd, "codex-state", "config.toml"))).toBe(true);
+  });
+
+  test("resolves the Codex config and user Skill from separate roots", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-resolvers-");
+    const codexHome = join(cwd, "codex-state");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+    const configPath = resolveCodexConfigPath(env);
+    const globalSkillPath = resolveCodexUserSkillPath(env);
+    const projectSkillPath = join(cwd, ".agents", "skills", "kyoso-review");
+
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(
+      configPath,
+      "[mcp_servers.kyoso]\nenabled = true\n",
+      "utf8",
+    );
+    await mkdir(join(home, ".codex"), { recursive: true });
+    await writeFile(
+      join(home, ".codex", "config.toml"),
+      "[mcp_servers.kyoso]\nenabled = false\n",
+      "utf8",
+    );
+    await mkdir(projectSkillPath, { recursive: true });
+    await writeFile(join(projectSkillPath, "SKILL.md"), "project", "utf8");
+    await mkdir(globalSkillPath, { recursive: true });
+    await writeFile(join(globalSkillPath, "SKILL.md"), "global", "utf8");
+
+    const detected = detectSetup({ cwd, env });
+
+    expect(configPath).toBe(join(codexHome, "config.toml"));
+    expect(globalSkillPath).toBe(
+      join(home, ".agents", "skills", "kyoso-review"),
+    );
+    expect(resolveCodexConfigPath({ HOME: home })).toBe(
+      join(home, ".codex", "config.toml"),
+    );
+    expect(detected.codex).toMatchObject({
+      mcp: true,
+      skill: true,
+      manualMcpStatus: "enabled",
+      mcpPaths: [configPath],
+      skillPaths: [projectSkillPath, globalSkillPath],
+    });
+  });
+
+  test("detects Codex Plugin MCP overrides from the Codex config root", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-plugin-override-");
+    const codexHome = join(cwd, "codex-state");
+    const configPath = join(codexHome, "config.toml");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+
+    expect(detectCodexPluginMcpOverride({ cwd, env })).toEqual({
+      status: "missing",
+      path: configPath,
+    });
+
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(
+      configPath,
+      '[plugins."kyoso@kyoso".mcp_servers.kyoso]\n',
+      "utf8",
+    );
+    expect(detectCodexPluginMcpOverride({ cwd, env })).toEqual({
+      status: "enabled",
+      path: configPath,
+    });
+
+    await writeFile(
+      configPath,
+      '[plugins."kyoso@kyoso".mcp_servers.kyoso]\nenabled = false\n',
+      "utf8",
+    );
+    expect(detectCodexPluginMcpOverride({ cwd, env })).toEqual({
+      status: "disabled",
+      path: configPath,
+    });
+
+    await writeFile(configPath, "not valid toml [[", "utf8");
+    expect(detectCodexPluginMcpOverride({ cwd, env })).toEqual({
+      status: "unknown",
+      path: configPath,
+    });
+  });
+
+  test("fails closed for unprobed current-project Codex integration settings", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-project-codex-");
+    const codexHome = join(cwd, "codex-state");
+    const configPath = join(codexHome, "config.toml");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+    await mkdir(codexHome, { recursive: true });
+
+    await writeFile(
+      configPath,
+      ['[projects."' + cwd + '".mcp_servers.kyoso]', "enabled = true", ""].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    expect(detectSetup({ cwd, env }).codex.manualMcpStatus).toBe("unknown");
+    expect(detectCodexPluginMcpOverride({ cwd, env }).status).toBe("unknown");
+
+    await writeFile(
+      configPath,
+      ['[projects."' + cwd + '"]', 'trust_level = "trusted"', ""].join("\n"),
+      "utf8",
+    );
+    expect(detectSetup({ cwd, env }).codex.manualMcpStatus).toBe("missing");
+    expect(detectCodexPluginMcpOverride({ cwd, env }).status).toBe("missing");
+
+    await writeFile(
+      configPath,
+      [
+        '[projects."/different/project".mcp_servers.kyoso]',
+        "enabled = true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    expect(detectSetup({ cwd, env }).codex.manualMcpStatus).toBe("missing");
+    expect(detectCodexPluginMcpOverride({ cwd, env }).status).toBe("missing");
+  });
+
+  test("reports disabled and malformed manual MCP configuration safely", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-mcp-status-");
+    const codexHome = join(cwd, "codex-state");
+    const codexConfigPath = join(codexHome, "config.toml");
+    const claudeConfigPath = join(home, ".claude.json");
+    const env = { HOME: home, CODEX_HOME: codexHome };
+
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(
+      codexConfigPath,
+      "[mcp_servers.kyoso]\nenabled = false\n",
+      "utf8",
+    );
+    await writeFile(
+      claudeConfigPath,
+      JSON.stringify({ mcpServers: { kyoso: { enabled: false } } }),
+      "utf8",
+    );
+
+    const disabled = detectSetup({ cwd, env });
+    expect(disabled.codex).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "disabled",
+      mcpPaths: [codexConfigPath],
+    });
+    expect(disabled["claude-code"]).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "disabled",
+      mcpPaths: [claudeConfigPath],
+    });
+
+    await writeFile(codexConfigPath, "not valid toml [[", "utf8");
+    await writeFile(claudeConfigPath, "{", "utf8");
+
+    const malformed = detectSetup({ cwd, env });
+    expect(malformed.codex).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "unknown",
+      mcpPaths: [codexConfigPath],
+    });
+    expect(malformed["claude-code"]).toMatchObject({
+      mcp: false,
+      manualMcpStatus: "unknown",
+      mcpPaths: [claudeConfigPath],
+    });
+  });
+
   test("detects quoted Codex MCP table and nested Claude MCP config", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-detect-");
     await mkdir(join(home, ".codex"), { recursive: true });
@@ -567,7 +834,15 @@ describe("setup", () => {
     const detected = detectSetup({ cwd, home });
 
     expect(detected.codex.mcp).toBe(true);
+    expect(detected.codex.manualMcpStatus).toBe("enabled");
+    expect(detected.codex.mcpPaths).toEqual([
+      join(home, ".codex", "config.toml"),
+    ]);
     expect(detected["claude-code"].mcp).toBe(true);
+    expect(detected["claude-code"].manualMcpStatus).toBe("enabled");
+    expect(detected["claude-code"].mcpPaths).toEqual([
+      join(home, ".claude.json"),
+    ]);
   });
 
   test("builds Claude MCP entry with provider env placeholders", () => {

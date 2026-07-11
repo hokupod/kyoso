@@ -55,7 +55,7 @@ codex plugin list --marketplace kyoso --json
 
 Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。削除は`codex plugin remove kyoso@kyoso`です。
 
-PluginはSkillと`@kyo-so/cli@0.8.0`へpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
+PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
 
 #### CLI＋Skill-only
 

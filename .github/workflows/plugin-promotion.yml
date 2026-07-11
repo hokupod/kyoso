@@ -1,0 +1,72 @@
+# Verify a Plugin promotion only when its delivery surface changes. Configure
+# this workflow's job as a required check for Plugin-path pull requests.
+name: Plugin promotion verification
+
+on:
+  pull_request:
+    paths:
+      - ".agents/plugins/**"
+      - ".agents/skills/kyoso-review/**"
+      - "plugins/**"
+      - "docs/compatibility/codex-plugin-runtime.json"
+      - "src/cli/knownSkillDigests.ts"
+      - "src/cli/pluginRuntimeContract.ts"
+      - "scripts/plugin-*.mjs"
+      - "scripts/verify-plugin*.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-plugin-promotion:
+    name: Plugin promotion verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install safe-chain
+        run: npm install -g @aikidosec/safe-chain@1.5.12
+
+      - name: Setup safe-chain shims
+        run: safe-chain setup-ci
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify Plugin distribution
+        run: bun run plugin:verify
+
+      - name: Verify promoted pin matches the release version
+        run: |
+          bun run plugin:verify -- --expect-package-version \
+            "$(node -p "require('./package.json').version")"
+
+      - name: Verify published CLI pin
+        run: bun run plugin:verify:registry
+
+      # The verifier installs each Codex version recorded in the compatibility
+      # file via an exact npx package spec before replaying its probe.
+      - name: Re-run recorded Codex Plugin probes
+        run: bun run plugin:runtime:verify
+
+      - name: Upload compatibility record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-plugin-runtime-compatibility
+          path: docs/compatibility/codex-plugin-runtime.json
+          if-no-files-found: error

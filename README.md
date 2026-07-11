@@ -53,7 +53,7 @@ codex plugin list --marketplace kyoso --json
 
 You can also select Kyoso from the Codex desktop Plugins page or `/plugins`. Refresh or restart the desktop app if a newly added marketplace is not visible. Remove the Plugin with `codex plugin remove kyoso@kyoso`.
 
-The Plugin bundles the Skill and an MCP definition pinned to `@kyo-so/cli@0.8.0`; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
+The Plugin bundles the Skill and an MCP definition pinned to an exact published Kyoso CLI version; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
 
 #### CLI plus Skill-only
 

@@ -1,17 +1,18 @@
-name: CI
+# Manual only: this runs on a dedicated runner with a scoped Codex auth secret.
+# It exercises Skill selection and the PATH fallback, never a real Kyoso review.
+name: Skill runtime verification
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  verify-mcp-less-skill:
+    name: MCP-less Skill smoke
+    runs-on: [self-hosted, codex-authenticated]
+    environment: codex-skill-runtime
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -26,7 +27,6 @@ jobs:
         with:
           bun-version: "1.3.14"
 
-      # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
         run: npm install -g @aikidosec/safe-chain@1.5.12
 
@@ -36,25 +36,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check formatting
-        run: bun run format:check
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun test
-
       - name: Build
         run: bun run build
 
-      # Reject hand-edited Plugin mirrors and validate the pre-pack archive
-      # allowlist before creating the actual npm tarball below.
-      - name: Verify Plugin distribution
-        run: bun run plugin:verify
-
-      - name: Check diff
-        run: git diff --check
-
-      - name: Verify package tarball
-        run: bun run pack:verify
+      - name: Verify MCP-less Skill fallback
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bun run skill:runtime:verify

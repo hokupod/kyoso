@@ -4,11 +4,26 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "smol-toml";
 import { ensureManagedSkill } from "./skillInstall.js";
 
 export type SetupClient = "codex" | "claude-code";
 export type SetupRunner = "npx" | "bunx";
 export type SetupScope = "project" | "global";
+export type ManualMcpStatus = "enabled" | "disabled" | "missing" | "unknown";
+
+export type SetupDetection = {
+  mcp: boolean;
+  skill: boolean;
+  manualMcpStatus: ManualMcpStatus;
+  mcpPaths: string[];
+  skillPaths: string[];
+};
+
+export type CodexPluginMcpOverride = {
+  status: ManualMcpStatus;
+  path: string;
+};
 
 export type SetupOptions = {
   cwd: string;
@@ -55,11 +70,11 @@ export async function runSetup(options: SetupOptions): Promise<string> {
     ? parseCommandSpec(options.command)
     : commandForRunner(runner);
   const env = options.env ?? process.env;
-  const home = env.HOME ?? homedir();
+  const home = resolveUserHome(env);
   const context: SetupContext = {
     cwd: options.cwd,
     home,
-    codexHome: resolveCodexHome(options.cwd, home, env),
+    codexHome: dirname(resolveCodexConfigPath(env, options.cwd)),
     env,
     write: options.write,
     scope: options.global ? "global" : "project",
@@ -122,31 +137,94 @@ export function skillDestination(
   return join(root, ".claude", "skills", "kyoso-review");
 }
 
+export function resolveUserHome(env: NodeJS.ProcessEnv = process.env): string {
+  return env.HOME ? resolve(env.HOME) : homedir();
+}
+
+export function resolveCodexConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
+): string {
+  const codexHome = env.CODEX_HOME
+    ? resolve(cwd, env.CODEX_HOME)
+    : join(resolveUserHome(env), ".codex");
+  return join(codexHome, "config.toml");
+}
+
+export function resolveCodexUserSkillPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return join(resolveUserHome(env), ".agents", "skills", "kyoso-review");
+}
+
+export function detectCodexPluginMcpOverride(options: {
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+}): CodexPluginMcpOverride {
+  const env = options.env ?? process.env;
+  const path = resolveCodexConfigPath(env, options.cwd);
+  if (!existsSync(path)) return { status: "missing", path };
+
+  try {
+    const parsed = parse(readTextSync(path));
+    if (hasUnprobedProjectIntegrationOverride(parsed, options.cwd)) {
+      return { status: "unknown", path };
+    }
+    return {
+      status: nestedMcpEntryStatus(parsed, [
+        "plugins",
+        "kyoso@kyoso",
+        "mcp_servers",
+        "kyoso",
+      ]),
+      path,
+    };
+  } catch {
+    return { status: "unknown", path };
+  }
+}
+
 export function detectSetup(options: {
   cwd: string;
   home?: string;
   codexHome?: string;
-}): Record<SetupClient, { mcp: boolean; skill: boolean }> {
-  const home = options.home ?? homedir();
-  const codexHome = options.codexHome ?? join(home, ".codex");
+  env?: NodeJS.ProcessEnv;
+}): Record<SetupClient, SetupDetection> {
+  const env = options.env ?? process.env;
+  const home = options.home ? resolve(options.home) : resolveUserHome(env);
+  const codexConfigPath = options.codexHome
+    ? join(resolve(options.codexHome), "config.toml")
+    : options.home
+      ? join(home, ".codex", "config.toml")
+      : resolveCodexConfigPath(env, options.cwd);
+  const codexMcp = detectCodexMcp(codexConfigPath, options.cwd);
+  const claudeMcp = mergeMcpDetections([
+    detectClaudeMcp(join(options.cwd, ".mcp.json")),
+    detectClaudeMcp(join(home, ".claude.json")),
+  ]);
+  const codexSkillPaths = existingSkillPaths([
+    join(options.cwd, ".agents", "skills", "kyoso-review"),
+    join(home, ".agents", "skills", "kyoso-review"),
+  ]);
+  const claudeSkillPaths = existingSkillPaths([
+    join(options.cwd, ".claude", "skills", "kyoso-review"),
+    join(home, ".claude", "skills", "kyoso-review"),
+  ]);
+
   return {
     codex: {
-      mcp: hasCodexMcp(join(codexHome, "config.toml")),
-      skill:
-        existsSync(
-          join(options.cwd, ".agents", "skills", "kyoso-review", "SKILL.md"),
-        ) ||
-        existsSync(join(home, ".agents", "skills", "kyoso-review", "SKILL.md")),
+      mcp: codexMcp.status === "enabled",
+      skill: codexSkillPaths.length > 0,
+      manualMcpStatus: codexMcp.status,
+      mcpPaths: codexMcp.paths,
+      skillPaths: codexSkillPaths,
     },
     "claude-code": {
-      mcp:
-        hasClaudeMcp(join(options.cwd, ".mcp.json")) ||
-        hasClaudeMcp(join(home, ".claude.json")),
-      skill:
-        existsSync(
-          join(options.cwd, ".claude", "skills", "kyoso-review", "SKILL.md"),
-        ) ||
-        existsSync(join(home, ".claude", "skills", "kyoso-review", "SKILL.md")),
+      mcp: claudeMcp.status === "enabled",
+      skill: claudeSkillPaths.length > 0,
+      manualMcpStatus: claudeMcp.status,
+      mcpPaths: claudeMcp.paths,
+      skillPaths: claudeSkillPaths,
     },
   };
 }
@@ -188,7 +266,10 @@ async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
       title: "Codex MCP",
       status: "skipped",
       path: configPath,
-      detail: "existing [mcp_servers.kyoso] kept",
+      detail:
+        codexMcpStatusFromContent(current) === "disabled"
+          ? disabledCodexMcpDetail(configPath)
+          : "existing [mcp_servers.kyoso] kept",
     };
   }
   const detail = diffForAppend(configPath, snippet);
@@ -219,7 +300,10 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
       title: "Claude Code MCP",
       status: "skipped",
       path: configPath,
-      detail: "existing mcpServers.kyoso kept",
+      detail:
+        mcpEntryStatus(mcpServers.kyoso) === "disabled"
+          ? disabledClaudeMcpDetail(configPath)
+          : "existing mcpServers.kyoso kept",
     };
   }
 
@@ -251,12 +335,16 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
 
 function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
   const configPath = join(context.home, ".claude.json");
-  if (hasClaudeMcp(configPath)) {
+  const existingMcp = detectClaudeMcp(configPath);
+  if (existingMcp.status !== "missing") {
     return {
       title: "Claude Code MCP",
       status: "skipped",
       path: configPath,
-      detail: "existing mcpServers.kyoso kept",
+      detail:
+        existingMcp.status === "disabled"
+          ? disabledClaudeMcpDetail(configPath)
+          : "existing mcpServers.kyoso kept",
     };
   }
 
@@ -368,14 +456,6 @@ function validateSkillOnlyOptions(
   }
 }
 
-function resolveCodexHome(
-  cwd: string,
-  home: string,
-  env: NodeJS.ProcessEnv,
-): string {
-  return env.CODEX_HOME ? resolve(cwd, env.CODEX_HOME) : join(home, ".codex");
-}
-
 function parseRunner(runner: string | undefined): SetupRunner {
   if (runner === undefined || runner === "npx") return "npx";
   if (runner === "bunx") return "bunx";
@@ -448,30 +528,146 @@ async function readJsonObject(path: string): Promise<Record<string, unknown>> {
   return parsed;
 }
 
-function hasCodexMcp(path: string): boolean {
-  return existsSync(path) && hasCodexMcpContent(readTextSync(path));
-}
-
 function hasCodexMcpContent(content: string): boolean {
   return /^\s*\[mcp_servers\.(?:"kyoso"|kyoso)]\s*$/m.test(content);
 }
 
-function hasClaudeMcp(path: string): boolean {
-  if (!existsSync(path)) return false;
+function codexMcpStatusFromContent(content: string): ManualMcpStatus {
   try {
-    const parsed: unknown = JSON.parse(readTextSync(path));
-    return jsonHasKyosoMcp(parsed);
+    const parsed = parse(content);
+    if (!isRecord(parsed)) return "unknown";
+    if (!isRecord(parsed.mcp_servers)) return "missing";
+    if (!("kyoso" in parsed.mcp_servers)) return "missing";
+    return mcpEntryStatus(parsed.mcp_servers.kyoso);
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
-function jsonHasKyosoMcp(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  if (isRecord(value.mcpServers) && isRecord(value.mcpServers.kyoso)) {
-    return true;
+function disabledCodexMcpDetail(configPath: string): string {
+  return [
+    "existing [mcp_servers.kyoso] is disabled and was kept unchanged.",
+    `To re-enable it, edit ${configPath} and change enabled = false to enabled = true.`,
+  ].join(" ");
+}
+
+function disabledClaudeMcpDetail(configPath: string): string {
+  return [
+    "existing mcpServers.kyoso is disabled and was kept unchanged.",
+    `To re-enable it, edit ${configPath} and change \"enabled\": false to \"enabled\": true.`,
+  ].join(" ");
+}
+
+type McpDetection = {
+  status: ManualMcpStatus;
+  paths: string[];
+};
+
+function detectCodexMcp(path: string, cwd: string): McpDetection {
+  if (!existsSync(path)) return { status: "missing", paths: [] };
+
+  try {
+    const parsed = parse(readTextSync(path));
+    if (hasUnprobedProjectIntegrationOverride(parsed, cwd)) {
+      return { status: "unknown", paths: [path] };
+    }
+    if (!isRecord(parsed)) return { status: "unknown", paths: [path] };
+    if (!("mcp_servers" in parsed)) return { status: "missing", paths: [] };
+    if (!isRecord(parsed.mcp_servers)) {
+      return { status: "unknown", paths: [path] };
+    }
+    if (!("kyoso" in parsed.mcp_servers)) {
+      return { status: "missing", paths: [] };
+    }
+    return { status: mcpEntryStatus(parsed.mcp_servers.kyoso), paths: [path] };
+  } catch {
+    return { status: "unknown", paths: [path] };
   }
-  return Object.values(value).some((child) => jsonHasKyosoMcp(child));
+}
+
+function detectClaudeMcp(path: string): McpDetection {
+  if (!existsSync(path)) return { status: "missing", paths: [] };
+
+  try {
+    const parsed: unknown = JSON.parse(readTextSync(path));
+    const statuses = jsonMcpStatuses(parsed);
+    if (statuses.length === 0) return { status: "missing", paths: [] };
+    return { status: mergeMcpStatuses(statuses), paths: [path] };
+  } catch {
+    return { status: "unknown", paths: [path] };
+  }
+}
+
+function jsonMcpStatuses(value: unknown): ManualMcpStatus[] {
+  if (!isRecord(value)) return ["unknown"];
+
+  const statuses: ManualMcpStatus[] = [];
+  if ("mcpServers" in value) {
+    if (!isRecord(value.mcpServers)) {
+      statuses.push("unknown");
+    } else if ("kyoso" in value.mcpServers) {
+      statuses.push(mcpEntryStatus(value.mcpServers.kyoso));
+    }
+  }
+  for (const child of Object.values(value)) {
+    if (isRecord(child)) statuses.push(...jsonMcpStatuses(child));
+  }
+  return statuses;
+}
+
+function nestedMcpEntryStatus(value: unknown, path: string[]): ManualMcpStatus {
+  let current = value;
+  for (const key of path) {
+    if (!isRecord(current)) return "unknown";
+    if (!(key in current)) return "missing";
+    current = current[key];
+  }
+  return mcpEntryStatus(current);
+}
+
+function hasUnprobedProjectIntegrationOverride(
+  value: unknown,
+  cwd: string,
+): boolean {
+  if (!isRecord(value) || !isRecord(value.projects)) return false;
+  const currentProject = resolve(cwd);
+  for (const [projectPath, projectConfig] of Object.entries(value.projects)) {
+    if (resolve(projectPath) !== currentProject || !isRecord(projectConfig)) {
+      continue;
+    }
+    if ("mcp_servers" in projectConfig || "plugins" in projectConfig) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function mcpEntryStatus(value: unknown): ManualMcpStatus {
+  if (!isRecord(value)) return "unknown";
+  if (!("enabled" in value)) return "enabled";
+  if (value.enabled === true) return "enabled";
+  if (value.enabled === false) return "disabled";
+  return "unknown";
+}
+
+function mergeMcpDetections(detections: McpDetection[]): McpDetection {
+  return {
+    status: mergeMcpStatuses(detections.map((detection) => detection.status)),
+    paths: detections.flatMap((detection) => detection.paths),
+  };
+}
+
+function mergeMcpStatuses(statuses: ManualMcpStatus[]): ManualMcpStatus {
+  if (statuses.includes("enabled")) return "enabled";
+  if (statuses.includes("unknown")) return "unknown";
+  if (statuses.includes("disabled")) return "disabled";
+  return "missing";
+}
+
+function existingSkillPaths(paths: string[]): string[] {
+  return [...new Set(paths)].filter((path) =>
+    existsSync(join(path, "SKILL.md")),
+  );
 }
 
 function readTextSync(path: string): string {

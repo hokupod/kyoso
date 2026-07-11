@@ -43,7 +43,12 @@
     "lint": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "plugin:runtime:verify": "node scripts/plugin-runtime-probe.mjs --expect docs/compatibility/codex-plugin-runtime.json",
+    "plugin:sync": "node scripts/plugin-sync.mjs",
+    "plugin:verify": "node scripts/verify-plugin.mjs",
+    "plugin:verify:registry": "node scripts/verify-plugin-registry.mjs",
+    "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
+    "plugin:promote": "node scripts/plugin-promote.mjs",
+    "skill:runtime:verify": "node scripts/verify-skill-runtime.mjs",
     "pack:verify": "node scripts/verify-pack.mjs",
     "prepack": "bun run build"
   },

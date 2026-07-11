@@ -78,7 +78,15 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Verify package
+      # Keep Plugin artifacts out of the npm package and reject manual mirror
+      # edits before the release job reaches the OIDC publish step.
+      - name: Verify Plugin distribution
+        run: bun run plugin:verify
+
+      - name: Check diff
+        run: git diff --check
+
+      - name: Verify package tarball
         run: bun run pack:verify
 
       # No NODE_AUTH_TOKEN: authentication happens via OIDC, and provenance

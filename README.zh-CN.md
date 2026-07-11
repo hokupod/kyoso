@@ -55,7 +55,7 @@ codex plugin list --marketplace kyoso --json
 
 也可以在Codex desktop的Plugins page或`/plugins`中选择Kyoso。若新添加的Marketplace未显示，请refresh／restart desktop app。使用`codex plugin remove kyoso@kyoso`删除Plugin。
 
-Plugin包含Skill和pin到`@kyo-so/cli@0.8.0`的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
+Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
 #### CLI＋Skill-only
 

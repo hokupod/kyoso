@@ -434,7 +434,7 @@ describe("Codex Plugin fixture", () => {
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
             const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
             const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
-            const pinParts = pinVersion.split(".");
+            const pinParts = pinVersion.split("-")[0].split(".");
             const aheadVersion = [pinParts[0], pinParts[1], String(Number(pinParts[2]) + 1)].join(".");
             const packagePath = join(fixture, "package.json");
             const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));

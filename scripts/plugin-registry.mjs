@@ -9,13 +9,19 @@ export async function assertPublishedCliVersion({
   packageVersion,
 }) {
   const requested = `${packageName}@${packageVersion}`;
-  const url = `https://registry.npmjs.org/${packageName.replace("/", "%2F")}`;
+  // Query the version-specific document (verified to return 200 for published
+  // versions and 404 for missing ones on scoped packages) instead of the full
+  // packument, which grows with every release.
+  const url = `https://registry.npmjs.org/${packageName.replace("/", "%2F")}/${packageVersion}`;
   let payload;
   try {
     const response = await fetch(url, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(30_000),
     });
+    if (response.status === 404) {
+      throw new Error(`version ${packageVersion} is not published`);
+    }
     if (!response.ok) {
       throw new Error(`registry returned HTTP ${response.status}`);
     }
@@ -26,8 +32,7 @@ export async function assertPublishedCliVersion({
     );
   }
 
-  const published = payload?.versions?.[packageVersion]?.version;
-  if (published !== packageVersion) {
+  if (payload?.version !== packageVersion) {
     throw new Error(
       `npm registry does not list ${requested}; expected version ${packageVersion} to be published`,
     );

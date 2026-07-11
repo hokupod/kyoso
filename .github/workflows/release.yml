@@ -43,9 +43,13 @@ jobs:
       - name: Setup safe-chain shims
         run: safe-chain setup-ci
 
-      # Trusted publishing requires npm CLI 11.5.1 or newer
+      # Trusted publishing requires npm CLI 11.5.1 or newer. Pin an exact
+      # verified version instead of @latest: safe-chain's minimum-package-age
+      # policy can silently resolve @latest to an older release (it downgraded
+      # 12.0.1 to 12.0.0, whose global install loses libnpmpublish's bundled
+      # sigstore and breaks provenance publishing).
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.18.0
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

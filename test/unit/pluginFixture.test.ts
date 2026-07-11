@@ -430,20 +430,26 @@ describe("Codex Plugin fixture", () => {
             cpSync("package.json", join(fixture, "package.json"));
             cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+            const mcpPath = join(fixture, "plugins", "kyoso", ".mcp.json");
+            const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
+            const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
+            const pinParts = pinVersion.split(".");
+            const aheadVersion = [pinParts[0], pinParts[1], String(Number(pinParts[2]) + 1)].join(".");
             const packagePath = join(fixture, "package.json");
             const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
-            packageMetadata.version = "0.9.0";
+            packageMetadata.version = aheadVersion;
             writeFileSync(packagePath, JSON.stringify(packageMetadata));
             verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
             try {
               verifyPluginDistribution({
                 root: fixture,
                 verifyPackageArchive: false,
-                expectedPackageVersion: "0.9.0",
+                expectedPackageVersion: aheadVersion,
               });
               process.exitCode = 1;
             } catch (error) {
-              if (!String(error).includes("must match expected package version 0.9.0")) {
+              if (!String(error).includes("must match expected package version " + aheadVersion)) {
                 throw error;
               }
             }

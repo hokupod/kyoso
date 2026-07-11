@@ -9,8 +9,7 @@ if (process.argv.length !== 2) {
 }
 
 const plugin = verifyPluginDistribution({ root: repositoryRoot });
-const requested = assertPublishedCliVersion({
-  cwd: repositoryRoot,
+const requested = await assertPublishedCliVersion({
   packageName: plugin.packageName,
   packageVersion: plugin.packageVersion,
 });

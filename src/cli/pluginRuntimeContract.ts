@@ -12,9 +12,9 @@ export const MINIMUM_SUPPORTED_CODEX_VERSION = "0.144.0-alpha.4";
 
 export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
   distribution: {
-    pluginVersion: "0.1.0",
+    pluginVersion: "0.2.0",
     mcpCommand: "npx",
-    mcpPackagePin: "@kyo-so/cli@0.8.0",
+    mcpPackagePin: "@kyo-so/cli@0.9.0",
   },
   marketplace: {
     name: "kyoso",

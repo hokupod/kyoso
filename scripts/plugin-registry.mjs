@@ -1,60 +1,35 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-export function assertPublishedCliVersion({
+// Query the npm registry over HTTPS directly instead of spawning the npm CLI:
+// interposing shims (safe-chain in CI) both pollute npm's stdout and apply a
+// minimum-package-age policy that hides freshly published versions, which
+// would fail promotion right after a release. This is a read-only existence
+// check for our own OIDC-provenance-published package, so bypassing the shim
+// does not weaken any install-time protection.
+export async function assertPublishedCliVersion({
   packageName,
   packageVersion,
-  cwd,
 }) {
   const requested = `${packageName}@${packageVersion}`;
-  const cacheRoot = mkdtempSync(join(tmpdir(), "kyoso-plugin-registry-"));
-  let result;
+  const url = `https://registry.npmjs.org/${packageName.replace("/", "%2F")}`;
+  let payload;
   try {
-    result = spawnSync(
-      "npm",
-      [
-        "--cache",
-        join(cacheRoot, "npm-cache"),
-        "view",
-        requested,
-        "version",
-        "--json",
-      ],
-      {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: 1024 * 1024,
-        timeout: 30_000,
-      },
-    );
-  } finally {
-    rmSync(cacheRoot, { force: true, recursive: true });
-  }
-
-  if (result?.error) {
-    throw new Error(`npm view ${requested} failed: ${result.error.message}`);
-  }
-  if (result?.status !== 0) {
+    const response = await fetch(url, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      throw new Error(`registry returned HTTP ${response.status}`);
+    }
+    payload = await response.json();
+  } catch (error) {
     throw new Error(
-      `npm view ${requested} failed (${result?.status ?? "unknown"}): ${(result?.stderr || result?.stdout || "").trim()}`,
+      `npm registry lookup for ${requested} failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
-  // npm's stdout is unreliable under interposing shims (safe-chain in CI
-  // appends its own lines), so look for a line that is exactly the expected
-  // version instead of JSON-parsing the whole payload.
-  const lines = result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  const matched = lines.some(
-    (line) => line === packageVersion || line === `"${packageVersion}"`,
-  );
-  if (!matched) {
+  const published = payload?.versions?.[packageVersion]?.version;
+  if (published !== packageVersion) {
     throw new Error(
-      `npm registry did not confirm ${requested}; expected version ${packageVersion} in output: ${lines.join(" | ").slice(0, 300)}`,
+      `npm registry does not list ${requested}; expected version ${packageVersion} to be published`,
     );
   }
 

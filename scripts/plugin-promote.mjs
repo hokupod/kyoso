@@ -21,10 +21,10 @@ const semverPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {
-  main();
+  await main();
 }
 
-function main() {
+async function main() {
   const options = parseOptions(process.argv.slice(2));
   if (!semverPattern.test(options.cliVersion)) {
     throw new Error("--cli-version must be a complete SemVer version");
@@ -45,8 +45,7 @@ function main() {
   }
   assertPromotionAdvances(current, options);
 
-  const requested = assertPublishedCliVersion({
-    cwd: repositoryRoot,
+  const requested = await assertPublishedCliVersion({
     packageName: current.packageName,
     packageVersion: options.cliVersion,
   });

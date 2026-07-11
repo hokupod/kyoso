@@ -216,6 +216,7 @@ function startMcp(
         ANTHROPIC_API_KEY: "",
         CLAUDE_CODE_OAUTH_TOKEN: "",
         KYOSO_TEST_FAKE_AGENTS: "1",
+        XDG_STATE_HOME: `${cwd}-audit-state`,
         ...options.env,
       },
     },

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recover interrupted managed-Skill replacements from a fixed backup, fail
   closed on ambiguous recovery state, and guard rename operations against
   parent-directory replacement.
+- Audit traces now use a verified POSIX user state root (`$XDG_STATE_HOME` or
+  `$HOME/.local/state`) instead of a workspace-controlled `.kyoso/traces`
+  path. The new layout hashes the workspace realpath; existing workspace
+  traces are not migrated or deleted automatically.
 - The canonical bundled Skill continues to try Kyoso MCP tools, an installed
   `kyoso` on `PATH`, `npx`, then `bunx`, without declaring MCP as a required
   dependency. The generated Marketplace Plugin copy declares its bundled
@@ -32,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or migrated to CLI plus Skill-only rather than falling back to the CLI.
 - Codex MCP configuration resolves from `CODEX_HOME`, while global Codex Skill
   installation continues to resolve from `HOME`.
+
+### Fixed
+
+- Harden Audit trace creation against workspace-controlled symlinks and races
+  with verified handles, exclusive creation, and fail-closed state-root
+  containment. Windows and runtimes without proven safe filesystem
+  capabilities disable Audit writing rather than using an insecure fallback;
+  Windows support will be re-enabled only after equivalent ownership, symlink,
+  and file-identity guarantees are implemented and verified.
 
 ## [0.8.0] - 2026-07-10
 

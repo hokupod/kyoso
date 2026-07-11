@@ -1,5 +1,6 @@
 import { accessSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
+import { inspectAuditStateRootCapability } from "../audit/stateRoot.js";
 import {
   loadConfig,
   resolveGlobalTomlConfigPath,
@@ -168,6 +169,13 @@ export async function runDoctor(options: {
 
   lines.push("", "Audit");
   lines.push(`  directory: ${loaded.config.audit.directory}`);
+  const auditStateRoot = await inspectAuditStateRootCapability({
+    cwd: options.cwd,
+    env,
+  });
+  lines.push(
+    `  state root: ${auditStateRoot.available ? "available" : "unavailable"}`,
+  );
   lines.push(
     `  raw agent output: ${loaded.config.audit.includeRawAgentOutput ? "enabled" : "disabled"}`,
   );

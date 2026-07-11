@@ -274,6 +274,10 @@ Repository content, plans, diffs, and selected files are treated as untrusted da
 
 Finding titles are normalized to concise English for aggregation; evidence, recommendations, and summaries can remain in the user's language.
 
+Audit traces use a trusted user state root rather than a workspace-controlled path. On supported POSIX runtimes, Kyoso uses an absolute `$XDG_STATE_HOME` when available, otherwise `$HOME/.local/state`, only after ownership, permission, containment, and symlink checks succeed. It never silently falls back to another location: if verification or safe open fails, Audit writing is disabled for that review and a sanitized warning is returned while the review continues.
+
+Windows, and environments where the required filesystem capabilities cannot be proven, disable Audit writing fail closed. A hostile process running as the same OS user that can modify the trusted state root or rename an already verified inode is outside this guarantee; protecting against that threat requires an OS sandbox or native dirfd-based support.
+
 ## Agent Auth
 
 Codex uses the local `codex` login when available. No API key is required for the default subscription-backed path.
@@ -319,15 +323,15 @@ Effort works differently: Kyoso does not set an env var for it. Instead, it send
 
 ## Audit
 
-Audit traces are written to:
+On supported POSIX runtimes, Audit traces are written below the user state base (`$XDG_STATE_HOME` when absolute, otherwise `$HOME/.local/state`):
 
 ```text
-.kyoso/traces/<yyyy-mm-dd>/<traceId>.jsonl
+<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
 ```
 
-Raw agent output and raw file contents are disabled by default.
+`audit.directory` is a logical relative directory (default: `.kyoso/traces`), not a directory in the workspace. Existing workspace `.kyoso/traces` files are not migrated or deleted automatically.
 
-Keep `.kyoso/traces/` out of Git. `kyoso init` adds `.kyoso/` to `.gitignore`, and this repository does the same. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces regularly according to your local retention policy.
+Raw agent output and raw file contents are disabled by default. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces according to your local retention policy. On Windows or an environment without proven safe filesystem capabilities, Audit trace writing stays disabled and the review returns a sanitized warning.
 
 ## Config
 

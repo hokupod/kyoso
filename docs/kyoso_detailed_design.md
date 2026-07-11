@@ -17,7 +17,7 @@
 | CLI command            | `kyoso`                                                                                    |
 | Config file            | `kyoso.toml`; legacy `kyoso.config.ts` remains supported but deprecated                    |
 | Local data dir         | `.kyoso/`                                                                                  |
-| Trace dir              | `.kyoso/traces/`                                                                           |
+| Trace storage          | trusted user state root with workspace hash (see §20)                                      |
 | Env prefix             | `KYOSO_`                                                                                   |
 | Child agent guard      | `KYOSO_CHILD_AGENT=1`                                                                      |
 | Runtime                | TypeScript + Bun                                                                           |
@@ -453,6 +453,7 @@ Security
 
 Audit
   directory: .kyoso/traces
+  state root: available
   raw agent output: disabled
 ```
 
@@ -1427,15 +1428,17 @@ If an agent reports auth failure:
 
 ## 20. Audit trace
 
-### 20.1 Format
+### 20.1 Location and format
 
 Use JSONL.
 
-Path:
+On supported POSIX runtimes, the state base is an absolute `XDG_STATE_HOME` when available, otherwise `HOME/.local/state`. Trace files use this path:
 
 ```text
-.kyoso/traces/<yyyy-mm-dd>/<traceId>.jsonl
+<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
 ```
+
+`audit.directory` is a logical, relative directory; its default is `.kyoso/traces`, but it is no longer a workspace path. Do not expose the resolved state base, workspace realpath, or workspace hash in `doctor` output or Audit warnings.
 
 ### 20.2 Events
 
@@ -1529,9 +1532,23 @@ Audit may include:
 
 ### 20.4 Retention
 
-- Keep `.kyoso/traces/` out of Git; `kyoso init` adds `.kyoso/` to `.gitignore`.
 - If raw agent output is enabled, traces may persist sensitive review output.
 - Delete old traces regularly according to the local repository or team retention policy.
+- Existing workspace `.kyoso/traces` files are neither migrated nor deleted automatically.
+
+### 20.5 Trusted state-root boundary
+
+- Resolve the state base only from an absolute `XDG_STATE_HOME`, or from `HOME/.local/state` when no usable XDG base is available.
+- Reject a candidate whose lexical path, existing ancestor, or resolved realpath is the workspace or lies below it. Verify every Kyoso-managed directory with `lstat`, current-user ownership, non-group/world-writable mode, and realpath containment.
+- Reject unsafe logical directories, symlink/non-directory segments, collisions, and identity changes. Do not retry a different path after a validation, symlink, race, or open failure.
+- Windows and runtimes that cannot prove the required filesystem capabilities disable Audit writing fail closed. The review continues with a sanitized, stable Audit warning.
+- This boundary assumes no hostile process with the same OS user can modify the trusted state root or rename a verified opened inode. Defending against that attacker requires an OS sandbox or native dirfd-based helper.
+
+### 20.6 Writer lifecycle and warnings
+
+- Open the trace lazily once per review with exclusive append flags and required no-follow/non-blocking capability. Before the first write, verify a regular file, realpath containment, and matching `dev`/`ino` for the opened handle and path.
+- Serialize JSONL writes through one queue and close the handle after pending writes finish. A partial write, close error, or write after finalization permanently disables the writer for that review.
+- `TraceWriter.write()` never throws. Audit failures do not change the review decision; after finalization, deduplicated sanitized warnings are included in `result.audit.warnings` and the Markdown result.
 
 ---
 

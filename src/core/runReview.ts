@@ -12,7 +12,11 @@ import {
 } from "../acp/prompts.js";
 import { normalizeAgentOutput } from "../acp/normalize.js";
 import { aggregateAgentResults } from "../aggregate/aggregateFindings.js";
-import { createTraceWriter } from "../audit/trace.js";
+import {
+  createTraceWriter,
+  type TraceWriter,
+  type TraceWriterOptions,
+} from "../audit/trace.js";
 import { buildContext } from "../context/buildContext.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "./constants.js";
 import { KyosoRequestError } from "./errors.js";
@@ -64,6 +68,7 @@ export type RunReviewOptions = LoadConfigOptions & {
   agentManager?: AcpAgentManager;
   env?: NodeJS.ProcessEnv;
   mcpNetworkMode?: NetworkMode;
+  traceWriterFactory?: (options: TraceWriterOptions) => TraceWriter;
 };
 
 export async function runReview(
@@ -74,6 +79,8 @@ export async function runReview(
   const cwd = options.cwd ?? process.cwd();
   const traceId = newTraceId();
   const startedAt = new Date().toISOString();
+  const auditEnv = { ...process.env, ...options.env };
+  const traceWriterFactory = options.traceWriterFactory ?? createTraceWriter;
   let snapshot: Snapshot | undefined;
 
   try {
@@ -81,38 +88,43 @@ export async function runReview(
   } catch (error) {
     if (error instanceof KyosoRequestError) {
       const config = kyosoConfigSchema.parse(defaultConfig);
-      const trace = createTraceWriter({
+      const trace = traceWriterFactory({
         enabled: config.audit.enabled,
         directory: config.audit.directory,
         traceId,
         cwd,
+        env: auditEnv,
       });
-      await trace.write({
-        type: "request_received",
-        traceId,
-        tool,
-        timestamp: new Date().toISOString(),
-      });
-      return await buildPolicyBlockResult({
-        tool,
-        trace,
-        traceId,
-        startedAt,
-        networkMode: config.network.defaultMode,
-        warning: error.message,
-        finding: {
-          id: "KYOSO-1",
-          severity: "critical",
-          category: "other",
-          title: "Recursive Kyoso invocation blocked",
-          evidence: error.message,
-          recommendation:
-            "Do not expose Kyoso MCP tools to Kyoso child agents.",
-          sourceAgents: ["kyoso_policy"],
-          confidence: "high",
-        },
-        redactionsApplied: 0,
-      });
+      try {
+        await trace.write({
+          type: "request_received",
+          traceId,
+          tool,
+          timestamp: new Date().toISOString(),
+        });
+        return await buildPolicyBlockResult({
+          tool,
+          trace,
+          traceId,
+          startedAt,
+          networkMode: config.network.defaultMode,
+          warning: error.message,
+          finding: {
+            id: "KYOSO-1",
+            severity: "critical",
+            category: "other",
+            title: "Recursive Kyoso invocation blocked",
+            evidence: error.message,
+            recommendation:
+              "Do not expose Kyoso MCP tools to Kyoso child agents.",
+            sourceAgents: ["kyoso_policy"],
+            confidence: "high",
+          },
+          redactionsApplied: 0,
+        });
+      } finally {
+        await trace.finalize();
+      }
     }
     throw error;
   }
@@ -148,12 +160,13 @@ export async function runReview(
         }
       : baseLoaded;
 
-  const trace = createTraceWriter({
+  const trace = traceWriterFactory({
     enabled: loaded.config.audit.enabled,
     directory: loaded.config.audit.directory,
     traceId,
     cwd,
     includeRawAgentOutput: loaded.config.audit.includeRawAgentOutput,
+    env: auditEnv,
   });
 
   const warnings: string[] = [...loaded.warnings, ...trace.warnings];
@@ -432,19 +445,10 @@ export async function runReview(
       }),
     );
     const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
-    const result: KyosoResult = {
+    const resultAfterJudge: Omit<KyosoResult, "summaryMarkdown"> = {
       ...resultWithoutMarkdown,
       disagreements,
       ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
-      summaryMarkdown: renderMarkdownResult(
-        tool,
-        {
-          ...resultWithoutMarkdown,
-          disagreements,
-          ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
-        },
-        { summaryText: judge.output.summaryText },
-      ),
     };
     const judgeEvent: Record<string, unknown> = {
       type: "judge_completed",
@@ -455,7 +459,7 @@ export async function runReview(
     };
     if (judge.error) judgeEvent.error = judge.error;
     await trace.write(judgeEvent);
-    result.audit.completedAt = new Date().toISOString();
+    resultAfterJudge.audit.completedAt = new Date().toISOString();
 
     await trace.write({
       type: "decision_completed",
@@ -468,8 +472,14 @@ export async function runReview(
       traceId,
       timestamp: new Date().toISOString(),
     });
-    return result;
+    return await finalizeReviewResult({
+      tool,
+      trace,
+      result: resultAfterJudge,
+      summaryText: judge.output.summaryText,
+    });
   } finally {
+    await trace.finalize();
     if (snapshot) await cleanupSnapshot(snapshot.root);
   }
 }
@@ -755,7 +765,7 @@ function agentOpinionSummary(
 
 async function buildSecretBlockResult(input: {
   tool: ReviewTool;
-  trace: { write(event: Record<string, unknown>): Promise<void> };
+  trace: TraceWriter;
   traceId: string;
   startedAt: string;
   configHash?: string;
@@ -818,10 +828,6 @@ async function buildSecretBlockResult(input: {
       warnings: input.warnings,
     },
   };
-  const result: KyosoResult = {
-    ...resultWithoutMarkdown,
-    summaryMarkdown: renderMarkdownResult(input.tool, resultWithoutMarkdown),
-  };
   await input.trace.write({
     type: "decision_completed",
     traceId: input.traceId,
@@ -833,7 +839,11 @@ async function buildSecretBlockResult(input: {
     traceId: input.traceId,
     timestamp: new Date().toISOString(),
   });
-  return result;
+  return await finalizeReviewResult({
+    tool: input.tool,
+    trace: input.trace,
+    result: resultWithoutMarkdown,
+  });
 }
 
 function buildSecretFinding(
@@ -872,7 +882,7 @@ function reindexFindings(findings: KyosoFinding[]): KyosoFinding[] {
 
 async function buildPolicyBlockResult(input: {
   tool: ReviewTool;
-  trace: { write(event: Record<string, unknown>): Promise<void> };
+  trace: TraceWriter;
   traceId: string;
   startedAt: string;
   configHash?: string;
@@ -911,10 +921,6 @@ async function buildPolicyBlockResult(input: {
       warnings: [input.warning],
     },
   };
-  const result: KyosoResult = {
-    ...resultWithoutMarkdown,
-    summaryMarkdown: renderMarkdownResult(input.tool, resultWithoutMarkdown),
-  };
   await input.trace.write({
     type: "decision_completed",
     traceId: input.traceId,
@@ -926,7 +932,38 @@ async function buildPolicyBlockResult(input: {
     traceId: input.traceId,
     timestamp: new Date().toISOString(),
   });
-  return result;
+  return await finalizeReviewResult({
+    tool: input.tool,
+    trace: input.trace,
+    result: resultWithoutMarkdown,
+  });
+}
+
+async function finalizeReviewResult(input: {
+  tool: ReviewTool;
+  trace: TraceWriter;
+  result: Omit<KyosoResult, "summaryMarkdown">;
+  summaryText?: string;
+}): Promise<KyosoResult> {
+  await input.trace.finalize();
+  const result: Omit<KyosoResult, "summaryMarkdown"> = {
+    ...input.result,
+    audit: {
+      ...input.result.audit,
+      warnings: Array.from(
+        new Set([
+          ...(input.result.audit.warnings ?? []),
+          ...input.trace.warnings,
+        ]),
+      ),
+    },
+  };
+  return {
+    ...result,
+    summaryMarkdown: renderMarkdownResult(input.tool, result, {
+      summaryText: input.summaryText,
+    }),
+  };
 }
 
 function mergeDenyPatterns(

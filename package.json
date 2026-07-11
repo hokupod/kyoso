@@ -49,6 +49,7 @@
     "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
     "plugin:promote": "node scripts/plugin-promote.mjs",
     "skill:runtime:verify": "node scripts/verify-skill-runtime.mjs",
+    "audit:runtime:verify": "node scripts/verify-audit-runtime.mjs",
     "pack:verify": "node scripts/verify-pack.mjs",
     "prepack": "bun run build"
   },

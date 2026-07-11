@@ -23,7 +23,7 @@ flowchart TD
     Cisa --> Decision{"决策策略"}
     Decision --> Judge["Judge LLM 完善摘要<br/>(可选,支持确定性回退)"]
     Judge --> Result(["JSON + Markdown 结果:<br/>approve / approve_with_changes / block"])
-    Decision -.-> Trace[("审计追踪<br/>.kyoso/traces/*.jsonl")]
+    Decision -.-> Trace[("审计追踪<br/>用户 state root/kyoso/workspaces/<br/>sha256(realpath(cwd))/<br/>logical audit.directory/date/traceId.jsonl")]
 
     classDef terminal fill:#f4e8d0,stroke:#8a6d3b,color:#3d2f1a
     classDef blocked fill:#f8d7da,stroke:#a94442,color:#4a1418

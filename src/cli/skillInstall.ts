@@ -22,6 +22,7 @@ import {
   sep,
 } from "node:path";
 import { KYOSO_VERSION } from "../core/constants.js";
+import { isPathWithin } from "../utils/pathContainment.js";
 import { CURRENT_SKILL_DIGEST, knownSkillDigest } from "./knownSkillDigests.js";
 
 export const SKILL_INSTALL_MARKER = ".kyoso-install.json";
@@ -295,9 +296,7 @@ async function resolveSafeDestination(
   const relativeDestination = relative(logicalRoot, logicalDestination);
   if (
     relativeDestination === "" ||
-    relativeDestination === ".." ||
-    relativeDestination.startsWith(`..${sep}`) ||
-    isAbsolute(relativeDestination)
+    !isPathWithin(logicalDestination, logicalRoot)
   ) {
     throw new Error(
       `Skill destination escapes trusted install root: ${destinationDir}`,
@@ -306,12 +305,7 @@ async function resolveSafeDestination(
 
   const realRoot = await realpath(logicalRoot);
   const safeDestination = resolve(realRoot, relativeDestination);
-  const relativeRealDestination = relative(realRoot, safeDestination);
-  if (
-    relativeRealDestination === ".." ||
-    relativeRealDestination.startsWith(`..${sep}`) ||
-    isAbsolute(relativeRealDestination)
-  ) {
+  if (!isPathWithin(safeDestination, realRoot)) {
     throw new Error(
       `Skill destination escapes trusted install root: ${destinationDir}`,
     );

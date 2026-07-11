@@ -273,6 +273,10 @@ Repository content、plans、diffs、selected files は backend prompts 内で u
 
 Finding title は aggregation のため簡潔な英語に正規化されます。evidence、recommendations、summaries はユーザーの言語のままで構いません。
 
+Audit trace は workspace が制御するpathではなく、trusted user state root 配下へ書き込みます。対応するPOSIX runtimeでは、absoluteな`$XDG_STATE_HOME`が利用可能ならそれを、そうでなければ`$HOME/.local/state`を使用し、owner、permission、containment、symlinkを確認できた場合だけ書き込みます。検証またはsafe openに失敗した場合、別locationへ黙ってfallbackせず、そのreviewのAudit writeを無効化してsanitized warningを返し、review自体は継続します。
+
+Windows、および必要なfilesystem capabilityを証明できない環境では、Audit writeをfail-closeで無効化します。trusted state rootを変更できる、または検証済みinodeをrenameできるsame OS user権限のhostile processはこの保証の対象外です。この脅威にはOS sandboxまたはnative dirfd-based supportが必要です。
+
 ## Agent Auth
 
 Codex は利用可能な場合、local `codex` login を使用します。既定の subscription-backed path では API key は不要です。
@@ -318,15 +322,15 @@ effort は仕組みが異なります。Kyoso は env var を設定せず、sess
 
 ## Audit
 
-Audit traces は次の場所に書き込まれます。
+対応するPOSIX runtimeでは、Audit traces はuser state base（absoluteな`$XDG_STATE_HOME`、なければ`$HOME/.local/state`）配下の次の場所に書き込まれます。
 
 ```text
-.kyoso/traces/<yyyy-mm-dd>/<traceId>.jsonl
+<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
 ```
 
-Raw agent output と raw file contents は既定で無効です。
+`audit.directory`はlogicalなrelative directory（既定: `.kyoso/traces`）であり、workspace内のdirectoryではありません。既存のworkspace `.kyoso/traces`は自動で移行・削除されません。
 
-`.kyoso/traces/` を Git に含めないでください。`kyoso init` は `.kyoso/` を `.gitignore` に追加し、この repository も同じ設定にしています。`audit.includeRawAgentOutput` を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を定期的に削除してください。
+Raw agent output と raw file contents は既定で無効です。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します。
 
 ## Config
 

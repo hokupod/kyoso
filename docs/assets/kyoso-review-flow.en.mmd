@@ -23,7 +23,7 @@ flowchart TD
     Cisa --> Decision{"Decision policy"}
     Decision --> Judge["Judge LLM refines summary<br/>(optional, deterministic fallback)"]
     Judge --> Result(["JSON + Markdown result:<br/>approve / approve_with_changes / block"])
-    Decision -.-> Trace[("Audit trace<br/>.kyoso/traces/*.jsonl")]
+    Decision -.-> Trace[("Audit trace<br/>user state root/kyoso/workspaces/<br/>sha256(realpath(cwd))/<br/>logical audit.directory/date/traceId.jsonl")]
 
     classDef terminal fill:#f4e8d0,stroke:#8a6d3b,color:#3d2f1a
     classDef blocked fill:#f8d7da,stroke:#a94442,color:#4a1418

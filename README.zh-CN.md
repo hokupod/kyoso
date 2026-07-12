@@ -44,22 +44,13 @@ Kyoso 不会应用代码更改。
 | CLI＋Skill-only    | npm CLI＋Skill       |  无 | Codex／Claude Code |
 | 手动setup          | 手动MCP注册＋Skill   |  有 | Codex／Claude Code |
 
-#### Codex Marketplace Plugin
+拿不准时请选择Marketplace Plugin：两条命令即可同时安装Skill和MCP server。步骤见下方的[Codex](#codex)／[Claude Code](#claude-code)小节。
 
-```bash
-codex plugin marketplace add hokupod/kyoso
-codex plugin list --marketplace kyoso --available --json
-codex plugin add kyoso@kyoso
-codex plugin list --marketplace kyoso --json
-```
-
-也可以在Codex desktop的Plugins page或`/plugins`中选择Kyoso。若新添加的Marketplace未显示，请refresh／restart desktop app。使用`codex plugin remove kyoso@kyoso`删除Plugin。
+#### Marketplace Plugin
 
 Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
-Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。在Codex Auto mode中，Kyoso tools未声明annotations，首次MCP调用仍可能需要approval；选择“Allow and don't ask me again”即可保留该许可。
-
-如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
+Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
 
 #### CLI＋Skill-only
 
@@ -102,7 +93,7 @@ claude setup-token
 
 设置该命令得到的 `CLAUDE_CODE_OAUTH_TOKEN`，或设置 `ANTHROPIC_API_KEY` 以使用 direct API billing。
 
-2. 在 Claude Code 中安装 Marketplace Plugin。
+2. 安装 Marketplace Plugin(推荐)。
 
 ```text
 /plugin marketplace add hokupod/kyoso
@@ -141,21 +132,32 @@ Use Kyoso plan_review on this plan before implementation.
 codex login
 ```
 
-2. 注册 MCP 并安装 review skill。
+2. 安装 Marketplace Plugin(推荐)。
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin add kyoso@kyoso
+```
+
+也可以在Codex desktop的Plugins page或`/plugins`中选择Kyoso。若新添加的Marketplace未显示，请refresh／restart desktop app。使用`codex plugin list --marketplace kyoso --json`确认安装，使用`codex plugin remove kyoso@kyoso`删除Plugin。通过 Plugin 安装时，无需运行 `kyoso setup codex`。
+
+在Codex Auto mode中，Kyoso tools未声明annotations，首次MCP调用仍可能需要approval；选择“Allow and don't ask me again”即可保留该许可。
+
+3. 或者，注册 MCP 并安装 review skill。
 
 ```bash
 npx @kyo-so/cli setup codex --write
 bunx @kyo-so/cli setup codex --write
 ```
 
-3. 验证 setup。
+4. 验证 setup。
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. 从 Codex 请求 review。
+5. 从 Codex 请求 review。
 
 ```text
 Use Kyoso diff_review on the current diff. I need a second opinion before merging.

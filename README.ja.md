@@ -44,22 +44,13 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 | CLI＋Skill-only    | npm CLI＋Skill           | なし | Codex／Claude Code |
 | 手動setup          | 手動MCP登録＋Skill       | あり | Codex／Claude Code |
 
-#### Codex Marketplace Plugin
+迷ったらMarketplace Pluginを選んでください。2コマンドでSkillとMCP serverをまとめて導入できます。手順は下の[Codex](#codex)／[Claude Code](#claude-code)節を参照してください。
 
-```bash
-codex plugin marketplace add hokupod/kyoso
-codex plugin list --marketplace kyoso --available --json
-codex plugin add kyoso@kyoso
-codex plugin list --marketplace kyoso --json
-```
-
-Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。削除は`codex plugin remove kyoso@kyoso`です。
+#### Marketplace Plugin
 
 PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
 
-PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。Codex Auto modeでは、Kyoso toolsがannotationsを宣言していないため、最初のMCP呼び出しでapprovalが必要になることがあります。以後も許可する場合は「Allow and don't ask me again」を選択してください。
-
-同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
+PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
 
 #### CLI＋Skill-only
 
@@ -102,7 +93,7 @@ claude setup-token
 
 このコマンドで得た `CLAUDE_CODE_OAUTH_TOKEN` を設定するか、直接 API 課金を使う場合は `ANTHROPIC_API_KEY` を設定します。
 
-2. Claude Code で Marketplace Plugin を導入します。
+2. Marketplace Plugin を導入します(推奨)。
 
 ```text
 /plugin marketplace add hokupod/kyoso
@@ -141,21 +132,32 @@ Use Kyoso plan_review on this plan before implementation.
 codex login
 ```
 
-2. MCP を登録し、review skill をインストールします。
+2. Marketplace Plugin を導入します(推奨)。
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin add kyoso@kyoso
+```
+
+Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。確認は`codex plugin list --marketplace kyoso --json`、削除は`codex plugin remove kyoso@kyoso`です。Plugin で導入した場合、`kyoso setup codex` は不要です。
+
+Codex Auto modeでは、Kyoso toolsがannotationsを宣言していないため、最初のMCP呼び出しでapprovalが必要になることがあります。以後も許可する場合は「Allow and don't ask me again」を選択してください。
+
+3. または、MCP を登録して review skill をインストールします。
 
 ```bash
 npx @kyo-so/cli setup codex --write
 bunx @kyo-so/cli setup codex --write
 ```
 
-3. セットアップを確認します。
+4. セットアップを確認します。
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. Codex からレビューを依頼します。
+5. Codex からレビューを依頼します。
 
 ```text
 Use Kyoso diff_review on the current diff. I need a second opinion before merging.

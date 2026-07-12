@@ -42,22 +42,13 @@ No global install is required. Run Kyoso through `npx` or `bunx`.
 | CLI plus Skill-only | npm CLI plus Skill                 |  No | Codex / Claude Code |
 | Manual setup        | Manual MCP registration plus Skill | Yes | Codex / Claude Code |
 
-#### Codex Marketplace Plugin
+When in doubt, pick the Marketplace Plugin: two commands install the Skill and the MCP server together. Follow the [Codex](#codex) or [Claude Code](#claude-code) steps below.
 
-```bash
-codex plugin marketplace add hokupod/kyoso
-codex plugin list --marketplace kyoso --available --json
-codex plugin add kyoso@kyoso
-codex plugin list --marketplace kyoso --json
-```
-
-You can also select Kyoso from the Codex desktop Plugins page or `/plugins`. Refresh or restart the desktop app if a newly added marketplace is not visible. Remove the Plugin with `codex plugin remove kyoso@kyoso`.
+#### Marketplace Plugin
 
 The Plugin bundles the Skill and an MCP definition pinned to an exact published Kyoso CLI version; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
 
-The Plugin Skill declares the bundled `kyoso` MCP server as a dependency, so explicit Kyoso reviews are directed through MCP rather than a CLI fallback. In Codex Auto mode, the first MCP invocation can still require approval because Kyoso tools do not declare annotations; choose "Allow and don't ask me again" to retain that approval.
-
-If you disable the bundled Plugin MCP, treat the Plugin Skill as unavailable: re-enable it, or remove the Plugin and install CLI plus Skill-only instead. The Plugin is not a CLI-fallback mode.
+The Plugin Skill declares the bundled `kyoso` MCP server as a dependency, so explicit Kyoso reviews are directed through MCP rather than a CLI fallback. If you disable the bundled Plugin MCP, treat the Plugin Skill as unavailable: re-enable it, or remove the Plugin and install CLI plus Skill-only instead. The Plugin is not a CLI-fallback mode.
 
 #### CLI plus Skill-only
 
@@ -100,7 +91,7 @@ claude setup-token
 
 Set `CLAUDE_CODE_OAUTH_TOKEN` from that command, or set `ANTHROPIC_API_KEY` for direct API billing.
 
-2. Install the Marketplace Plugin in Claude Code.
+2. Install the Marketplace Plugin (recommended).
 
 ```text
 /plugin marketplace add hokupod/kyoso
@@ -139,21 +130,32 @@ Use Kyoso plan_review on this plan before implementation.
 codex login
 ```
 
-2. Register MCP and install the review skill.
+2. Install the Marketplace Plugin (recommended).
+
+```bash
+codex plugin marketplace add hokupod/kyoso
+codex plugin add kyoso@kyoso
+```
+
+You can also select Kyoso from the Codex desktop Plugins page or `/plugins`; refresh or restart the desktop app if a newly added marketplace is not visible. Check the installation with `codex plugin list --marketplace kyoso --json`, and remove the Plugin with `codex plugin remove kyoso@kyoso`. When you install the Plugin, `kyoso setup codex` is not required.
+
+In Codex Auto mode, the first MCP invocation can still require approval because Kyoso tools do not declare annotations; choose "Allow and don't ask me again" to retain that approval.
+
+3. Alternatively, register MCP and install the review skill.
 
 ```bash
 npx @kyo-so/cli setup codex --write
 bunx @kyo-so/cli setup codex --write
 ```
 
-3. Verify the setup.
+4. Verify the setup.
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. Ask for a review from Codex.
+5. Ask for a review from Codex.
 
 ```text
 Use Kyoso diff_review on the current diff. I need a second opinion before merging.

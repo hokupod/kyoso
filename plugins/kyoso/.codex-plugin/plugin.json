@@ -11,7 +11,7 @@
   "license": "AGPL-3.0-or-later",
   "keywords": ["review", "multi-agent", "codex", "claude"],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "Kyoso",
     "shortDescription": "Multi-agent plan, security, and diff review",

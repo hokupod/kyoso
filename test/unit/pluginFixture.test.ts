@@ -20,7 +20,9 @@ describe("Codex Plugin fixture", () => {
     const manifest = await readJson(
       join(root, "plugins", "kyoso", ".codex-plugin", "plugin.json"),
     );
-    const mcp = await readJson(join(root, "plugins", "kyoso", ".mcp.json"));
+    const mcp = await readJson(
+      join(root, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+    );
     const compatibility = await readJson(
       join(root, "docs", "compatibility", "codex-plugin-runtime.json"),
     );
@@ -42,7 +44,7 @@ describe("Codex Plugin fixture", () => {
       name: "kyoso",
       version: distribution.pluginVersion,
       skills: "./skills/",
-      mcpServers: "./.mcp.json",
+      mcpServers: "./.codex-plugin/mcp.json",
       license: "AGPL-3.0-or-later",
       interface: { capabilities: ["Read"] },
     });
@@ -81,7 +83,9 @@ describe("Codex Plugin fixture", () => {
       "utf8",
     );
     const pluginInstructions = await readFile(join(plugin, "SKILL.md"), "utf8");
-    const mcp = await readJson(join(root, "plugins", "kyoso", ".mcp.json"));
+    const mcp = await readJson(
+      join(root, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+    );
     const cliPackagePin = mcp.kyoso.args[1];
     const canonicalSnapshot = await directorySnapshot(canonical);
 
@@ -108,7 +112,9 @@ describe("Codex Plugin fixture", () => {
   });
 
   test("records both probed Codex CLI versions and the minimum version", async () => {
-    const mcp = await readJson(join(root, "plugins", "kyoso", ".mcp.json"));
+    const mcp = await readJson(
+      join(root, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+    );
     const compatibility = await readJson(
       join(root, "docs", "compatibility", "codex-plugin-runtime.json"),
     );
@@ -185,8 +191,11 @@ describe("Codex Plugin fixture", () => {
             const skills = join(fixture, ".agents", "skills");
             mkdirSync(skills, { recursive: true });
             cpSync(".agents/skills/kyoso-review", join(skills, "kyoso-review"), { recursive: true });
-            mkdirSync(join(fixture, "plugins", "kyoso"), { recursive: true });
-            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
+            mkdirSync(join(fixture, "plugins", "kyoso", ".codex-plugin"), { recursive: true });
+            cpSync(
+              "plugins/kyoso/.codex-plugin/mcp.json",
+              join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+            );
             const first = syncPluginSkill(fixture);
             const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
             const firstMetadata = readFileSync(metadataPath, "utf8");
@@ -216,7 +225,7 @@ describe("Codex Plugin fixture", () => {
         "--input-type=module",
         "--eval",
         `
-          import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
           import { tmpdir } from "node:os";
           import { join } from "node:path";
           import { assertPluginSkillMirror } from "./scripts/plugin-distribution.mjs";
@@ -225,7 +234,11 @@ describe("Codex Plugin fixture", () => {
           try {
             cpSync(".agents/skills", join(fixture, ".agents", "skills"), { recursive: true });
             cpSync("plugins/kyoso/skills", join(fixture, "plugins", "kyoso", "skills"), { recursive: true });
-            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
+            mkdirSync(join(fixture, "plugins", "kyoso", ".codex-plugin"), { recursive: true });
+            cpSync(
+              "plugins/kyoso/.codex-plugin/mcp.json",
+              join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+            );
             const metadataPath = join(fixture, "plugins", "kyoso", "skills", "kyoso-review", "agents", "openai.yaml");
             writeFileSync(
               metadataPath,
@@ -255,7 +268,7 @@ describe("Codex Plugin fixture", () => {
         "--input-type=module",
         "--eval",
         `
-          import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
           import { tmpdir } from "node:os";
           import { join } from "node:path";
           import { syncPluginSkill } from "./scripts/plugin-distribution.mjs";
@@ -266,7 +279,11 @@ describe("Codex Plugin fixture", () => {
             const mirror = join(fixture, "plugins", "kyoso", "skills", "kyoso-review");
             cpSync(".agents/skills/kyoso-review", canonical, { recursive: true });
             cpSync("plugins/kyoso/skills/kyoso-review", mirror, { recursive: true });
-            cpSync("plugins/kyoso/.mcp.json", join(fixture, "plugins", "kyoso", ".mcp.json"));
+            mkdirSync(join(fixture, "plugins", "kyoso", ".codex-plugin"), { recursive: true });
+            cpSync(
+              "plugins/kyoso/.codex-plugin/mcp.json",
+              join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+            );
             writeFileSync(join(mirror, "SKILL.md"), "previous mirror");
             try {
               syncPluginSkill(fixture, {
@@ -311,6 +328,47 @@ describe("Codex Plugin fixture", () => {
     expect(result.stdout).toContain("plugin verify ok: kyoso@kyoso");
   });
 
+  test("rejects a reintroduced Plugin-root .mcp.json", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-root-mcp-"));
+          try {
+            cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+            cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+            mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+            cpSync("package.json", join(fixture, "package.json"));
+            cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+            cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+            writeFileSync(join(fixture, "plugins", "kyoso", ".mcp.json"), "{}");
+            try {
+              verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
+              process.exitCode = 1;
+            } catch (error) {
+              if (!String(error).includes("Plugin root must not contain .mcp.json")) {
+                throw error;
+              }
+            }
+          } finally {
+            rmSync(fixture, { force: true, recursive: true });
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   test("accepts an explicit matching promotion target", () => {
     const result = spawnSync(
       "node",
@@ -332,7 +390,7 @@ describe("Codex Plugin fixture", () => {
             cpSync("package.json", join(fixture, "package.json"));
             cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
-            const mcpPath = join(fixture, "plugins", "kyoso", ".mcp.json");
+            const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
             const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
             const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
@@ -357,7 +415,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
-  test("rejects camelCase approval, sandbox, and trust policy keys", () => {
+  test("rejects camelCase policy keys and noncanonical MCP paths", () => {
     const result = spawnSync(
       "node",
       [
@@ -384,6 +442,11 @@ describe("Codex Plugin fixture", () => {
             manifest.sandboxPermissions = "dangerously-bypass";
             manifest.trustLevel = "trusted";
             manifest.sandboxMode = "danger-full-access";
+            cpSync(
+              join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+              join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp-legacy.json"),
+            );
+            manifest.mcpServers = "./.codex-plugin/mcp-legacy.json";
             writeFileSync(manifestPath, JSON.stringify(manifest));
             try {
               verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
@@ -393,7 +456,10 @@ describe("Codex Plugin fixture", () => {
                 !String(error).includes("approvalPolicy") ||
                 !String(error).includes("sandboxPermissions") ||
                 !String(error).includes("trustLevel") ||
-                !String(error).includes("sandboxMode")
+                !String(error).includes("sandboxMode") ||
+                !String(error).includes(
+                  "Plugin manifest mcpServers must resolve to ./.codex-plugin/mcp.json",
+                )
               ) {
                 throw error;
               }
@@ -430,7 +496,7 @@ describe("Codex Plugin fixture", () => {
             cpSync("package.json", join(fixture, "package.json"));
             cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
-            const mcpPath = join(fixture, "plugins", "kyoso", ".mcp.json");
+            const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
             const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
             const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
@@ -498,7 +564,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
-  test("promotes the Plugin Skill fallback pin with the MCP pin", () => {
+  test("promotes the relocated MCP and Plugin Skill fallback pins", () => {
     const result = spawnSync(
       "node",
       [
@@ -512,8 +578,21 @@ describe("Codex Plugin fixture", () => {
             { cliVersion: "0.9.0", pluginVersion: "0.2.0" },
             process.cwd(),
           );
+          const mcpPath = join(
+            "plugins",
+            "kyoso",
+            ".codex-plugin",
+            "mcp.json",
+          );
           const skillPath = join("plugins", "kyoso", "skills", "kyoso-review", "SKILL.md");
+          const mcp = updates.find((entry) => entry.path.endsWith(mcpPath));
           const skill = updates.find((entry) => entry.path.endsWith(skillPath));
+          if (
+            !mcp ||
+            JSON.parse(mcp.next).kyoso.args[1] !== "@kyo-so/cli@0.9.0"
+          ) {
+            throw new Error("Plugin promotion did not update the relocated MCP pin");
+          }
           if (
             !skill?.next.includes("npx -y @kyo-so/cli@0.9.0") ||
             !skill.next.includes("bunx @kyo-so/cli@0.9.0")

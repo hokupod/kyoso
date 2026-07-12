@@ -85,7 +85,7 @@ export function distributionPaths(root = repositoryRoot) {
       ".codex-plugin",
       "plugin.json",
     ),
-    mcp: join(root, pluginRootRelativePath, ".mcp.json"),
+    mcp: join(root, pluginRootRelativePath, ".codex-plugin", "mcp.json"),
     pluginRoot: join(root, pluginRootRelativePath),
     pluginSkill: join(root, pluginSkillRelativePath),
     runtimeContract: join(root, "src", "cli", "pluginRuntimeContract.ts"),
@@ -150,6 +150,11 @@ export function verifyPluginDistribution(options = {}) {
   const expectedPackageVersion = options.expectedPackageVersion;
   const paths = distributionPaths(root);
   const failures = [];
+  // Claude Code auto-detects a plugin-root .mcp.json before manifest metadata.
+  // Keep the Codex definition isolated until a future Claude plugin stage updates this guard.
+  if (existsSync(join(paths.pluginRoot, ".mcp.json"))) {
+    failures.push("Plugin root must not contain .mcp.json");
+  }
   const catalog = readJson(paths.catalog, "Marketplace catalog", failures);
   const manifest = readJson(paths.manifest, "Plugin manifest", failures);
   const mcp = readJson(paths.mcp, "Plugin MCP config", failures);
@@ -425,7 +430,9 @@ function validateManifest(manifest, paths, failures) {
     failures,
   );
   if (mcpPath && mcpPath !== paths.mcp) {
-    failures.push("Plugin manifest mcpServers must resolve to ./.mcp.json");
+    failures.push(
+      "Plugin manifest mcpServers must resolve to ./.codex-plugin/mcp.json",
+    );
   }
   const interfaceMetadata = manifest.interface;
   if (!isObject(interfaceMetadata)) {

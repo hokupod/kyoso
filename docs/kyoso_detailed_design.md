@@ -1706,7 +1706,7 @@ dependencies:
       transport: "stdio"
 ```
 
-The dependency `value` must match the server name in the Plugin `.mcp.json`. No other Plugin Skill file may differ from the canonical Skill.
+The dependency `value` must match the server name in the Plugin `.codex-plugin/mcp.json`. No other Plugin Skill file may differ from the canonical Skill.
 
 A Plugin with its bundled `kyoso` MCP disabled is not a CLI-fallback mode. Doctor directs users to re-enable that MCP or remove the Plugin and install the canonical CLI plus Skill-only distribution instead.
 

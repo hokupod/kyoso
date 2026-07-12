@@ -396,11 +396,11 @@ describe("Codex Plugin fixture", () => {
             {
               name: "different Claude pin",
               mutate(manifest) {
-                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.9.1";
+                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.9.0";
               },
               expected: [
                 "plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args[1]",
-                "@kyo-so/cli@0.9.1",
+                "@kyo-so/cli@0.9.0",
               ],
             },
             {

@@ -36,8 +36,8 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `diff_review`
    - If the MCP tools are unavailable, use the first available CLI path with JSON output:
      1. An installed `kyoso` executable on `PATH`.
-     2. `npx -y @kyo-so/cli@0.9.0`.
-     3. `bunx @kyo-so/cli@0.9.0`.
+     2. `npx -y @kyo-so/cli@0.9.1`.
+     3. `bunx @kyo-so/cli@0.9.1`.
    - Append the review command to the selected CLI path:
      - `plan_review` -> `plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
      - `security_review` -> `security --goal <text> [--diff <path>] [--file <path>] --json`

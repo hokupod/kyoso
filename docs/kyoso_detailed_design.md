@@ -436,7 +436,7 @@ MCP
 
 ACP agents
   Codex: ok
-    command: npx -y @agentclientprotocol/codex-acp
+    command: npx -y @agentclientprotocol/codex-acp@1.1.2
     auth: detected or delegated
   Claude: warning
     command: npx -y @agentclientprotocol/claude-agent-acp
@@ -925,7 +925,7 @@ Codex:
 ```ts
 {
   command: "npx",
-  args: ["-y", "@agentclientprotocol/codex-acp"],
+  args: ["-y", "@agentclientprotocol/codex-acp@1.1.2"],
   // Omit model to use the user's Codex default.
   // model: "gpt-5.5",
   // Omit effort to use the user's Codex default reasoning effort.

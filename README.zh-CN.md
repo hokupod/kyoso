@@ -141,7 +141,18 @@ codex plugin add kyoso@kyoso
 
 也可以在Codex desktop的Plugins page或`/plugins`中选择Kyoso。若新添加的Marketplace未显示，请refresh／restart desktop app。使用`codex plugin list --marketplace kyoso --json`确认安装，使用`codex plugin remove kyoso@kyoso`删除Plugin。通过 Plugin 安装时，无需运行 `kyoso setup codex`。
 
-在Codex Auto mode中，Kyoso tools未声明annotations，首次MCP调用仍可能需要approval；选择“Allow and don't ask me again”即可保留该许可。
+在Codex Auto mode中，需要approval的Kyoso tool调用可能会被拒绝。若要仅为个人账户预先批准，请将以下设置添加到`~/.codex/config.toml`。**只有在你信任Kyoso，并接受所选代码与review context可能发送给已配置的外部model provider时，才应启用此设置。** Plugin默认不会启用它。
+
+```toml
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
 
 3. 或者，注册 MCP 并安装 review skill。
 

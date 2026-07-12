@@ -40,7 +40,7 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 
 | モード             | 導入物                   |  MCP | 対象               |
 | ------------------ | ------------------------ | ---: | ------------------ |
-| Marketplace Plugin | Skill＋ローカルstdio MCP | あり | Codex              |
+| Marketplace Plugin | Skill＋ローカルstdio MCP | あり | Codex／Claude Code |
 | CLI＋Skill-only    | npm CLI＋Skill           | なし | Codex／Claude Code |
 | 手動setup          | 手動MCP登録＋Skill       | あり | Codex／Claude Code |
 
@@ -102,21 +102,32 @@ claude setup-token
 
 このコマンドで得た `CLAUDE_CODE_OAUTH_TOKEN` を設定するか、直接 API 課金を使う場合は `ANTHROPIC_API_KEY` を設定します。
 
-2. MCP を登録し、review skill をインストールします。
+2. Claude Code で Marketplace Plugin を導入します。
+
+```text
+/plugin marketplace add hokupod/kyoso
+/plugin install kyoso@kyoso
+```
+
+Plugin は Kyoso review Skill と、公開済み CLI version に pin したローカル stdio MCP server を導入します。Plugin で導入した場合、`kyoso setup claude-code` は不要です。
+
+3. または、MCP を登録して review skill をインストールします。
 
 ```bash
 npx @kyo-so/cli setup claude-code --write
 bunx @kyo-so/cli setup claude-code --write
 ```
 
-3. セットアップを確認します。
+手動で MCP を登録する場合は、`examples/claude-code-mcp.json` を使用します。
+
+4. セットアップを確認します。
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. Claude Code からレビューを依頼します。
+5. Claude Code からレビューを依頼します。
 
 ```text
 Use Kyoso plan_review on this plan before implementation.

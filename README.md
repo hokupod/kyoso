@@ -38,7 +38,7 @@ No global install is required. Run Kyoso through `npx` or `bunx`.
 
 | Mode                | Installs                           | MCP | Clients             |
 | ------------------- | ---------------------------------- | --: | ------------------- |
-| Marketplace Plugin  | Skill plus local stdio MCP         | Yes | Codex               |
+| Marketplace Plugin  | Skill plus local stdio MCP         | Yes | Codex / Claude Code |
 | CLI plus Skill-only | npm CLI plus Skill                 |  No | Codex / Claude Code |
 | Manual setup        | Manual MCP registration plus Skill | Yes | Codex / Claude Code |
 
@@ -100,21 +100,32 @@ claude setup-token
 
 Set `CLAUDE_CODE_OAUTH_TOKEN` from that command, or set `ANTHROPIC_API_KEY` for direct API billing.
 
-2. Register MCP and install the review skill.
+2. Install the Marketplace Plugin in Claude Code.
+
+```text
+/plugin marketplace add hokupod/kyoso
+/plugin install kyoso@kyoso
+```
+
+The Plugin installs the Kyoso review Skill and a local stdio MCP server pinned to a released CLI version. When you install the Plugin, `kyoso setup claude-code` is not required.
+
+3. Alternatively, register MCP and install the review skill.
 
 ```bash
 npx @kyo-so/cli setup claude-code --write
 bunx @kyo-so/cli setup claude-code --write
 ```
 
-3. Verify the setup.
+For manual MCP registration, use `examples/claude-code-mcp.json`.
+
+4. Verify the setup.
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. Ask for a review from Claude Code.
+5. Ask for a review from Claude Code.
 
 ```text
 Use Kyoso plan_review on this plan before implementation.

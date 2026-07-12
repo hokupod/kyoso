@@ -1710,6 +1710,55 @@ The dependency `value` must match the server name in the Plugin `.codex-plugin/m
 
 A Plugin with its bundled `kyoso` MCP disabled is not a CLI-fallback mode. Doctor directs users to re-enable that MCP or remove the Plugin and install the canonical CLI plus Skill-only distribution instead.
 
+### 22.4 Marketplace Plugin distribution (Codex and Claude Code)
+
+The repository serves both clients from one Plugin payload while keeping their
+incompatible MCP configuration formats isolated:
+
+```text
+.claude-plugin/marketplace.json                 # Claude Code marketplace entry
+plugins/kyoso/
+├── .codex-plugin/plugin.json                   # Codex Plugin manifest
+├── .codex-plugin/mcp.json                      # Codex MCP definition
+├── .claude-plugin/plugin.json                  # Claude manifest with inline mcpServers
+└── skills/kyoso-review/                        # shared generated Skill mirror
+```
+
+Codex resolves its MCP server through the path in `.codex-plugin/plugin.json`.
+Claude Code resolves the inline `mcpServers` declaration in
+`.claude-plugin/plugin.json`. Both clients share the same generated Skill
+mirror, but only the Codex manifest carries Codex-specific metadata and only
+the Claude manifest carries the Claude-compatible MCP shape.
+
+The distribution contract has these required invariants, checked by
+`plugin:verify` in normal CI and promotion verification:
+
+| Invariant           | Required equality or format                                                                                                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I1 — Plugin version | `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` metadata and Kyoso entry, the compatibility contract, and `pluginRuntimeContract.ts` use one Plugin version. |
+| I2 — CLI pin        | `.codex-plugin/mcp.json`, the Claude inline MCP definition, generated Skill fallbacks, and the compatibility `mcpPackagePin` use one CLI package pin.                                                     |
+| I3 — exact SemVer   | Every CLI pin is exactly `@kyo-so/cli@X.Y.Z`; ranges, tags, and unpinned package names are rejected.                                                                                                      |
+
+Additional guards preserve the boundary around those invariants:
+
+- The Codex MCP path must resolve to `.codex-plugin/mcp.json`, and no
+  `plugins/kyoso/.mcp.json` may exist.
+- The generated Skill mirror must match the canonical Skill transformation;
+  hand-edited mirror drift is rejected.
+- Marketplace-only artifacts stay out of the npm tarball, including the root
+  `.claude-plugin/` directory.
+- `plugin-promote.mjs` updates all version- and pin-coupled artifacts as one
+  promotion. After a CLI release, a best-effort reminder compares the release
+  tag with both Plugin pins and skips an open issue with the same title; it
+  must not fail the already-published release.
+
+Do not place a Codex-format `.mcp.json` at the Plugin root. Claude Code
+auto-discovers a root `.mcp.json` even when its manifest has inline
+`mcpServers`; manifest validation does not validate that file's incompatible
+contents. Keeping the Codex definition under `.codex-plugin/` prevents Claude
+Code from loading the wrong format, and the distribution verifier rejects any
+reintroduction of the root file.
+
 ---
 
 ## 23. Client configuration examples

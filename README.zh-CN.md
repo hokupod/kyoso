@@ -40,7 +40,7 @@ Kyoso 不会应用代码更改。
 
 | 模式               | 安装内容             | MCP | 客户端             |
 | ------------------ | -------------------- | --: | ------------------ |
-| Marketplace Plugin | Skill＋本地stdio MCP |  有 | Codex              |
+| Marketplace Plugin | Skill＋本地stdio MCP |  有 | Codex／Claude Code |
 | CLI＋Skill-only    | npm CLI＋Skill       |  无 | Codex／Claude Code |
 | 手动setup          | 手动MCP注册＋Skill   |  有 | Codex／Claude Code |
 
@@ -102,21 +102,32 @@ claude setup-token
 
 设置该命令得到的 `CLAUDE_CODE_OAUTH_TOKEN`，或设置 `ANTHROPIC_API_KEY` 以使用 direct API billing。
 
-2. 注册 MCP 并安装 review skill。
+2. 在 Claude Code 中安装 Marketplace Plugin。
+
+```text
+/plugin marketplace add hokupod/kyoso
+/plugin install kyoso@kyoso
+```
+
+Plugin 会安装 Kyoso review Skill 和 pin 到已发布 CLI version 的本地 stdio MCP server。通过 Plugin 安装时，无需运行 `kyoso setup claude-code`。
+
+3. 或者，注册 MCP 并安装 review skill。
 
 ```bash
 npx @kyo-so/cli setup claude-code --write
 bunx @kyo-so/cli setup claude-code --write
 ```
 
-3. 验证 setup。
+需要手动注册 MCP 时，请使用 `examples/claude-code-mcp.json`。
+
+4. 验证 setup。
 
 ```bash
 npx @kyo-so/cli doctor
 bunx @kyo-so/cli doctor
 ```
 
-4. 从 Claude Code 请求 review。
+5. 从 Claude Code 请求 review。
 
 ```text
 Use Kyoso plan_review on this plan before implementation.

@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Codex Auto mode, including the risk of sending selected code and review
   context to configured external model providers. The Plugin keeps approvals
   disabled by default.
+- Update the default `@agentclientprotocol/claude-agent-acp` adapter from
+  `0.57.0` to `0.58.1` for resumed-session model preservation, cancelled-turn
+  usage reporting, and streamed-thinking robustness.
+- Update `@modelcontextprotocol/server` from `2.0.0-beta.2` to
+  `2.0.0-beta.3`, restoring legacy `CallToolResult` parsing tolerance and
+  incorporating transport and authentication validation fixes.
 
 ### Fixed
 

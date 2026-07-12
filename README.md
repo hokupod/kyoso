@@ -139,7 +139,7 @@ codex plugin add kyoso@kyoso
 
 You can also select Kyoso from the Codex desktop Plugins page or `/plugins`; refresh or restart the desktop app if a newly added marketplace is not visible. Check the installation with `codex plugin list --marketplace kyoso --json`, and remove the Plugin with `codex plugin remove kyoso@kyoso`. When you install the Plugin, `kyoso setup codex` is not required.
 
-Codex Auto mode may reject Kyoso tool calls that require approval. To pre-approve them for your account, add the following to `~/.codex/config.toml`. **Only do this if you trust Kyoso and accept that selected code and review context may be sent to the configured external model providers.** The Plugin does not enable this by default.
+Codex Auto mode may reject Kyoso tool calls that require approval. To pre-approve them for your account, add the following to `~/.codex/config.toml` (or `$CODEX_HOME/config.toml` when `CODEX_HOME` is set). **Only do this if you trust Kyoso and accept that selected code and review context may be sent to the configured external model providers.** The Plugin does not enable this by default.
 
 ```toml
 [plugins."kyoso@kyoso".mcp_servers.kyoso.tools.diff_review]
@@ -149,6 +149,19 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [plugins."kyoso@kyoso".mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
+
+When Kyoso is registered directly as an MCP server (`kyoso setup codex --write` or manual setup) instead of the Plugin, use the `mcp_servers.kyoso` keys without the `plugins."kyoso@kyoso".` prefix:
+
+```toml
+[mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.security_review]
 approval_mode = "approve"
 ```
 

@@ -67,11 +67,32 @@ const forbiddenDistributionKeys = new Set([
 ]);
 const semverPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const allowedClaudeManifestKeys = new Set([
+  "name",
+  "version",
+  "description",
+  "author",
+  "homepage",
+  "repository",
+  "license",
+  "keywords",
+  "skills",
+  "mcpServers",
+]);
+const allowedClaudeAuthorKeys = new Set(["name", "url"]);
+const allowedClaudeMcpServerKeys = new Set(["command", "args", "env"]);
 
 export function distributionPaths(root = repositoryRoot) {
   return {
     root,
     catalog: join(root, ".agents", "plugins", "marketplace.json"),
+    claudeManifest: join(
+      root,
+      pluginRootRelativePath,
+      ".claude-plugin",
+      "plugin.json",
+    ),
+    claudeMarketplace: join(root, ".claude-plugin", "marketplace.json"),
     canonicalSkill: join(root, canonicalSkillRelativePath),
     compatibility: join(
       root,
@@ -150,14 +171,24 @@ export function verifyPluginDistribution(options = {}) {
   const expectedPackageVersion = options.expectedPackageVersion;
   const paths = distributionPaths(root);
   const failures = [];
-  // Claude Code auto-detects a plugin-root .mcp.json before manifest metadata.
-  // Keep the Codex definition isolated until a future Claude plugin stage updates this guard.
+  // Claude Code auto-detects a plugin-root .mcp.json before the inline
+  // mcpServers declaration in the Claude plugin manifest.
   if (existsSync(join(paths.pluginRoot, ".mcp.json"))) {
     failures.push("Plugin root must not contain .mcp.json");
   }
   const catalog = readJson(paths.catalog, "Marketplace catalog", failures);
   const manifest = readJson(paths.manifest, "Plugin manifest", failures);
   const mcp = readJson(paths.mcp, "Plugin MCP config", failures);
+  const claudeManifest = readJson(
+    paths.claudeManifest,
+    "Claude plugin manifest",
+    failures,
+  );
+  const claudeMarketplace = readJson(
+    paths.claudeMarketplace,
+    "Claude marketplace",
+    failures,
+  );
   const compatibility = readJson(
     paths.compatibility,
     "Plugin compatibility record",
@@ -172,11 +203,28 @@ export function verifyPluginDistribution(options = {}) {
   const catalogPlugin = validateCatalog(catalog, paths, failures);
   validateManifest(manifest, paths, failures);
   const pin = validateMcp(mcp, failures);
-  validateDistributionSafety({ catalog, manifest, mcp }, failures);
+  const claudePin = validateClaudeManifest(claudeManifest, paths, failures);
+  const claudeMarketplaceVersions = validateClaudeMarketplace(
+    claudeMarketplace,
+    failures,
+  );
+  validateClaudeVersionConsistency(
+    manifest,
+    claudeManifest,
+    claudeMarketplaceVersions,
+    compatibility,
+    failures,
+  );
+  validateClaudePinConsistency(pin, claudePin, failures);
+  validateDistributionSafety(
+    { catalog, manifest, mcp, claudeManifest, claudeMarketplace },
+    failures,
+  );
   validatePackageAllowlist(packageMetadata, failures);
   validatePackageVersion(
     packageMetadata,
     pin,
+    claudePin,
     failures,
     expectedPackageVersion,
   );
@@ -467,6 +515,237 @@ function validateManifest(manifest, paths, failures) {
   }
 }
 
+function validateClaudeManifest(manifest, paths, failures) {
+  if (!isObject(manifest)) {
+    failures.push("Claude plugin manifest must be a JSON object");
+    return { packageName: "", packageVersion: "" };
+  }
+  validateAllowedKeys(
+    manifest,
+    allowedClaudeManifestKeys,
+    "Claude plugin manifest",
+    failures,
+  );
+  for (const key of ["description", "homepage", "license", "repository"]) {
+    if (!isNonEmptyString(manifest[key])) {
+      failures.push(`Claude plugin manifest ${key} must be a non-empty string`);
+    }
+  }
+  if (manifest.name !== "kyoso") {
+    failures.push('Claude plugin manifest name must be "kyoso"');
+  }
+  if (
+    !isNonEmptyString(manifest.version) ||
+    !semverPattern.test(manifest.version)
+  ) {
+    failures.push(
+      "Claude plugin manifest version must be a complete SemVer version",
+    );
+  }
+  if (isObject(manifest.author)) {
+    validateAllowedKeys(
+      manifest.author,
+      allowedClaudeAuthorKeys,
+      "Claude plugin manifest author",
+      failures,
+    );
+  }
+  if (
+    !isObject(manifest.author) ||
+    !isNonEmptyString(manifest.author.name) ||
+    !isHttpsUrl(manifest.author.url)
+  ) {
+    failures.push(
+      "Claude plugin manifest author must include a name and HTTPS URL",
+    );
+  }
+  if (!isHttpsUrl(manifest.homepage) || !isHttpsUrl(manifest.repository)) {
+    failures.push(
+      "Claude plugin manifest homepage and repository must be HTTPS URLs",
+    );
+  }
+  if (
+    !Array.isArray(manifest.keywords) ||
+    manifest.keywords.length === 0 ||
+    !manifest.keywords.every(isNonEmptyString)
+  ) {
+    failures.push(
+      "Claude plugin manifest keywords must be a non-empty string array",
+    );
+  }
+  const skillsPath = validateRelativePath(
+    paths.pluginRoot,
+    manifest.skills,
+    "Claude plugin manifest skills",
+    failures,
+  );
+  if (skillsPath && skillsPath !== join(paths.pluginRoot, "skills")) {
+    failures.push("Claude plugin manifest skills must resolve to ./skills/");
+  }
+  if (!isObject(manifest.mcpServers)) {
+    failures.push("Claude plugin manifest mcpServers must be an inline object");
+    return { packageName: "", packageVersion: "" };
+  }
+  if (
+    Object.keys(manifest.mcpServers).length !== 1 ||
+    !isObject(manifest.mcpServers[pluginMcpServerName])
+  ) {
+    failures.push(
+      `Claude plugin manifest mcpServers must be a direct map with only ${pluginMcpServerName}`,
+    );
+    return { packageName: "", packageVersion: "" };
+  }
+  const server = manifest.mcpServers[pluginMcpServerName];
+  validateAllowedKeys(
+    server,
+    allowedClaudeMcpServerKeys,
+    `Claude plugin manifest mcpServers.${pluginMcpServerName}`,
+    failures,
+  );
+  if (server.env !== undefined) {
+    validateClaudeMcpEnv(server.env, failures);
+  }
+  if (server.command !== "npx") {
+    failures.push('Claude plugin MCP command must be "npx"');
+  }
+  if (
+    !Array.isArray(server.args) ||
+    server.args.length !== 3 ||
+    server.args[0] !== "-y" ||
+    server.args[2] !== "mcp"
+  ) {
+    failures.push(
+      'Claude plugin MCP args must be ["-y", "@kyo-so/cli@VERSION", "mcp"]',
+    );
+  }
+  const pin = parsePackagePin(server.args?.[1]);
+  if (!pin) {
+    failures.push(
+      "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+    );
+  }
+  return pin ?? { packageName: "", packageVersion: "" };
+}
+
+function validateClaudeMarketplace(marketplace, failures) {
+  if (!isObject(marketplace)) {
+    failures.push("Claude marketplace must be a JSON object");
+    return { metadataVersion: undefined, pluginVersion: undefined };
+  }
+  const metadataVersion = marketplace.metadata?.version;
+  if (!isObject(marketplace.metadata)) {
+    failures.push("Claude marketplace metadata must be an object");
+  } else if (
+    !isNonEmptyString(metadataVersion) ||
+    !semverPattern.test(metadataVersion)
+  ) {
+    failures.push(
+      "Claude marketplace metadata.version must be a complete SemVer version",
+    );
+  }
+  if (!Array.isArray(marketplace.plugins)) {
+    failures.push("Claude marketplace plugins must be an array");
+    return { metadataVersion, pluginVersion: undefined };
+  }
+  const plugin = marketplace.plugins[0];
+  if (!isObject(plugin)) {
+    failures.push("Claude marketplace plugins[0] must be an object");
+    return { metadataVersion, pluginVersion: undefined };
+  }
+  const pluginVersion = plugin.version;
+  if (!isNonEmptyString(pluginVersion) || !semverPattern.test(pluginVersion)) {
+    failures.push(
+      "Claude marketplace plugins[0].version must be a complete SemVer version",
+    );
+  }
+  return { metadataVersion, pluginVersion };
+}
+
+function validateClaudeMcpEnv(env, failures) {
+  if (!isStringRecord(env)) {
+    failures.push(
+      "Claude plugin MCP env must be an object with non-empty string values",
+    );
+    return;
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (!allowedMcpEnvVars.includes(key)) {
+      failures.push(`Claude plugin MCP env has unsupported variable: ${key}`);
+    }
+    const expectedValue = "$" + "{" + key + "}";
+    if (value !== expectedValue) {
+      failures.push(
+        `Claude plugin MCP env ${key} must forward ${formatValue(expectedValue)}`,
+      );
+    }
+  }
+}
+
+function validateClaudeVersionConsistency(
+  manifest,
+  claudeManifest,
+  claudeMarketplaceVersions,
+  compatibility,
+  failures,
+) {
+  const claudeVersion = claudeManifest?.version;
+  const codexVersion = manifest?.version;
+  const contractVersion =
+    compatibility?.expectedContract?.distribution?.pluginVersion;
+  validateVersionMatch(
+    "plugins/kyoso/.claude-plugin/plugin.json version",
+    claudeVersion,
+    "plugins/kyoso/.codex-plugin/plugin.json version",
+    codexVersion,
+    failures,
+  );
+  validateVersionMatch(
+    ".claude-plugin/marketplace.json plugins[0].version",
+    claudeMarketplaceVersions.pluginVersion,
+    "plugins/kyoso/.claude-plugin/plugin.json version",
+    claudeVersion,
+    failures,
+  );
+  validateVersionMatch(
+    ".claude-plugin/marketplace.json metadata.version",
+    claudeMarketplaceVersions.metadataVersion,
+    "plugins/kyoso/.claude-plugin/plugin.json version",
+    claudeVersion,
+    failures,
+  );
+  validateVersionMatch(
+    "plugins/kyoso/.claude-plugin/plugin.json version",
+    claudeVersion,
+    "docs/compatibility/codex-plugin-runtime.json expectedContract.distribution.pluginVersion",
+    contractVersion,
+    failures,
+  );
+}
+
+function validateClaudePinConsistency(pin, claudePin, failures) {
+  const codexPackagePin = packagePin(pin);
+  const claudePackagePin = packagePin(claudePin);
+  if (claudePackagePin !== codexPackagePin) {
+    failures.push(
+      `plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args[1] ${formatValue(claudePackagePin)} must match plugins/kyoso/.codex-plugin/mcp.json kyoso.args[1] ${formatValue(codexPackagePin)}`,
+    );
+  }
+}
+
+function validateVersionMatch(
+  actualLabel,
+  actual,
+  expectedLabel,
+  expected,
+  failures,
+) {
+  if (actual !== expected) {
+    failures.push(
+      `${actualLabel} ${formatValue(actual)} must match ${expectedLabel} ${formatValue(expected)}`,
+    );
+  }
+}
+
 function validateMcp(mcp, failures) {
   if (!isObject(mcp)) {
     failures.push("Plugin MCP config must be a JSON object");
@@ -544,7 +823,7 @@ function validatePackageAllowlist(packageMetadata, failures) {
     );
     return;
   }
-  const forbidden = ["plugins", ".agents/plugins"];
+  const forbidden = ["plugins", ".agents/plugins", ".claude-plugin"];
   for (const prefix of forbidden) {
     if (
       packageMetadata.files.some(
@@ -561,6 +840,7 @@ function validatePackageAllowlist(packageMetadata, failures) {
 function validatePackageVersion(
   packageMetadata,
   pin,
+  claudePin,
   failures,
   expectedPackageVersion,
 ) {
@@ -586,6 +866,14 @@ function validatePackageVersion(
   ) {
     failures.push(
       `Plugin MCP pin ${packagePin(pin)} must match expected package version ${expectedPackageVersion}`,
+    );
+  }
+  if (
+    expectedPackageVersion !== undefined &&
+    claudePin.packageVersion !== expectedPackageVersion
+  ) {
+    failures.push(
+      `Claude plugin MCP pin ${packagePin(claudePin)} must match expected package version ${expectedPackageVersion}`,
     );
   }
 }
@@ -743,7 +1031,7 @@ function assertPackageArchiveExcludesPluginPaths(root) {
     if (paths.length === 0) {
       throw new Error("tar listing returned no package entries");
     }
-    for (const prefix of ["plugins/", ".agents/plugins/"]) {
+    for (const prefix of ["plugins/", ".agents/plugins/", ".claude-plugin/"]) {
       if (paths.some((path) => path.startsWith(prefix))) {
         throw new Error(
           `npm pack archive includes forbidden Plugin path: ${prefix}`,
@@ -932,6 +1220,18 @@ function packagePin(pin) {
   return pin.packageName ? `${pin.packageName}@${pin.packageVersion}` : "";
 }
 
+function formatValue(value) {
+  return JSON.stringify(value) ?? String(value);
+}
+
+function validateAllowedKeys(value, allowedKeys, label, failures) {
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      failures.push(`${label} has unsupported key: ${key}`);
+    }
+  }
+}
+
 function collectForbiddenKeys(value, prefix, failures) {
   if (Array.isArray(value)) {
     value.forEach((item, index) =>
@@ -942,7 +1242,10 @@ function collectForbiddenKeys(value, prefix, failures) {
   if (!isObject(value)) return;
   for (const [key, child] of Object.entries(value)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    if (isForbiddenDistributionKey(normalizeDistributionKey(key))) {
+    if (
+      isForbiddenDistributionKey(normalizeDistributionKey(key)) &&
+      !isAllowedClaudeMcpEnvPath(path)
+    ) {
       failures.push(`Plugin distribution must not contain ${path}`);
     }
     collectForbiddenKeys(child, path, failures);
@@ -963,6 +1266,10 @@ function isForbiddenDistributionKey(key) {
     key.startsWith("sandbox_") ||
     key.startsWith("trust_")
   );
+}
+
+function isAllowedClaudeMcpEnvPath(path) {
+  return path === `claudeManifest.mcpServers.${pluginMcpServerName}.env`;
 }
 
 function readJson(path, label, failures) {
@@ -1048,6 +1355,10 @@ function isExactArray(value, expected) {
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringRecord(value) {
+  return isObject(value) && Object.values(value).every(isNonEmptyString);
 }
 
 function isNonEmptyString(value) {

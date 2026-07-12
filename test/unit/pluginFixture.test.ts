@@ -343,6 +343,7 @@ describe("Codex Plugin fixture", () => {
           const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-root-mcp-"));
           try {
             cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
             cpSync("plugins", join(fixture, "plugins"), { recursive: true });
             cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
             mkdirSync(join(fixture, "src", "cli"), { recursive: true });
@@ -369,6 +370,126 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
+  test("rejects Claude manifest drift and non-inline MCP definitions", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const scenarios = [
+            {
+              name: "stale Claude version",
+              mutate(manifest) {
+                manifest.version = "0.1.0";
+              },
+              expected: [
+                "plugins/kyoso/.claude-plugin/plugin.json version",
+                "0.1.0",
+              ],
+            },
+            {
+              name: "different Claude pin",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.9.1";
+              },
+              expected: [
+                "plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args[1]",
+                "@kyo-so/cli@0.9.1",
+              ],
+            },
+            {
+              name: "non-SemVer Claude pin",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@latest";
+              },
+              expected: [
+                "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+              ],
+            },
+            {
+              name: "path-based Claude MCP definition",
+              mutate(manifest) {
+                manifest.mcpServers = "./.codex-plugin/mcp.json";
+              },
+              expected: [
+                "Claude plugin manifest mcpServers must be an inline object",
+              ],
+            },
+            {
+              name: "unsupported Claude manifest fields",
+              mutate(manifest) {
+                manifest.interface = {};
+                manifest.hooks = {};
+                manifest.commands = "./commands";
+                manifest.mcpServers.kyoso.env_vars = [];
+              },
+              expected: [
+                "Claude plugin manifest has unsupported key: interface",
+                "Claude plugin manifest has unsupported key: hooks",
+                "Claude plugin manifest has unsupported key: commands",
+                "Claude plugin manifest mcpServers.kyoso has unsupported key: env_vars",
+              ],
+            },
+            {
+              name: "unsupported Claude MCP environment variable",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.env = {
+                  PATH: "$" + "{PATH}",
+                };
+              },
+              expected: [
+                "Claude plugin MCP env has unsupported variable: PATH",
+              ],
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            const fixture = mkdtempSync(join(tmpdir(), "kyoso-claude-plugin-"));
+            try {
+              cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+              cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
+              cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+              cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+              mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+              cpSync("package.json", join(fixture, "package.json"));
+              cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+              cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+              const manifestPath = join(fixture, "plugins", "kyoso", ".claude-plugin", "plugin.json");
+              const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+              scenario.mutate(manifest);
+              writeFileSync(manifestPath, JSON.stringify(manifest));
+              let message = "";
+              try {
+                verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
+              } catch (error) {
+                message = String(error);
+              }
+              if (!message) {
+                throw new Error(scenario.name + " unexpectedly passed verification");
+              }
+              for (const expected of scenario.expected) {
+                if (!message.includes(expected)) {
+                  throw new Error(scenario.name + " did not report " + expected + ": " + message);
+                }
+              }
+            } finally {
+              rmSync(fixture, { force: true, recursive: true });
+            }
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   test("accepts an explicit matching promotion target", () => {
     const result = spawnSync(
       "node",
@@ -384,12 +505,19 @@ describe("Codex Plugin fixture", () => {
           const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-promotion-match-"));
           try {
             cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
             cpSync("plugins", join(fixture, "plugins"), { recursive: true });
             cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
             mkdirSync(join(fixture, "src", "cli"), { recursive: true });
             cpSync("package.json", join(fixture, "package.json"));
             cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+            const claudeManifestPath = join(fixture, "plugins", "kyoso", ".claude-plugin", "plugin.json");
+            const claudeManifest = JSON.parse(readFileSync(claudeManifestPath, "utf8"));
+            claudeManifest.mcpServers.kyoso.env = {
+              OPENAI_API_KEY: "$" + "{OPENAI_API_KEY}",
+            };
+            writeFileSync(claudeManifestPath, JSON.stringify(claudeManifest));
             const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
             const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
@@ -430,6 +558,7 @@ describe("Codex Plugin fixture", () => {
           const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-policy-"));
           try {
             cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
             cpSync("plugins", join(fixture, "plugins"), { recursive: true });
             cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
             mkdirSync(join(fixture, "src", "cli"), { recursive: true });
@@ -490,6 +619,7 @@ describe("Codex Plugin fixture", () => {
           const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-pre-promotion-"));
           try {
             cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
             cpSync("plugins", join(fixture, "plugins"), { recursive: true });
             cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
             mkdirSync(join(fixture, "src", "cli"), { recursive: true });
@@ -515,7 +645,11 @@ describe("Codex Plugin fixture", () => {
               });
               process.exitCode = 1;
             } catch (error) {
-              if (!String(error).includes("must match expected package version " + aheadVersion)) {
+              const message = String(error);
+              if (
+                !message.includes("must match expected package version " + aheadVersion) ||
+                !message.includes("Claude plugin MCP pin")
+              ) {
                 throw error;
               }
             }
@@ -564,7 +698,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
-  test("promotes the relocated MCP and Plugin Skill fallback pins", () => {
+  test("promotes Codex and Claude Plugin artifacts", () => {
     const result = spawnSync(
       "node",
       [
@@ -574,8 +708,11 @@ describe("Codex Plugin fixture", () => {
           import { join } from "node:path";
           import { createUpdates } from "./scripts/plugin-promote.mjs";
 
+          const cliVersion = "0.9.1";
+          const pluginVersion = "0.3.0";
+          const packagePin = "@kyo-so/cli@" + cliVersion;
           const updates = createUpdates(
-            { cliVersion: "0.9.0", pluginVersion: "0.2.0" },
+            { cliVersion, pluginVersion },
             process.cwd(),
           );
           const mcpPath = join(
@@ -585,19 +722,51 @@ describe("Codex Plugin fixture", () => {
             "mcp.json",
           );
           const skillPath = join("plugins", "kyoso", "skills", "kyoso-review", "SKILL.md");
+          const claudeManifestPath = join(
+            "plugins",
+            "kyoso",
+            ".claude-plugin",
+            "plugin.json",
+          );
+          const claudeMarketplacePath = join(
+            ".claude-plugin",
+            "marketplace.json",
+          );
           const mcp = updates.find((entry) => entry.path.endsWith(mcpPath));
           const skill = updates.find((entry) => entry.path.endsWith(skillPath));
+          const claudeManifest = updates.find((entry) =>
+            entry.path.endsWith(claudeManifestPath),
+          );
+          const claudeMarketplace = updates.find((entry) =>
+            entry.path.endsWith(claudeMarketplacePath),
+          );
+          if (updates.length !== 7) {
+            throw new Error("Plugin promotion must update exactly seven files");
+          }
           if (
-            !mcp ||
-            JSON.parse(mcp.next).kyoso.args[1] !== "@kyo-so/cli@0.9.0"
+            !mcp || JSON.parse(mcp.next).kyoso.args[1] !== packagePin
           ) {
             throw new Error("Plugin promotion did not update the relocated MCP pin");
           }
-          if (
-            !skill?.next.includes("npx -y @kyo-so/cli@0.9.0") ||
-            !skill.next.includes("bunx @kyo-so/cli@0.9.0")
-          ) {
+          if (!skill?.next.includes("npx -y " + packagePin) || !skill.next.includes("bunx " + packagePin)) {
             throw new Error("Plugin promotion did not update both Skill fallback pins");
+          }
+          if (!claudeManifest || !claudeMarketplace) {
+            throw new Error("Plugin promotion did not include both Claude artifacts");
+          }
+          const nextClaudeManifest = JSON.parse(claudeManifest.next);
+          const nextClaudeMarketplace = JSON.parse(claudeMarketplace.next);
+          if (
+            nextClaudeManifest.version !== pluginVersion ||
+            nextClaudeManifest.mcpServers.kyoso.args[1] !== packagePin
+          ) {
+            throw new Error("Plugin promotion did not update the Claude manifest version and pin");
+          }
+          if (
+            nextClaudeMarketplace.plugins[0].version !== pluginVersion ||
+            nextClaudeMarketplace.metadata.version !== pluginVersion
+          ) {
+            throw new Error("Plugin promotion did not update both Claude marketplace versions");
           }
         `,
       ],

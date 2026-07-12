@@ -23,6 +23,7 @@ const forbiddenPrefixes = [
   ".github/",
   "plugins/",
   ".agents/plugins/",
+  ".claude-plugin/",
 ];
 const secretPatterns = [
   /sk-[A-Za-z0-9_-]{20,}/,

@@ -45,8 +45,11 @@ jobs:
       - name: Setup safe-chain shims
         run: safe-chain setup-ci
 
+      # The pin must be old enough to clear the safe-chain minimum package
+      # age filter (very recent releases resolve as ETARGET behind the shims)
+      # and should match a version verified locally with plugin validate.
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@2.1.207
+        run: npm install -g @anthropic-ai/claude-code@2.1.191
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

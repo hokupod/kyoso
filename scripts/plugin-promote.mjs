@@ -139,6 +139,8 @@ export function createUpdates(
   const packagePin = `@kyo-so/cli@${cliVersion}`;
   const mcp = readJson(paths.mcp);
   const manifest = readJson(paths.manifest);
+  const claudeManifest = readJson(paths.claudeManifest);
+  const claudeMarketplace = readJson(paths.claudeMarketplace);
   const compatibility = readJson(paths.compatibility);
   const runtimeContract = readFileSync(paths.runtimeContract, "utf8");
   const pluginSkillInstructions = transformCanonicalToPlugin(
@@ -149,6 +151,10 @@ export function createUpdates(
 
   mcp.kyoso.args[1] = packagePin;
   manifest.version = pluginVersion;
+  claudeManifest.version = pluginVersion;
+  claudeManifest.mcpServers.kyoso.args[1] = packagePin;
+  claudeMarketplace.plugins[0].version = pluginVersion;
+  claudeMarketplace.metadata.version = pluginVersion;
   compatibility.expectedContract.distribution.mcpPackagePin = packagePin;
   compatibility.expectedContract.distribution.pluginVersion = pluginVersion;
   const updatedRuntimeContract = replaceRuntimeContractValues(
@@ -163,6 +169,14 @@ export function createUpdates(
     update(paths.compatibility, JSON.stringify(compatibility, null, 2) + "\n"),
     update(paths.runtimeContract, updatedRuntimeContract),
     update(join(paths.pluginSkill, "SKILL.md"), pluginSkillInstructions),
+    update(
+      paths.claudeManifest,
+      JSON.stringify(claudeManifest, null, 2) + "\n",
+    ),
+    update(
+      paths.claudeMarketplace,
+      JSON.stringify(claudeMarketplace, null, 2) + "\n",
+    ),
   ];
 }
 

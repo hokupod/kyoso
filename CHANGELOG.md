@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Claude Code Marketplace Plugin distribution with a shared Kyoso Skill and
+  version-pinned local stdio MCP server.
+- Best-effort post-publish reminders when either Plugin CLI pin lags the
+  released CLI version.
+
+### Changed
+
+- Move the Codex Plugin MCP definition to
+  `plugins/kyoso/.codex-plugin/mcp.json` so it cannot be auto-discovered by
+  Claude Code as a Plugin-root `.mcp.json`.
+
 ## [0.9.0] - 2026-07-11
 
 ### Added

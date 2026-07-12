@@ -156,3 +156,135 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --verify-tag \
             --notes-file release-notes.md
+
+  # Publishing the CLI must not be blocked by a missed Plugin promotion.
+  promotion-reminder:
+    runs-on: ubuntu-latest
+    needs: github-release
+    continue-on-error: true
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+
+      - name: Remind when Plugin pins lag behind the release
+        id: promotion_reminder
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          CODEX_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.codex-plugin/mcp.json", "utf8")).kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@")).slice("@kyo-so/cli@".length)')"
+          CLAUDE_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.claude-plugin/plugin.json", "utf8")).mcpServers.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@")).slice("@kyo-so/cli@".length)')"
+
+          is_semver_older() {
+            node -e '
+              const [candidate, released] = process.argv.slice(1);
+              const parse = (version) => {
+                const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version);
+                if (!match) throw new Error(`Invalid SemVer: ${version}`);
+                const prerelease = match[4]?.split(".") ?? [];
+                if (prerelease.some((identifier) => /^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0"))) {
+                  throw new Error(`Invalid SemVer prerelease: ${version}`);
+                }
+                return {
+                  core: match.slice(1, 4).map((identifier) => BigInt(identifier)),
+                  prerelease,
+                };
+              };
+              const compare = (left, right) => {
+                for (let index = 0; index < left.core.length; index += 1) {
+                  if (left.core[index] !== right.core[index]) {
+                    return left.core[index] < right.core[index] ? -1 : 1;
+                  }
+                }
+                if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+                  if (left.prerelease.length === right.prerelease.length) return 0;
+                  return left.prerelease.length === 0 ? 1 : -1;
+                }
+                const length = Math.max(left.prerelease.length, right.prerelease.length);
+                for (let index = 0; index < length; index += 1) {
+                  const leftIdentifier = left.prerelease[index];
+                  const rightIdentifier = right.prerelease[index];
+                  if (leftIdentifier === undefined) return -1;
+                  if (rightIdentifier === undefined) return 1;
+                  if (leftIdentifier === rightIdentifier) continue;
+                  const leftNumeric = /^\d+$/.test(leftIdentifier);
+                  const rightNumeric = /^\d+$/.test(rightIdentifier);
+                  if (leftNumeric && rightNumeric) {
+                    return BigInt(leftIdentifier) < BigInt(rightIdentifier) ? -1 : 1;
+                  }
+                  if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+                  return leftIdentifier < rightIdentifier ? -1 : 1;
+                }
+                return 0;
+              };
+              process.stdout.write(compare(parse(candidate), parse(released)) < 0 ? "true" : "false");
+            ' "$1" "$2"
+          }
+
+          CODEX_PIN_IS_OLDER="$(is_semver_older "$CODEX_PIN" "$RELEASE_VERSION")"
+          CLAUDE_PIN_IS_OLDER="$(is_semver_older "$CLAUDE_PIN" "$RELEASE_VERSION")"
+          if [ "$CODEX_PIN_IS_OLDER" != "true" ] && [ "$CLAUDE_PIN_IS_OLDER" != "true" ]; then
+            echo "Plugin pins are not older than released CLI v${RELEASE_VERSION}; no promotion reminder needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # plugin:verify enforces these pins match. Keep the warning actionable
+          # if an invalid repository state reaches this best-effort reminder.
+          PLUGIN_PIN="$CODEX_PIN"
+          if [ "$CODEX_PIN_IS_OLDER" != "true" ]; then
+            PLUGIN_PIN="$CLAUDE_PIN"
+          fi
+          {
+            echo "### Plugin promotion needed"
+            echo
+            echo "> [!WARNING]"
+            echo "> CLI v${RELEASE_VERSION} was released, but the Plugin pin has not been promoted."
+            echo
+            echo "- Codex MCP pin: \`@kyo-so/cli@${CODEX_PIN}\`"
+            echo "- Claude Code pin: \`@kyo-so/cli@${CLAUDE_PIN}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          ISSUE_TITLE="Plugin promotion needed: CLI v${RELEASE_VERSION} released, plugins pin v${PLUGIN_PIN}"
+          OPEN_ISSUE_TITLES="$(gh search issues "$ISSUE_TITLE in:title state:open repo:$GITHUB_REPOSITORY" \
+            --json title --limit 100 --jq '.[].title')"
+          if printf '%s\n' "$OPEN_ISSUE_TITLES" | grep -Fxq "$ISSUE_TITLE"; then
+            echo "An open promotion reminder already exists; skipping duplicate issue." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          ISSUE_BODY="$(printf '%s\n' \
+            "CLI v${RELEASE_VERSION} was published, while the distributed Plugin pin is still behind it." \
+            "" \
+            "- Codex MCP pin: @kyo-so/cli@${CODEX_PIN}" \
+            "- Claude Code pin: @kyo-so/cli@${CLAUDE_PIN}" \
+            "" \
+            "Run the Plugin promotion workflow to update both pins together.")"
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$ISSUE_TITLE" \
+            --body "$ISSUE_BODY"
+
+      - name: Report promotion reminder failure
+        if: ${{ failure() || steps.promotion_reminder.outcome == 'failure' }}
+        run: |
+          {
+            echo "### Plugin promotion reminder failed"
+            echo
+            echo "> [!WARNING]"
+            echo "> The CLI release succeeded, but the best-effort Plugin promotion reminder did not finish."
+            echo
+            echo "Review this job's logs before deciding whether the Plugin needs promotion."
+          } >> "$GITHUB_STEP_SUMMARY"

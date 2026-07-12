@@ -188,7 +188,13 @@ function prepareFixture() {
     recursive: true,
   });
 
-  const mcpPath = join(marketplaceRoot, "plugins", "kyoso", ".mcp.json");
+  const mcpPath = join(
+    marketplaceRoot,
+    "plugins",
+    "kyoso",
+    ".codex-plugin",
+    "mcp.json",
+  );
   const mcp = readJson(mcpPath);
   mcp.kyoso.command = process.execPath;
   mcp.kyoso.args = [
@@ -407,7 +413,9 @@ function summarizeDistributionFixture() {
   const manifest = readJson(
     join(repositoryRoot, "plugins", "kyoso", ".codex-plugin", "plugin.json"),
   );
-  const mcp = readJson(join(repositoryRoot, "plugins", "kyoso", ".mcp.json"));
+  const mcp = readJson(
+    join(repositoryRoot, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
+  );
   return {
     pluginVersion: manifest.version,
     mcpCommand: mcp.kyoso.command,

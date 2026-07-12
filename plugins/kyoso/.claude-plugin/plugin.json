@@ -11,14 +11,10 @@
   "license": "AGPL-3.0-or-later",
   "keywords": ["review", "multi-agent", "codex", "claude"],
   "skills": "./skills/",
-  "mcpServers": "./.codex-plugin/mcp.json",
-  "interface": {
-    "displayName": "Kyoso",
-    "shortDescription": "Multi-agent plan, security, and diff review",
-    "longDescription": "Run review-only plan, security, and diff gates through Codex and Claude.",
-    "developerName": "hokupod",
-    "category": "Engineering",
-    "capabilities": ["Read"],
-    "websiteUrl": "https://github.com/hokupod/kyoso"
+  "mcpServers": {
+    "kyoso": {
+      "command": "npx",
+      "args": ["-y", "@kyo-so/cli@0.9.0", "mcp"]
+    }
   }
 }

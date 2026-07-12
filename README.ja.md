@@ -141,7 +141,31 @@ codex plugin add kyoso@kyoso
 
 Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。確認は`codex plugin list --marketplace kyoso --json`、削除は`codex plugin remove kyoso@kyoso`です。Plugin で導入した場合、`kyoso setup codex` は不要です。
 
-Codex Auto modeでは、Kyoso toolsがannotationsを宣言していないため、最初のMCP呼び出しでapprovalが必要になることがあります。以後も許可する場合は「Allow and don't ask me again」を選択してください。
+Codex Auto modeでは、approvalが必要なKyoso toolの呼び出しが拒否されることがあります。個人設定で事前承認するには、次を`~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）へ追加します。**Kyosoを信頼し、選択したコードとレビュー用contextが設定済みの外部model providerへ送信されることを許容できる場合だけ設定してください。** Pluginの既定値では有効にしていません。
+
+```toml
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
+
+Pluginではなく、MCP serverとして直接登録している場合（`kyoso setup codex --write` または手動設定）は、`plugins."kyoso@kyoso".` プレフィックスなしの `mcp_servers.kyoso` キーを使用します。
+
+```toml
+[mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
 
 3. または、MCP を登録して review skill をインストールします。
 

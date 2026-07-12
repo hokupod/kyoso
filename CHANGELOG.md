@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Move the Codex Plugin MCP definition to
   `plugins/kyoso/.codex-plugin/mcp.json` so it cannot be auto-discovered by
   Claude Code as a Plugin-root `.mcp.json`.
+- Document opt-in per-tool approval settings for avoiding Kyoso rejections in
+  Codex Auto mode, including the risk of sending selected code and review
+  context to configured external model providers. The Plugin keeps approvals
+  disabled by default.
+
+### Fixed
+
+- Updated the pinned Codex ACP adapter to `1.1.2`, whose bundled Codex model
+  catalog advertises reasoning-effort options for `gpt-5.6` family models.
 
 ## [0.9.0] - 2026-07-11
 

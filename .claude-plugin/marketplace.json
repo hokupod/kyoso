@@ -1,0 +1,23 @@
+{
+  "name": "kyoso",
+  "owner": {
+    "name": "hokupod"
+  },
+  "metadata": {
+    "description": "Kyoso plugin marketplace for Claude Code",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "kyoso",
+      "source": "./plugins/kyoso",
+      "description": "Multi-agent plan, security, and diff review through Codex and Claude.",
+      "version": "0.2.0",
+      "author": {
+        "name": "hokupod"
+      },
+      "category": "development",
+      "keywords": ["review", "multi-agent", "codex", "claude"]
+    }
+  ]
+}

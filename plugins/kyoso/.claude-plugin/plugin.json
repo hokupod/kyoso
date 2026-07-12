@@ -1,0 +1,20 @@
+{
+  "name": "kyoso",
+  "version": "0.2.0",
+  "description": "Multi-agent review gates powered by Codex and Claude.",
+  "author": {
+    "name": "hokupod",
+    "url": "https://github.com/hokupod"
+  },
+  "homepage": "https://github.com/hokupod/kyoso",
+  "repository": "https://github.com/hokupod/kyoso",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["review", "multi-agent", "codex", "claude"],
+  "skills": "./skills/",
+  "mcpServers": {
+    "kyoso": {
+      "command": "npx",
+      "args": ["-y", "@kyo-so/cli@0.9.0", "mcp"]
+    }
+  }
+}

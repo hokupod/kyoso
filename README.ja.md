@@ -30,11 +30,11 @@ Kyoso はコード変更を適用しません。
   <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-review-flow.ja.svg" alt="Kyo-so のレビュー実行フロー。MCP/CLI リクエストから secret scan、スナップショット、アンサンブルレビュー、集約、ゲート、最終決定まで" width="640">
 </p>
 
-backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 1 agent が `combined_reviewer` として実行されます。この図の Mermaid ソースは [docs/assets/](docs/assets/) にあります。
+backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 1 agent が `combined_reviewer` として実行されます([Single-backend mode](#single-backend-mode) を参照)。この図の Mermaid ソースは [docs/assets/](docs/assets/) にあります。
 
 ## Quick Start
 
-グローバルインストールは不要です。Kyoso は `npx` または `bunx` で実行します。
+グローバルインストールは不要です。Kyoso は `npx` または `bunx` で実行します。パッケージ化された CLI を実行するには Node.js 20 以降が必要です。
 
 ### 導入モード
 
@@ -44,7 +44,7 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 | CLI＋Skill-only    | npm CLI＋Skill           | なし | Codex／Claude Code |
 | 手動setup          | 手動MCP登録＋Skill       | あり | Codex／Claude Code |
 
-迷ったらMarketplace Pluginを選んでください。2コマンドでSkillとMCP serverをまとめて導入できます。手順は下の[Codex](#codex)／[Claude Code](#claude-code)節を参照してください。
+迷ったらMarketplace Pluginを選んでください。2コマンドでSkillとMCP serverをまとめて導入できます。手順は下の[Codex](#codex)／[Claude Code](#claude-code)節を参照してください。導入モードを後から切り替える場合は[移行](#移行)を参照してください。
 
 #### Marketplace Plugin
 
@@ -67,21 +67,6 @@ npx kyoso setup codex --write --skill-only
 Claude Codeでは`codex`を`claude-code`へ置き換えます。既定はdry-runです。`--skill-only`はMCP設定を読み書きせず、`--runner`／`--command`とは併用できません。
 
 Skill-onlyは意図的にMCP dependencyを宣言しません。`npx`または`bunx`のpackage-runner fallbackに到達すると、Codex Auto modeはsandbox network escalation approvalを要求することがあります。PATH上に`kyoso`を導入すると、このfallbackを避けられます。
-
-#### 移行
-
-- 手動MCPからCLI＋Skill: CLIとSkillを先に導入し、`codex mcp remove kyoso`または`claude mcp remove kyoso --scope local|project|user`を実行します。
-- CLI＋SkillからPlugin: Pluginを追加してenabledを確認してから、手動MCP登録を削除します。手動コピーSkillは自動削除しません。
-- PluginからCLI＋Skill: CLIとSkillを先に導入し、`codex plugin remove kyoso@kyoso`を実行します。
-- CLI＋Skillから手動MCPへ戻す: `kyoso setup codex --write`または`kyoso setup claude-code --write`を実行します。
-
-### Claude Only / Codex Only
-
-Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.toml` で無効化してください。例は `examples/claude-only.toml` と `examples/codex-only.toml` にあります。
-
-single-agent mode では、残った backend が `combined_reviewer` として 1 回だけ実行され、implementation と architecture/security の両方を確認します。JSON output には `reviewMode: "single_agent"` と `agentsUsed` が入り、Markdown output には cross-model verification が行われていないことと disagreements が N/A であることを表示します。
-
-この mode では独立した cross-model validation はなく、自己レビュー bias が残ります。一方で、別プロセスの read-only review、temporary snapshots、adversarial review prompts、secret scanning、deterministic gates は利用できます。
 
 ### Claude Code
 
@@ -141,31 +126,7 @@ codex plugin add kyoso@kyoso
 
 Codex desktopのPlugins pageまたは`/plugins`からKyosoを選ぶこともできます。追加したMarketplaceが見えない場合はdesktop appをrefresh／restartしてください。確認は`codex plugin list --marketplace kyoso --json`、削除は`codex plugin remove kyoso@kyoso`です。Plugin で導入した場合、`kyoso setup codex` は不要です。
 
-Codex Auto modeでは、approvalが必要なKyoso toolの呼び出しが拒否されることがあります。個人設定で事前承認するには、次を`~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）へ追加します。**Kyosoを信頼し、選択したコードとレビュー用contextが設定済みの外部model providerへ送信されることを許容できる場合だけ設定してください。** Pluginの既定値では有効にしていません。
-
-```toml
-[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.diff_review]
-approval_mode = "approve"
-
-[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.plan_review]
-approval_mode = "approve"
-
-[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.security_review]
-approval_mode = "approve"
-```
-
-Pluginではなく、MCP serverとして直接登録している場合（`kyoso setup codex --write` または手動設定）は、`plugins."kyoso@kyoso".` プレフィックスなしの `mcp_servers.kyoso` キーを使用します。
-
-```toml
-[mcp_servers.kyoso.tools.diff_review]
-approval_mode = "approve"
-
-[mcp_servers.kyoso.tools.plan_review]
-approval_mode = "approve"
-
-[mcp_servers.kyoso.tools.security_review]
-approval_mode = "approve"
-```
+Codex Auto modeでは、approvalが必要なKyoso toolの呼び出しが拒否されることがあります。個人設定で事前承認する方法は [Codex approval prompts](#codex-approval-prompts) を参照してください。
 
 3. または、MCP を登録して review skill をインストールします。
 
@@ -189,34 +150,9 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 手動セットアップ用の例は `examples/codex-config.toml` と `examples/claude-code-mcp.json` にあります。
 
-## Install / Run
-
-```bash
-npx @kyo-so/cli mcp
-bunx @kyo-so/cli mcp
-```
-
-Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
-
-ローカル開発:
-
-```bash
-nix develop
-safe-chain bun install
-safe-chain bun run typecheck
-safe-chain bun test
-safe-chain bun run build
-```
-
-パッケージ化された CLI を実行するには Node.js 20 以降が必要です。
-
-Nix dev shell は Node.js 24 と nixpkgs が提供する Bun version を固定します。`.envrc` を確認してから `direnv allow` を一度実行すると、自動で shell を読み込めます。CI は Bun 1.3.14 に pin したままです。現在の nixpkgs Bun version は少し異なる場合がありますが、`flake.lock` により local shell の再現性を保ちます。
-
-既知の配布リスク: `@modelcontextprotocol/server` にはまだ stable release がありません。Kyoso は現在 prerelease API を pin しているため、MCP SDK API の変更に追従する follow-up release が必要になる場合があります。
-
 ## CLI
 
-通常の実行経路は `npx @kyo-so/cli` と `bunx @kyo-so/cli` です。以下の例では、この prefix を `kyoso` と省略しています。
+通常の実行経路は `npx @kyo-so/cli` と `bunx @kyo-so/cli` です。以下の例では、この prefix を `kyoso` と省略しています。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
 
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
@@ -298,45 +234,41 @@ Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools
 
 managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのSkill directoryだけを置換し、MCP設定を削除・上書きしません。
 
-## Safety Model
+## Configuration
 
-Kyoso MVP は disposable temporary snapshot と policy-level write denial を使用します。完全な OS sandbox ではありません。リスクを理解していない場合、untrusted repositories に対して Kyoso を実行しないでください。
+### Files and precedence
 
-Secret detection は best-effort です。Kyoso は request、selected files、diff 内で secret らしき値を検出すると、その値を redact し、既定では backend agents の実行前に block します。
+Kyoso は次の順に config を load します。
 
-Kyoso は provider credentials を保存しません。Child agent environment variables は allowlist されます。
+- built-in defaults
+- user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`、または `~/.config/kyoso/config.toml`
+- project TOML: `<cwd>/kyoso.toml`
+- `--network` などの CLI flags と `--set agents.claude.effort=high` などの反復可能な overrides
 
-Repository content、plans、diffs、selected files は backend prompts 内で untrusted data として扱われます。Kyoso はそれらを `<untrusted-content>` tags で包み、その中にある instructions に従わないよう agents に指示します。最終判断は schema-constrained findings から導出されます。agents は files の書き込みや commands の実行ができず、judge は deterministic decision を変更できません。
+`plan`、`security`、`diff` は、反復可能な `--set <key>=<value>` overrides を受け付けます。CLI で指定した値は config files より優先され、`--ignore-config` との併用も可能です。
 
-Finding title は aggregation のため簡潔な英語に正規化されます。evidence、recommendations、summaries はユーザーの言語のままで構いません。
+未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
 
-Audit trace は workspace が制御するpathではなく、trusted user state root 配下へ書き込みます。対応するPOSIX runtimeでは、absoluteな`$XDG_STATE_HOME`が利用可能ならそれを、そうでなければ`$HOME/.local/state`を使用し、owner、permission、containment、symlinkを確認できた場合だけ書き込みます。検証またはsafe openに失敗した場合、別locationへ黙ってfallbackせず、そのreviewのAudit writeを無効化してsanitized warningを返し、review自体は継続します。
+Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
 
-Windows、および必要なfilesystem capabilityを証明できない環境では、Audit writeをfail-closeで無効化します。trusted state rootを変更できる、または検証済みinodeをrenameできるsame OS user権限のhostile processはこの保証の対象外です。この脅威にはOS sandboxまたはnative dirfd-based supportが必要です。
+Global TOML は command 実行や env forwarding を含む user-owned settings 用です。
 
-## Agent Auth
+```toml
+[agents.codex]
+command = "bunx"
+args = ["@agentclientprotocol/codex-acp"]
 
-Codex は利用可能な場合、local `codex` login を使用します。既定の subscription-backed path では API key は不要です。
+[agents.codex.env]
+CODEX_CONFIG = '{"model":"gpt-5.5"}'
+```
 
-Claude は 2 つの auth paths をサポートします。
+`kyoso.config.ts` は deprecated ですが、互換性のため引き続き supported です。trust-on-first-use approval の後にのみ load され、trusted hashes は `~/.kyoso/trusted-configs.json` に保存されます。`kyoso.toml` と `kyoso.config.ts` が両方ある場合、Kyoso は TOML を使用し TypeScript config を無視します。
 
-- `ANTHROPIC_API_KEY`: direct Anthropic API billing
-- `CLAUDE_CODE_OAUTH_TOKEN`: `claude setup-token` から得る subscription auth
+### Agents
 
-Claude credentials が両方設定されている場合、Kyoso は既定で `CLAUDE_CODE_OAUTH_TOKEN` だけを Claude child agent に forward します。`ANTHROPIC_API_KEY` だけを forward するには、`agents.claude.auth.preferApiKey: true` を設定してください。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。`command` / `args` / `env` は global config でのみ設定できます([Files and precedence](#files-and-precedence) を参照)。
 
-Default child-agent env allowlist:
-
-| Agent  | Provider env                                                                                                                                                                                 |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Codex  | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, `CODEX_ACCESS_TOKEN`                                                                                                                        |
-| Claude | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` |
-
-Kyoso は subprocesses の起動に必要な最小限の runtime env も forward します: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, `SystemRoot`。
-
-## Agent Models and Effort
-
-`agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml` などの local Codex config を使用し、Claude は adapter default を使用します。
+`agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）などの local Codex config を使用し、Claude は adapter default を使用します。
 
 指定できる model 名は [Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview) と [Codex models](https://developers.openai.com/codex/models) を参照してください。
 
@@ -357,53 +289,46 @@ Kyoso は model pins を adapter-supported configuration に mapping します�
 
 effort は仕組みが異なります。Kyoso は env var を設定せず、session ごとに最初の prompt の前に一度、backend agent へ ACP の `session/set_config_option` リクエストを送信します(Claude は `configId: "effort"`、Codex は `configId: "reasoning_effort"`)。有効な値は backend agent のバージョンと選択した model に依存します(例えば Claude は effort levels に対応した model でのみこの option を公開します)。Kyoso は `effort` の値自体を validate しません。backend agent がリクエストを reject した場合、または対応していない場合、Kyoso は stderr に log を出力してレビューを継続します。
 
-## Audit
+### Agent auth
 
-対応するPOSIX runtimeでは、Audit traces はuser state base（absoluteな`$XDG_STATE_HOME`、なければ`$HOME/.local/state`）配下の次の場所に書き込まれます。
+Codex は利用可能な場合、local `codex` login を使用します。既定の subscription-backed path では API key は不要です。
 
-```text
-<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
-```
+Claude は 2 つの auth paths をサポートします。
 
-`audit.directory`はlogicalなrelative directory（既定: `.kyoso/traces`）であり、workspace内のdirectoryではありません。既存のworkspace `.kyoso/traces`は自動で移行・削除されません。
+- `ANTHROPIC_API_KEY`: direct Anthropic API billing
+- `CLAUDE_CODE_OAUTH_TOKEN`: `claude setup-token` から得る subscription auth
 
-Raw agent output と raw file contents は既定で無効です。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します。
+Claude credentials が両方設定されている場合、Kyoso は既定で `CLAUDE_CODE_OAUTH_TOKEN` だけを Claude child agent に forward します。`ANTHROPIC_API_KEY` だけを forward するには、`agents.claude.auth.preferApiKey: true` を設定してください。
 
-## Config
+Default child-agent env allowlist:
 
-Kyoso は次の順に config を load します。
+| Agent  | Provider env                                                                                                                                                                                 |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codex  | `CODEX_API_KEY`, `OPENAI_API_KEY`, `CODEX_HOME`, `CODEX_ACCESS_TOKEN`                                                                                                                        |
+| Claude | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` |
 
-- built-in defaults
-- user global TOML: `$XDG_CONFIG_HOME/kyoso/config.toml`、または `~/.config/kyoso/config.toml`
-- project TOML: `<cwd>/kyoso.toml`
-- `--network` などの CLI flags と `--set agents.claude.effort=high` などの反復可能な overrides
+Kyoso は subprocesses の起動に必要な最小限の runtime env も forward します: `PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL`, `SHELL`, `USER`, `USERNAME`, `SystemRoot`。
 
-`plan`、`security`、`diff` は、反復可能な `--set <key>=<value>` overrides を受け付けます。CLI で指定した値は config files より優先され、`--ignore-config` との併用も可能です。
+Subscription-only setup:
 
-- Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`
-- Verification keys: `verification.<enabled|maxFindings|timeoutMs>`
-- Judge keys: `judge.<mode|provider|timeoutMs>`
+- Codex: local `codex` login を使用
+- Claude: `claude setup-token` を実行し、`CLAUDE_CODE_OAUTH_TOKEN` を設定
+- Judge: API keys を設定しないことで、Kyoso は `deterministic_fallback` を使用([Judge](#judge) を参照)
+- `OPENAI_API_KEY` が存在するときに OpenAI judge calls を避けるには、`judge.provider = "none"` を設定
 
-未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
+Team admins は organization Usage credits も確認してください。Credits が有効な場合、subscription limits を超える billing behavior は Kyoso の外側で制御されます。
 
-Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
+### Single-backend mode
 
-Global TOML は command 実行や env forwarding を含む user-owned settings 用です。
+Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.toml` で無効化してください。例は `examples/claude-only.toml` と `examples/codex-only.toml` にあります。
 
-```toml
-[agents.codex]
-command = "bunx"
-args = ["@agentclientprotocol/codex-acp"]
+single-agent mode では、残った backend が `combined_reviewer` として 1 回だけ実行され、implementation と architecture/security の両方を確認します。JSON output には `reviewMode: "single_agent"` と `agentsUsed` が入り、Markdown output には cross-model verification が行われていないことと disagreements が N/A であることを表示します。
 
-[agents.codex.env]
-CODEX_CONFIG = '{"model":"gpt-5.5"}'
-```
+この mode では独立した cross-model validation はなく、自己レビュー bias が残ります。一方で、別プロセスの read-only review、temporary snapshots、adversarial review prompts、secret scanning、deterministic gates は利用できます。
 
-`kyoso.config.ts` は deprecated ですが、互換性のため引き続き supported です。trust-on-first-use approval の後にのみ load され、trusted hashes は `~/.kyoso/trusted-configs.json` に保存されます。`kyoso.toml` と `kyoso.config.ts` が両方ある場合、Kyoso は TOML を使用し TypeScript config を無視します。
+### Verification
 
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
-
-Optional finding verification は default で disabled です:
+Verification keys: `verification.<enabled|maxFindings|timeoutMs>`。Optional finding verification は default で disabled です:
 
 ```toml
 [verification]
@@ -416,7 +341,9 @@ allowDemotion = false
 
 Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only です。verification は finding confidence と notes を更新できますが、severity や final decision は変更しません。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
 
-Judge LLMs は optional です。OpenAI judge を使うには `OPENAI_API_KEY` または `CODEX_API_KEY` を設定し、Anthropic judge を使うには `ANTHROPIC_API_KEY` を設定します。Optional overrides:
+### Judge
+
+Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs は optional です。OpenAI judge を使うには `OPENAI_API_KEY` または `CODEX_API_KEY` を設定し、Anthropic judge を使うには `ANTHROPIC_API_KEY` を設定します。Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`
@@ -424,22 +351,99 @@ Judge LLMs は optional です。OpenAI judge を使うには `OPENAI_API_KEY` �
 
 Judge defaults は意図的に lightweight models を使用します。より強い judge を使う場合は、`KYOSO_ANTHROPIC_JUDGE_MODEL` に `claude-sonnet-5` のような Sonnet-class model を設定してください。
 
-Subscription-only setup:
+### Timeouts
 
-- Codex: local `codex` login を使用
-- Claude: `claude setup-token` を実行し、`CLAUDE_CODE_OAUTH_TOKEN` を設定
-- Judge: API keys を設定しないことで、Kyoso は `deterministic_fallback` を使用
-- `OPENAI_API_KEY` が存在するときに OpenAI judge calls を避けるには、`judge.provider = "none"` を設定
+Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
 
-Team admins は organization Usage credits も確認してください。Credits が有効な場合、subscription limits を超える billing behavior は Kyoso の外側で制御されます。
+### Audit
+
+対応するPOSIX runtimeでは、Audit traces はuser state base（absoluteな`$XDG_STATE_HOME`、なければ`$HOME/.local/state`）配下の次の場所に書き込まれます。
+
+```text
+<state-base>/kyoso/workspaces/<sha256(realpath(cwd))>/<logical audit.directory>/<yyyy-mm-dd>/<traceId>.jsonl
+```
+
+`audit.directory`はlogicalなrelative directory（既定: `.kyoso/traces`）であり、workspace内のdirectoryではありません。既存のworkspace `.kyoso/traces`は自動で移行・削除されません。
+
+Raw agent output と raw file contents は既定で無効です。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します([Safety Model](#safety-model) を参照)。
+
+## Safety Model
+
+Kyoso MVP は disposable temporary snapshot と policy-level write denial を使用します。完全な OS sandbox ではありません。リスクを理解していない場合、untrusted repositories に対して Kyoso を実行しないでください。
+
+Secret detection は best-effort です。Kyoso は request、selected files、diff 内で secret らしき値を検出すると、その値を redact し、既定では backend agents の実行前に block します。
+
+Kyoso は provider credentials を保存しません。Child agent environment variables は allowlist されます。
+
+Repository content、plans、diffs、selected files は backend prompts 内で untrusted data として扱われます。Kyoso はそれらを `<untrusted-content>` tags で包み、その中にある instructions に従わないよう agents に指示します。最終判断は schema-constrained findings から導出されます。agents は files の書き込みや commands の実行ができず、judge は deterministic decision を変更できません。
+
+Finding title は aggregation のため簡潔な英語に正規化されます。evidence、recommendations、summaries はユーザーの言語のままで構いません。
+
+Audit trace は workspace が制御するpathではなく、trusted user state root 配下へ書き込みます。対応するPOSIX runtimeでは、absoluteな`$XDG_STATE_HOME`が利用可能ならそれを、そうでなければ`$HOME/.local/state`を使用し、owner、permission、containment、symlinkを確認できた場合だけ書き込みます。検証またはsafe openに失敗した場合、別locationへ黙ってfallbackせず、そのreviewのAudit writeを無効化してsanitized warningを返し、review自体は継続します。
+
+Windows、および必要なfilesystem capabilityを証明できない環境では、Audit writeをfail-closeで無効化します。trusted state rootを変更できる、または検証済みinodeをrenameできるsame OS user権限のhostile processはこの保証の対象外です。この脅威にはOS sandboxまたはnative dirfd-based supportが必要です。
+
+## 移行
+
+- 手動MCPからCLI＋Skill: CLIとSkillを先に導入し、`codex mcp remove kyoso`または`claude mcp remove kyoso --scope local|project|user`を実行します。
+- CLI＋SkillからPlugin: Pluginを追加してenabledを確認してから、手動MCP登録を削除します。手動コピーSkillは自動削除しません。
+- PluginからCLI＋Skill: CLIとSkillを先に導入し、`codex plugin remove kyoso@kyoso`を実行します。
+- CLI＋Skillから手動MCPへ戻す: `kyoso setup codex --write`または`kyoso setup claude-code --write`を実行します。
 
 ## Troubleshooting
 
-- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は Codex 120 秒、Claude 300 秒、verification 90 秒です。
+- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 
+### Codex approval prompts
+
+Codex Auto modeでは、approvalが必要なKyoso toolの呼び出しが拒否されることがあります。個人設定で事前承認するには、次を`~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）へ追加します。**Kyosoを信頼し、選択したコードとレビュー用contextが設定済みの外部model providerへ送信されることを許容できる場合だけ設定してください。** Pluginの既定値では有効にしていません。
+
+```toml
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[plugins."kyoso@kyoso".mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
+
+Pluginではなく、MCP serverとして直接登録している場合（`kyoso setup codex --write` または手動設定）は、`plugins."kyoso@kyoso".` プレフィックスなしの `mcp_servers.kyoso` キーを使用します。
+
+```toml
+[mcp_servers.kyoso.tools.diff_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.plan_review]
+approval_mode = "approve"
+
+[mcp_servers.kyoso.tools.security_review]
+approval_mode = "approve"
+```
+
 ## Development
+
+ローカル開発:
+
+```bash
+nix develop
+safe-chain bun install
+safe-chain bun run typecheck
+safe-chain bun test
+safe-chain bun run build
+safe-chain bun run pack:verify
+```
+
+Nix dev shell は Node.js 24 と nixpkgs が提供する Bun version を固定します。`.envrc` を確認してから `direnv allow` を一度実行すると、自動で shell を読み込めます。CI は Bun 1.3.14 に pin したままです。現在の nixpkgs Bun version は少し異なる場合がありますが、`flake.lock` により local shell の再現性を保ちます。
+
+test suite は credential-free の MCP stdio と ACP subprocess の integration coverage を含みます。`pack:verify` はさらに、pack 済みの `dist/bin/kyoso.js` MCP server を起動し、published bundle の protocol handshake を確認します。
+
+既知の配布リスク: `@modelcontextprotocol/server` にはまだ stable release がありません。Kyoso は現在 prerelease API を pin しているため、MCP SDK API の変更に追従する follow-up release が必要になる場合があります。`@modelcontextprotocol/server`、`@agentclientprotocol/sdk`、または pin 済み ACP adapters を bump する release の前には、手動での real-agent dogfooding を実行してください。
+
+Debug 用の environment variables:
 
 - `KYOSO_TEST_FAKE_AGENTS=1`: test-only fake ACP agents; production では設定しないでください。
 - `KYOSO_KEEP_TEMP=1`: local debugging 用に temporary snapshots を保持します。

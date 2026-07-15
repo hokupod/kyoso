@@ -472,7 +472,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 - MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
-- OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。公開済みMarketplace Pluginは次回promotionまでこのkeyを転送せず、既存MCP registrationはsetupで再書換えされません。
+- OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。Marketplace Plugin `0.4.0`以降はこの変数名をKyoso processへ転送し、それ以前のversionは転送しません。既存MCP registrationはsetupで再書換えされません。
 
 ### Codex approval prompts
 

@@ -472,7 +472,7 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 - MCP timeout: 将 client tool timeouts 设置为至少 360 秒；当 `verification.enabled` 为 true 时，设置为至少 480 秒。Kyoso defaults 请参阅 [Timeouts](#timeouts)。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
 - Deprecated TypeScript config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip；新配置请使用 `kyoso.toml`。
-- OpenRouter key missing: 确认 Codex `model` 非空、`OPENROUTER_API_KEY` 已 forward 给 Kyoso process，并已重启 client；再运行 `kyoso doctor`。已发布 Marketplace Plugin 在下一次 promotion 前不会 forward 此 key，setup 也不会重写已有 MCP registration。
+- OpenRouter key missing: 确认 Codex `model` 非空、`OPENROUTER_API_KEY` 已 forward 给 Kyoso process，并已重启 client；再运行 `kyoso doctor`。Marketplace Plugin `0.4.0` 及更高版本会将此变量名 forward 给 Kyoso process，旧版本不会。setup 也不会重写已有 MCP registration。
 
 ### Codex approval prompts
 

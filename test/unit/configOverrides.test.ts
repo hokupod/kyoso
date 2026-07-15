@@ -48,6 +48,9 @@ describe("config overrides", () => {
     expect(() =>
       applyConfigOverrides(config, ["agents.claude.command=bun"]),
     ).toThrow('Unknown --set key "agents.claude.command".');
+    expect(() =>
+      applyConfigOverrides(config, ["agents.codex.allowProjectProvider=true"]),
+    ).toThrow('Unknown --set key "agents.codex.allowProjectProvider".');
     expect(isAllowedConfigOverridePath(["workspace", "root"])).toBe(false);
   });
 
@@ -73,6 +76,70 @@ describe("config overrides", () => {
 
     expect(overridden.verification.enabled).toBe(true);
     expect(overridden.agents.claude.timeoutMs).toBe(6_000);
+  });
+
+  test("accepts OpenRouter provider and model overrides together", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+
+    const overridden = applyConfigOverrides(config, [
+      "agents.codex.provider=openrouter",
+      "agents.codex.model=openai/o4-mini",
+    ]);
+
+    expect(overridden.agents.codex.provider).toBe("openrouter");
+    expect(overridden.agents.codex.model).toBe("openai/o4-mini");
+
+    const reset = applyConfigOverrides(overridden, [
+      "agents.codex.provider=default",
+    ]);
+
+    expect(reset.agents.codex.provider).toBe("default");
+    expect(reset.agents.codex.model).toBeUndefined();
+
+    const resetWithModel = applyConfigOverrides(overridden, [
+      "agents.codex.provider=default",
+      "agents.codex.model=gpt-5.4",
+    ]);
+
+    expect(resetWithModel.agents.codex.provider).toBe("default");
+    expect(resetWithModel.agents.codex.model).toBe("gpt-5.4");
+  });
+
+  test("does not mutate the loaded OpenRouter model when resetting the provider", () => {
+    const loadedConfig = applyConfigOverrides(
+      kyosoConfigSchema.parse(defaultConfig),
+      ["agents.codex.provider=openrouter", "agents.codex.model=openai/o4-mini"],
+    );
+
+    const reset = applyConfigOverrides(loadedConfig, [
+      "agents.codex.provider=default",
+    ]);
+
+    expect(reset.agents.codex.provider).toBe("default");
+    expect(reset.agents.codex.model).toBeUndefined();
+    expect(loadedConfig.agents.codex.provider).toBe("openrouter");
+    expect(loadedConfig.agents.codex.model).toBe("openai/o4-mini");
+  });
+
+  test("rejects incomplete or unsupported OpenRouter provider overrides", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+
+    expect(() =>
+      applyConfigOverrides(config, ["agents.codex.provider=openrouter"]),
+    ).toThrow(
+      'Invalid --set value "agents.codex.provider=openrouter": selecting agents.codex.provider=openrouter requires agents.codex.model in the same --set invocation.',
+    );
+    expect(() =>
+      applyConfigOverrides(config, [
+        "agents.codex.provider=openrouter",
+        "agents.codex.model=",
+      ]),
+    ).toThrow(
+      'Invalid --set value "agents.codex.model=": agents.codex.model: model must be a non-empty string when provider is "openrouter".',
+    );
+    expect(() =>
+      applyConfigOverrides(config, ["agents.codex.provider=openai"]),
+    ).toThrow('Invalid --set value "agents.codex.provider=openai"');
   });
 
   test("keeps every override key valid in project scope", () => {

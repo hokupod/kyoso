@@ -1,4 +1,12 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
+
+export const CODEX_OPENROUTER_PROVIDER = "openrouter" as const;
+export const CODEX_DEFAULT_PROVIDER = "default" as const;
+export const CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE =
+  "codex_openrouter_model_required" as const;
+export type CodexProvider =
+  typeof CODEX_OPENROUTER_PROVIDER | typeof CODEX_DEFAULT_PROVIDER;
 
 type PartialDeep<T> = {
   [K in keyof T]?: T[K] extends Record<string, unknown>
@@ -6,7 +14,7 @@ type PartialDeep<T> = {
     : T[K];
 };
 
-const agentSchema = z.object({
+const baseAgentSchema = z.object({
   enabled: z.boolean().default(true),
   type: z.literal("acp").default("acp"),
   command: z.string(),
@@ -29,6 +37,38 @@ const agentSchema = z.object({
   }),
 });
 
+const codexAgentSchema = baseAgentSchema
+  .extend({
+    provider: z
+      .enum([CODEX_OPENROUTER_PROVIDER, CODEX_DEFAULT_PROVIDER])
+      .optional(),
+    allowProjectProvider: z
+      .array(
+        z.string().min(1).refine(isAbsolute, {
+          message:
+            "must contain only absolute project directory paths for exact matching",
+        }),
+      )
+      .default([]),
+  })
+  .superRefine((agent, context) => {
+    if (
+      agent.provider !== CODEX_OPENROUTER_PROVIDER ||
+      (agent.model?.trim().length ?? 0) > 0
+    ) {
+      return;
+    }
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["model"],
+      message:
+        'model must be a non-empty string when provider is "openrouter".',
+      params: {
+        kyosoIssue: CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE,
+      },
+    });
+  });
+
 export const kyosoConfigSchema = z.object({
   entrypoints: z.object({
     mcp: z.boolean(),
@@ -41,8 +81,8 @@ export const kyosoConfigSchema = z.object({
     diffReview: z.boolean(),
   }),
   agents: z.object({
-    codex: agentSchema,
-    claude: agentSchema,
+    codex: codexAgentSchema,
+    claude: baseAgentSchema,
   }),
   workspace: z.object({
     mode: z.literal("temp_snapshot"),
@@ -96,7 +136,7 @@ export const kyosoConfigSchema = z.object({
 });
 
 function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
-  return [
+  const paths = [
     `agents.${agent}.enabled`,
     `agents.${agent}.type`,
     `agents.${agent}.command`,
@@ -112,6 +152,10 @@ function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
     `agents.${agent}.auth.recommendedEnv`,
     `agents.${agent}.auth.envWhitelist`,
   ];
+  if (agent === "codex") {
+    paths.push("agents.codex.provider", "agents.codex.allowProjectProvider");
+  }
+  return paths;
 }
 
 export const kyosoConfigKnownLeafPaths = [

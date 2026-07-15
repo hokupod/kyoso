@@ -16,7 +16,10 @@ import {
   buildAgentPrompt,
   buildFindingVerifierPrompt,
 } from "../../src/acp/prompts.js";
-import { loadConfig } from "../../src/config/loadConfig.js";
+import {
+  applyProjectCodexProviderReset,
+  loadConfig,
+} from "../../src/config/loadConfig.js";
 import {
   kyosoConfigKnownLeafPaths,
   kyosoConfigRecordPrefixes,
@@ -24,6 +27,7 @@ import {
   kyosoConfigSchema,
 } from "../../src/config/schema.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
+import { applyConfigOverrides } from "../../src/config/configOverrides.js";
 import { flattenLeaves } from "../../src/config/projectScope.js";
 import { buildContext } from "../../src/context/buildContext.js";
 import {
@@ -43,7 +47,10 @@ import { createSnapshot } from "../../src/workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
 import { parseJudgeOutput } from "../../src/judge/prompt.js";
 import { resolveJudgeProvider } from "../../src/judge/provider.js";
-import { sanitizeTextForRawOutput } from "../../src/security/sanitizeText.js";
+import {
+  sanitizeTextForDisplay,
+  sanitizeTextForRawOutput,
+} from "../../src/security/sanitizeText.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
@@ -66,6 +73,7 @@ describe("config", () => {
     const parsed = kyosoConfigSchema.parse(defaultConfig);
     expect(parsed.agents.codex.command).toBe("npx");
     expect(parsed.agents.codex.model).toBeUndefined();
+    expect(parsed.agents.codex.allowProjectProvider).toEqual([]);
     expect(parsed.agents.claude.auth.recommendedEnv).toContain(
       "CLAUDE_CODE_OAUTH_TOKEN",
     );
@@ -102,6 +110,76 @@ describe("config", () => {
 
     expect(parsed.agents.codex.model).toBe("gpt-5.5");
     expect(parsed.agents.claude.model).toBe("claude-sonnet-5");
+  });
+
+  test("accepts the OpenRouter provider with a model and the default reset", () => {
+    const openRouter = kyosoConfigSchema.parse({
+      ...defaultConfig,
+      agents: {
+        ...defaultConfig.agents,
+        codex: {
+          ...defaultConfig.agents?.codex,
+          provider: "openrouter",
+          model: "openai/o4-mini",
+        },
+      },
+    });
+    const defaultReset = kyosoConfigSchema.parse({
+      ...defaultConfig,
+      agents: {
+        ...defaultConfig.agents,
+        codex: {
+          ...defaultConfig.agents?.codex,
+          provider: "default",
+        },
+      },
+    });
+
+    expect(openRouter.agents.codex.provider).toBe("openrouter");
+    expect(openRouter.agents.codex.model).toBe("openai/o4-mini");
+    expect(defaultReset.agents.codex.provider).toBe("default");
+  });
+
+  test("requires absolute entries for the project provider allowlist", () => {
+    const withAllowlist = (allowProjectProvider: unknown) => ({
+      ...defaultConfig,
+      agents: {
+        ...defaultConfig.agents,
+        codex: {
+          ...defaultConfig.agents?.codex,
+          allowProjectProvider,
+        },
+      },
+    });
+
+    expect(() => kyosoConfigSchema.parse(withAllowlist(["."]))).toThrow(
+      /absolute project directory paths/,
+    );
+    expect(() => kyosoConfigSchema.parse(withAllowlist(true))).toThrow();
+  });
+
+  test("rejects an unsupported Codex provider or OpenRouter without a model", () => {
+    const withProvider = (provider: string, model?: string) => ({
+      ...defaultConfig,
+      agents: {
+        ...defaultConfig.agents,
+        codex: {
+          ...defaultConfig.agents?.codex,
+          provider,
+          ...(model === undefined ? {} : { model }),
+        },
+      },
+    });
+
+    expect(() =>
+      kyosoConfigSchema.parse(withProvider("openai", "gpt-5")),
+    ).toThrow();
+    expect(() => kyosoConfigSchema.parse(withProvider("openrouter"))).toThrow(
+      /model must be a non-empty string/,
+    );
+    expect(() =>
+      kyosoConfigSchema.parse(withProvider("openrouter", "  ")),
+    ).toThrow(/model must be a non-empty string/);
   });
 
   test("rejects internal verifier role in user agent config", () => {
@@ -141,6 +219,8 @@ describe("config", () => {
     }
     expect(knownPaths.has("agents.codex.model")).toBe(true);
     expect(knownPaths.has("agents.claude.model")).toBe(true);
+    expect(knownPaths.has("agents.codex.provider")).toBe(true);
+    expect(knownPaths.has("agents.claude.provider")).toBe(false);
     expect(kyosoConfigRecordPrefixes).toContain("agents.codex.env");
     expect(kyosoConfigRecordPrefixes).toContain("agents.claude.env");
     expect(kyosoConfigSecuritySensitivePrefixes).toContain("agents.codex");
@@ -263,6 +343,536 @@ model = "gpt-5.5"
     ]);
   });
 
+  test("loads the OpenRouter provider from global and an exact project TOML allowlist", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-toml-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    const globalLoaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(globalLoaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    });
+    expect(globalLoaded.warnings.join("\n")).not.toContain(
+      "can route Codex review content through OpenRouter",
+    );
+
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(join(cwd, "other"))}]
+`,
+      "utf8",
+    );
+
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "anthropic/claude-sonnet-4"
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      "not in the user-global allowlist",
+    );
+
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const projectLoaded = await loadConfig({ cwd, env: { HOME: home } });
+
+    expect(projectLoaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4",
+    });
+    expect(projectLoaded.warnings.join("\n")).toContain(
+      "can route Codex review content through OpenRouter",
+    );
+  });
+
+  test("rejects OpenRouter provider selected only by project TOML", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-project-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      "not in the user-global allowlist",
+    );
+  });
+
+  test("requires an exact global allowlist entry before a project model overrides inherited OpenRouter", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-model-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(join(cwd, "other"))}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+model = "anthropic/claude-sonnet-4"
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4",
+    });
+    expect(loaded.warnings.join("\n")).toContain(
+      "changes Codex OpenRouter routing",
+    );
+  });
+
+  test("requires an explicit CLI model when a project model precedes an OpenRouter provider override", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-cli-override-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+model = "attacker-selected-model"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({ cwd });
+
+    expect(loaded.config.agents.codex.model).toBe("attacker-selected-model");
+    expect(() =>
+      applyConfigOverrides(loaded.config, ["agents.codex.provider=openrouter"]),
+    ).toThrow("requires agents.codex.model in the same --set invocation");
+  });
+
+  test("resolves an allowlist symlink to the same project directory", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-realpath-"));
+    const allowlistAlias = `${cwd}-allowlist-alias`;
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await symlink(cwd, allowlistAlias, "dir");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(allowlistAlias)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    });
+  });
+
+  test("loads an allowlisted canonical target through a project TOML symlink", async () => {
+    const cwd = await mkdtemp(
+      join(tmpdir(), "kyoso-openrouter-symlinked-toml-"),
+    );
+    const externalConfigDirectory = await mkdtemp(
+      join(tmpdir(), "kyoso-openrouter-allowed-config-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(externalConfigDirectory)}]
+`,
+      "utf8",
+    );
+    const externalConfigPath = join(externalConfigDirectory, "kyoso.toml");
+    const projectConfigPath = join(cwd, "kyoso.toml");
+    await writeFile(
+      externalConfigPath,
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+    await symlink(externalConfigPath, projectConfigPath);
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    });
+    expect(loaded.configPath).toBe(projectConfigPath);
+    expect(loaded.sources).toContainEqual({
+      path: projectConfigPath,
+      layer: "project_toml",
+    });
+  });
+
+  test("does not authorize a project config symlink by its lexical directory", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-symlink-"));
+    const externalConfigDirectory = await mkdtemp(
+      join(tmpdir(), "kyoso-openrouter-external-config-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const externalConfigPath = join(externalConfigDirectory, "kyoso.toml");
+    await writeFile(
+      externalConfigPath,
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+    await symlink(externalConfigPath, join(cwd, "kyoso.toml"));
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("not in the user-global allowlist");
+  });
+
+  test("fails closed for the legacy broad project-provider boolean", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-boolean-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = true
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      "not in the user-global allowlist",
+    );
+  });
+
+  test("lets a project reset an inherited global OpenRouter provider", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-default-provider-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "default"
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex.provider).toBe("default");
+    expect(loaded.config.agents.codex.model).toBeUndefined();
+    expect(loaded.warnings.join("\n")).not.toContain(
+      "can route Codex review content through OpenRouter",
+    );
+
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "default"
+model = "gpt-5.4"
+`,
+      "utf8",
+    );
+    const loadedWithProjectModel = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loadedWithProjectModel.config.agents.codex.provider).toBe("default");
+    expect(loadedWithProjectModel.config.agents.codex.model).toBe("gpt-5.4");
+  });
+
+  test("does not mutate merged config when a project resets OpenRouter", () => {
+    const baseConfig = {
+      agents: { codex: { provider: "openrouter", model: "openai/o4-mini" } },
+    };
+    const projectConfig = { agents: { codex: { provider: "default" } } };
+    const mergedConfig = {
+      agents: { codex: { provider: "default", model: "openai/o4-mini" } },
+    };
+    Object.freeze(mergedConfig.agents.codex);
+    Object.freeze(mergedConfig.agents);
+    Object.freeze(mergedConfig);
+
+    const reset = applyProjectCodexProviderReset(
+      baseConfig,
+      projectConfig,
+      mergedConfig,
+    );
+
+    expect(mergedConfig.agents.codex.model).toBe("openai/o4-mini");
+    expect(reset).toEqual({ agents: { codex: { provider: "default" } } });
+  });
+
+  test("requires an exact global allowlist entry before trusted legacy config selects OpenRouter", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-legacy-openrouter-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const trustStorePath = join(cwd, "trusted-configs.json");
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `export default {
+  agents: {
+    codex: {
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    },
+  },
+};
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({
+        cwd,
+        env: { HOME: home },
+        trustStorePath,
+        trustConfig: true,
+      }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(join(cwd, "other"))}]
+`,
+      "utf8",
+    );
+    await expect(
+      loadConfig({
+        cwd,
+        env: { HOME: home },
+        trustStorePath,
+        trustConfig: true,
+      }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const authorized = await loadConfig({
+      cwd,
+      env: { HOME: home },
+      trustStorePath,
+      trustConfig: true,
+    });
+
+    expect(authorized.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    });
+    expect(authorized.warnings.join("\n")).toContain(
+      "can route Codex review content through OpenRouter",
+    );
+  });
+
+  test("requires an exact global allowlist entry before trusted legacy config overrides inherited OpenRouter", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-legacy-openrouter-model-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    const trustStorePath = join(cwd, "trusted-configs.json");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `export default {
+  agents: {
+    codex: {
+      model: "anthropic/claude-sonnet-4",
+    },
+  },
+};
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(join(cwd, "other"))}]
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({
+        cwd,
+        env: { XDG_CONFIG_HOME: configHome },
+        trustStorePath,
+        trustConfig: true,
+      }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+      trustStorePath,
+      trustConfig: true,
+    });
+
+    expect(loaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4",
+    });
+    expect(loaded.warnings.join("\n")).toContain(
+      "changes Codex OpenRouter routing",
+    );
+  });
+
+  test("rejects project self-authorization for OpenRouter", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-self-auth-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(
+      "agents.codex.allowProjectProvider",
+    );
+  });
+
+  test("rejects a Claude provider in global and project TOML", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-claude-provider-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.claude]
+provider = "openrouter"
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("Security-sensitive unknown config settings rejected");
+
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.claude]
+provider = "openrouter"
+`,
+      "utf8",
+    );
+    await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
+      "agents.claude.provider",
+    );
+  });
+
   test("project TOML workspace.deny is additive against defaults", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-deny-"));
     await writeFile(
@@ -309,6 +919,7 @@ allowDemotion = true
 
   test("prefers kyoso.toml over kyoso.config.ts without executing TypeScript", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-config-priority-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
     await writeFile(
       join(cwd, "kyoso.toml"),
       `[verification]
@@ -324,7 +935,7 @@ export default {};
       "utf8",
     );
 
-    const loaded = await loadConfig({ cwd });
+    const loaded = await loadConfig({ cwd, env: { HOME: home } });
 
     expect(loaded.config.verification.enabled).toBe(true);
     expect(loaded.sources.map((source) => source.layer)).toEqual([
@@ -335,6 +946,7 @@ export default {};
 
   test("loads explicit TOML config as project scope", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-explicit-toml-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
     const configPath = join(cwd, "custom.toml");
     await writeFile(
       configPath,
@@ -344,7 +956,7 @@ model = "claude-sonnet-5"
       "utf8",
     );
 
-    const loaded = await loadConfig({ cwd, configPath });
+    const loaded = await loadConfig({ cwd, configPath, env: { HOME: home } });
 
     expect(loaded.configPath).toBe(configPath);
     expect(loaded.config.agents.claude.model).toBe("claude-sonnet-5");
@@ -352,6 +964,99 @@ model = "claude-sonnet-5"
       path: configPath,
       layer: "project_toml",
     });
+  });
+
+  test("loads an allowlisted canonical target through an explicit TOML symlink", async () => {
+    const cwd = await mkdtemp(
+      join(tmpdir(), "kyoso-explicit-openrouter-symlink-"),
+    );
+    const externalConfigDirectory = await mkdtemp(
+      join(tmpdir(), "kyoso-explicit-openrouter-allowed-"),
+    );
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(externalConfigDirectory)}]
+`,
+      "utf8",
+    );
+    const externalConfigPath = join(externalConfigDirectory, "openrouter.toml");
+    const configPath = join(cwd, "openrouter-link.toml");
+    await writeFile(
+      externalConfigPath,
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+    await symlink(externalConfigPath, configPath);
+
+    const loaded = await loadConfig({
+      cwd,
+      configPath,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex).toMatchObject({
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    });
+    expect(loaded.configPath).toBe(configPath);
+    expect(loaded.sources).toContainEqual({
+      path: configPath,
+      layer: "project_toml",
+    });
+  });
+
+  test("warns when an explicit project TOML selects OpenRouter", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-explicit-openrouter-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configDirectory = join(cwd, "nested");
+    const configPath = join(configDirectory, "custom.toml");
+    await mkdir(configDirectory, { recursive: true });
+    await writeFile(
+      configPath,
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, configPath, env: { HOME: home } }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, configPath, env: { HOME: home } }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(configDirectory)}]
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({ cwd, configPath, env: { HOME: home } });
+
+    expect(loaded.warnings).toContain(
+      `Project config ${configPath} changes Codex OpenRouter routing under user-global authorization; it can route Codex review content through OpenRouter.`,
+    );
   });
 
   test("fails closed when explicit config path does not exist", async () => {
@@ -534,6 +1239,9 @@ describe("judge", () => {
     ).toBe("anthropic");
     expect(
       resolveJudgeProvider("auto", { CLAUDE_CODE_OAUTH_TOKEN: "oauth" }),
+    ).toBe("deterministic_fallback");
+    expect(
+      resolveJudgeProvider("auto", { OPENROUTER_API_KEY: "openrouter" }),
     ).toBe("deterministic_fallback");
     expect(
       resolveJudgeProvider("auto", {
@@ -958,6 +1666,18 @@ describe("secret scan", () => {
       kind: "openai_api_key",
       location: "selectedFiles[0].path",
     });
+  });
+});
+
+describe("display sanitization", () => {
+  test("removes terminal control sequences and line breaks", () => {
+    const value = sanitizeTextForDisplay(
+      "openai/o4-mini\u001b[31m\nforged warning",
+    );
+
+    expect(value).toBe("openai/o4-mini forged warning");
+    expect(value).not.toContain("\u001b");
+    expect(value).not.toContain("\n");
   });
 });
 
@@ -1916,6 +2636,147 @@ describe("child env", () => {
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
+  test("drops an unexpanded Claude API key while preserving OAuth auth", () => {
+    const discarded: string[] = [];
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
+      },
+      ["CLAUDE_CODE_OAUTH_TOKEN"],
+      { ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}" },
+      {
+        agent: "claude",
+        preferApiKey: true,
+        onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+      },
+    );
+
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-token");
+    expect(discarded).toEqual(["ANTHROPIC_API_KEY"]);
+  });
+
+  test("warns by key name while dropping credential placeholders", () => {
+    const discarded: string[] = [];
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        OPENAI_API_KEY: "${OPENAI_API_KEY}",
+        WHITELISTED_TEMPLATE: "prefix-${WORKSPACE_NAME}",
+        MY_PROXY_TOKEN: "${MY_PROXY_TOKEN}",
+        MY_PROXY_SECRET: "$MY_PROXY_SECRET",
+        RUNTIME_TEMPLATE: "${RUNTIME_TEMPLATE}",
+      },
+      [
+        "OPENAI_API_KEY",
+        "WHITELISTED_TEMPLATE",
+        "MY_PROXY_TOKEN",
+        "MY_PROXY_SECRET",
+        "RUNTIME_TEMPLATE",
+      ],
+      {
+        CODEX_API_KEY: "$CODEX_API_KEY",
+        CODEX_ACCESS_TOKEN: "%CODEX_ACCESS_TOKEN%",
+        EXPLICIT_TEMPLATE: "Bearer ${REVIEW_MODE}",
+        SERVICE_API_KEY: "$SERVICE_API_KEY",
+        DATABASE_PASSWORD: "%DATABASE_PASSWORD%",
+      },
+      {
+        agent: "codex",
+        onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+      },
+    );
+
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+    expect(env.CODEX_ACCESS_TOKEN).toBeUndefined();
+    expect(env.MY_PROXY_TOKEN).toBeUndefined();
+    expect(env.MY_PROXY_SECRET).toBeUndefined();
+    expect(env.SERVICE_API_KEY).toBeUndefined();
+    expect(env.DATABASE_PASSWORD).toBeUndefined();
+    expect(env.WHITELISTED_TEMPLATE).toBe("prefix-${WORKSPACE_NAME}");
+    expect(env.RUNTIME_TEMPLATE).toBe("${RUNTIME_TEMPLATE}");
+    expect(env.EXPLICIT_TEMPLATE).toBe("Bearer ${REVIEW_MODE}");
+    expect(discarded).toEqual([
+      "OPENAI_API_KEY",
+      "MY_PROXY_TOKEN",
+      "MY_PROXY_SECRET",
+      "CODEX_API_KEY",
+      "CODEX_ACCESS_TOKEN",
+      "SERVICE_API_KEY",
+      "DATABASE_PASSWORD",
+    ]);
+  });
+
+  test("preserves credential values that merely contain placeholder syntax", () => {
+    const discarded: string[] = [];
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        OPENAI_API_KEY: "x${OPENAI_API_KEY}",
+      },
+      ["OPENAI_API_KEY"],
+      {
+        CODEX_API_KEY: "Bearer $CODEX_API_KEY",
+        CODEX_ACCESS_TOKEN: "Token %CODEX_ACCESS_TOKEN%",
+      },
+      {
+        agent: "codex",
+        onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+      },
+    );
+
+    expect(env.OPENAI_API_KEY).toBe("x${OPENAI_API_KEY}");
+    expect(env.CODEX_API_KEY).toBe("Bearer $CODEX_API_KEY");
+    expect(env.CODEX_ACCESS_TOKEN).toBe("Token %CODEX_ACCESS_TOKEN%");
+    expect(discarded).toEqual([]);
+  });
+
+  test("drops only whole placeholder forms for custom credential-like names", () => {
+    for (const value of [
+      "${MY_PROXY_TOKEN}",
+      "$MY_PROXY_TOKEN",
+      "%MY_PROXY_TOKEN%",
+    ]) {
+      const discarded: string[] = [];
+      const env = buildChildEnv(
+        { PATH: "/bin", MY_PROXY_TOKEN: value },
+        ["MY_PROXY_TOKEN"],
+        { SERVICE_SECRET: value },
+        {
+          agent: "codex",
+          onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+        },
+      );
+
+      expect(env.MY_PROXY_TOKEN).toBeUndefined();
+      expect(env.SERVICE_SECRET).toBeUndefined();
+      expect(discarded).toEqual(["MY_PROXY_TOKEN", "SERVICE_SECRET"]);
+    }
+
+    for (const value of [
+      "Bearer ${MY_PROXY_TOKEN}",
+      "token-$MY_PROXY_TOKEN",
+      "Token %MY_PROXY_TOKEN%",
+    ]) {
+      const discarded: string[] = [];
+      const env = buildChildEnv(
+        { PATH: "/bin", MY_PROXY_TOKEN: value },
+        ["MY_PROXY_TOKEN"],
+        { SERVICE_SECRET: value },
+        {
+          agent: "codex",
+          onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+        },
+      );
+
+      expect(env.MY_PROXY_TOKEN).toBe(value);
+      expect(env.SERVICE_SECRET).toBe(value);
+      expect(discarded).toEqual([]);
+    }
+  });
+
   test("leaves model env unset when no agent model is configured", () => {
     const env = buildChildEnv({ PATH: "/bin" }, [], {}, { agent: "claude" });
 
@@ -1959,6 +2820,360 @@ describe("child env", () => {
       model: "gpt-5.5",
     });
     expect(explicit.CODEX_CONFIG).toBe('{"model":"gpt-5.4"}');
+  });
+
+  test("applies the fixed OpenRouter preset while preserving unrelated config", () => {
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        OPENROUTER_API_KEY: "parent-openrouter-key",
+      },
+      [],
+      {
+        CODEX_CONFIG: JSON.stringify({
+          unrelated: "kept",
+          model: "old-model",
+          model_provider: "user-provider",
+          model_providers: {
+            other: {
+              name: "Other",
+              base_url: "https://example.test",
+              env_key: "OPENROUTER_API_KEY",
+            },
+            "kyoso-openrouter": { name: "User override" },
+          },
+        }),
+      },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    );
+    const config = JSON.parse(env.CODEX_CONFIG ?? "{}");
+
+    expect(env.OPENROUTER_API_KEY).toBe("parent-openrouter-key");
+    expect(env.MODEL_PROVIDER).toBe("kyoso-openrouter");
+    expect(config).toMatchObject({
+      unrelated: "kept",
+      model: "openai/o4-mini",
+      model_provider: "kyoso-openrouter",
+    });
+    expect(config.model_providers).toEqual({
+      "kyoso-openrouter": {
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1",
+        env_key: "OPENROUTER_API_KEY",
+        wire_api: "responses",
+        requires_openai_auth: false,
+      },
+    });
+    expect(JSON.stringify(config)).not.toContain("parent-openrouter-key");
+    expect(
+      config.model_providers["kyoso-openrouter"].experimental_bearer_token,
+    ).toBeUndefined();
+  });
+
+  test("does not forward OpenAI or Codex credentials to an OpenRouter child", () => {
+    const env = buildChildEnv(
+      {
+        PATH: "/bin",
+        CODEX_HOME: "/tmp/codex-home",
+        CODEX_ACCESS_TOKEN: "parent-codex-access-token",
+        CODEX_API_KEY: "parent-codex-api-key",
+        OPENAI_API_KEY: "parent-openai-api-key",
+        OPENROUTER_API_KEY: "openrouter-key",
+      },
+      ["CODEX_HOME", "CODEX_ACCESS_TOKEN", "CODEX_API_KEY", "OPENAI_API_KEY"],
+      {
+        CODEX_ACCESS_TOKEN: "explicit-codex-access-token",
+        CODEX_API_KEY: "explicit-codex-api-key",
+        OPENAI_API_KEY: "explicit-openai-api-key",
+      },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    );
+
+    expect(env.CODEX_HOME).toBe("/tmp/codex-home");
+    expect(env.OPENROUTER_API_KEY).toBe("openrouter-key");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+    expect(env.CODEX_ACCESS_TOKEN).toBeUndefined();
+  });
+
+  test("prefers an explicit OpenRouter key and fails closed when no key exists", () => {
+    const explicit = buildChildEnv(
+      { PATH: "/bin", OPENROUTER_API_KEY: "parent-openrouter-key" },
+      [],
+      { OPENROUTER_API_KEY: "explicit-openrouter-key" },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    );
+
+    expect(explicit.OPENROUTER_API_KEY).toBe("explicit-openrouter-key");
+    expect(() =>
+      buildChildEnv(
+        { PATH: "/bin" },
+        [],
+        {},
+        {
+          agent: "codex",
+          provider: "openrouter",
+          model: "openai/o4-mini",
+        },
+      ),
+    ).toThrow("OPENROUTER_API_KEY");
+  });
+
+  test("treats unexpanded OpenRouter key placeholders as missing", () => {
+    const placeholders = [
+      "${OPENROUTER_API_KEY}",
+      "$OPENROUTER_API_KEY",
+      "${openrouter_api_key}",
+      "%OPENROUTER_API_KEY%",
+    ];
+    for (const placeholder of placeholders) {
+      const discarded: string[] = [];
+      expect(() =>
+        buildChildEnv(
+          { PATH: "/bin", OPENROUTER_API_KEY: placeholder },
+          [],
+          { OPENROUTER_API_KEY: placeholder },
+          {
+            agent: "codex",
+            provider: "openrouter",
+            model: "openai/o4-mini",
+            onCredentialPlaceholderDiscarded: (key) => discarded.push(key),
+          },
+        ),
+      ).toThrow("OPENROUTER_API_KEY");
+      expect(discarded).toEqual(["OPENROUTER_API_KEY"]);
+    }
+  });
+
+  test("keeps OpenRouter credentials that contain placeholder syntax", () => {
+    for (const key of [
+      "Bearer ${OPENROUTER_API_KEY}",
+      "x${OPENROUTER_API_KEY}",
+    ]) {
+      const discarded: string[] = [];
+      const env = buildChildEnv(
+        { PATH: "/bin", OPENROUTER_API_KEY: key },
+        [],
+        { OPENROUTER_API_KEY: key },
+        {
+          agent: "codex",
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          onCredentialPlaceholderDiscarded: (name) => discarded.push(name),
+        },
+      );
+
+      expect(env.OPENROUTER_API_KEY).toBe(key);
+      expect(discarded).toEqual([]);
+    }
+  });
+
+  test("rejects invalid OpenRouter CODEX_CONFIG values without leaking them", () => {
+    for (const value of ["not-json", "[]", "null"]) {
+      expect(() =>
+        buildChildEnv(
+          { PATH: "/bin", OPENROUTER_API_KEY: "openrouter-key" },
+          [],
+          { CODEX_CONFIG: value },
+          {
+            agent: "codex",
+            provider: "openrouter",
+            model: "openai/o4-mini",
+          },
+        ),
+      ).toThrow("CODEX_CONFIG must contain a JSON object");
+    }
+    const discardedProviderCounts: number[] = [];
+    expect(() =>
+      buildChildEnv(
+        { PATH: "/bin", OPENROUTER_API_KEY: "openrouter-key" },
+        [],
+        { CODEX_CONFIG: '{"model_providers":[]}' },
+        {
+          agent: "codex",
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          onOpenRouterProvidersDiscarded: (count) =>
+            discardedProviderCounts.push(count),
+        },
+      ),
+    ).toThrow("CODEX_CONFIG.model_providers must be a JSON object");
+    expect(discardedProviderCounts).toEqual([]);
+  });
+
+  test("rejects OpenRouter CODEX_CONFIG profile selection before child launch", () => {
+    const assertRejected = (
+      parentEnv: NodeJS.ProcessEnv,
+      whitelist: string[],
+      explicit: Record<string, string>,
+    ): void => {
+      expect(() =>
+        buildChildEnv(parentEnv, whitelist, explicit, {
+          agent: "codex",
+          provider: "openrouter",
+          model: "openai/o4-mini",
+        }),
+      ).toThrow("CODEX_CONFIG.profile and CODEX_CONFIG.profiles");
+    };
+    for (const config of [
+      { profile: "untrusted" },
+      {
+        profiles: {
+          untrusted: {
+            model_provider: "untrusted-provider",
+            model_providers: {
+              "untrusted-provider": {
+                base_url: "https://untrusted.example.test",
+              },
+            },
+          },
+        },
+      },
+    ]) {
+      const codeConfig = JSON.stringify(config);
+      assertRejected(
+        {
+          PATH: "/bin",
+          OPENROUTER_API_KEY: "openrouter-key",
+          CODEX_CONFIG: codeConfig,
+        },
+        ["CODEX_CONFIG"],
+        {},
+      );
+      assertRejected(
+        { PATH: "/bin", OPENROUTER_API_KEY: "openrouter-key" },
+        [],
+        { CODEX_CONFIG: codeConfig },
+      );
+    }
+  });
+
+  test("reports only the discarded-provider count when removing foreign CODEX_CONFIG providers", () => {
+    const discardedProviderCounts: number[] = [];
+    const discardedValue = "untrusted-value-that-must-not-be-logged";
+    const opaqueProviderId = "AbCdEf0123456789";
+    const env = buildChildEnv(
+      { PATH: "/bin", OPENROUTER_API_KEY: "openrouter-key" },
+      [],
+      {
+        CODEX_CONFIG: JSON.stringify({
+          unrelated: { option: "kept" },
+          model_providers: {
+            foreign: {
+              base_url: "https://untrusted.example.test",
+              env_key: "OPENROUTER_API_KEY",
+              credential: discardedValue,
+            },
+            "unsafe\nprovider": {
+              base_url: "https://control-character.example.test",
+            },
+            "sk-secret-token": {
+              base_url: "https://secret-like-id.example.test",
+            },
+            [opaqueProviderId]: {
+              base_url: "https://opaque-id.example.test",
+            },
+          },
+        }),
+      },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+        onOpenRouterProvidersDiscarded: (count) =>
+          discardedProviderCounts.push(count),
+      },
+    );
+    const config = JSON.parse(env.CODEX_CONFIG ?? "{}");
+
+    expect(config.unrelated).toEqual({ option: "kept" });
+    expect(config.model_providers).toEqual({
+      "kyoso-openrouter": expect.objectContaining({
+        base_url: "https://openrouter.ai/api/v1",
+        env_key: "OPENROUTER_API_KEY",
+      }),
+    });
+    expect(discardedProviderCounts).toEqual([4]);
+    expect(JSON.stringify(config)).not.toContain(discardedValue);
+    expect(JSON.stringify(discardedProviderCounts)).not.toContain(
+      opaqueProviderId,
+    );
+    expect(JSON.stringify(discardedProviderCounts)).not.toContain("unsafe");
+    expect(JSON.stringify(discardedProviderCounts)).not.toContain("secret");
+  });
+
+  test("does not forward explicit or inherited OpenRouter keys when the provider is omitted or reset", () => {
+    const explicitConfig = '{"model":"user-model"}';
+    const withheld: string[] = [];
+    const env = buildChildEnv(
+      { PATH: "/bin", OPENROUTER_API_KEY: "parent-openrouter-key" },
+      [],
+      {
+        CODEX_CONFIG: explicitConfig,
+        MODEL_PROVIDER: "user-provider",
+        OPENROUTER_API_KEY: "explicit-openrouter-key",
+      },
+      {
+        agent: "codex",
+        model: "ignored-model",
+        provider: "default",
+        onOpenRouterCredentialWithheld: (key) => withheld.push(key),
+      },
+    );
+
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.CODEX_CONFIG).toBe(explicitConfig);
+    expect(env.MODEL_PROVIDER).toBe("user-provider");
+    expect(withheld).toEqual(["OPENROUTER_API_KEY"]);
+
+    const omittedWithheld: string[] = [];
+    const omitted = buildChildEnv(
+      { PATH: "/bin", OPENROUTER_API_KEY: "parent-openrouter-key" },
+      ["OPENROUTER_API_KEY"],
+      { OPENROUTER_API_KEY: "explicit-openrouter-key" },
+      {
+        agent: "codex",
+        onOpenRouterCredentialWithheld: (key) => omittedWithheld.push(key),
+      },
+    );
+
+    expect(omitted.OPENROUTER_API_KEY).toBeUndefined();
+    expect(omittedWithheld).toEqual(["OPENROUTER_API_KEY"]);
+
+    const claudeWithheld: string[] = [];
+    const claude = buildChildEnv(
+      { PATH: "/bin" },
+      [],
+      { OPENROUTER_API_KEY: "explicit-openrouter-key" },
+      {
+        agent: "claude",
+        onOpenRouterCredentialWithheld: (key) => claudeWithheld.push(key),
+      },
+    );
+
+    expect(claude.OPENROUTER_API_KEY).toBeUndefined();
+    expect(claudeWithheld).toEqual(["OPENROUTER_API_KEY"]);
+
+    const whitelisted = buildChildEnv(
+      { PATH: "/bin", OPENROUTER_API_KEY: "parent-openrouter-key" },
+      ["OPENROUTER_API_KEY"],
+      {},
+      { agent: "codex", provider: "default" },
+    );
+
+    expect(whitelisted.OPENROUTER_API_KEY).toBeUndefined();
   });
 });
 

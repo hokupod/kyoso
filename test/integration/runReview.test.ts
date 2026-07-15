@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -511,6 +512,71 @@ describe("runReview", () => {
     expect(result.summaryMarkdown).toContain("N/A - single-agent review");
   });
 
+  test("agent-started audit records the OpenRouter provider and model without the key", async () => {
+    const cwd = await tempCwd();
+    const key = "openrouter-audit-test-key";
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: {
+          ...baseConfig.agents.codex,
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          env: {
+            ...baseConfig.agents.codex.env,
+            OPENROUTER_API_KEY: key,
+          },
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      { cwd, config, agentManager: new FakeAgentManager() },
+    );
+    const traceEvents = await readTraceEvents(cwd, config, result);
+    const started = traceEvents.find((event) => event.type === "agent_started");
+    const traceText = JSON.stringify(traceEvents);
+
+    expect(started).toMatchObject({
+      agent: "codex",
+      model: "openai/o4-mini",
+      provider: "openrouter",
+    });
+    expect(traceText).not.toContain(key);
+    expect(JSON.stringify(result)).not.toContain(key);
+  });
+
+  test("agent-started audit omits a provider for the default Codex route", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: {
+          ...baseConfig.agents.codex,
+          model: "gpt-5.5",
+          provider: "default",
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      { cwd, config, agentManager: new FakeAgentManager() },
+    );
+    const traceEvents = await readTraceEvents(cwd, config, result);
+    const started = traceEvents.find((event) => event.type === "agent_started");
+
+    expect(started).toMatchObject({ agent: "codex", model: "gpt-5.5" });
+    expect(started).not.toHaveProperty("provider");
+  });
+
   test("two-agent review keeps configured roles and multi-agent mode", async () => {
     const cwd = await tempCwd();
     const config = kyosoConfigSchema.parse(defaultConfig);
@@ -626,6 +692,41 @@ enabled = true
     expect(result.summaryMarkdown).not.toContain("<script>");
     expect(result.summaryMarkdown).not.toContain("\u001b");
     expect(result.audit.networkMode).toBe("model_only");
+  });
+
+  test("authorized project OpenRouter selection is recorded in audit warnings", async () => {
+    const cwd = await tempCwd();
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd,
+        env: { HOME: home, PATH: process.env.PATH ?? "" },
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    expect(result.audit.warnings?.join("\n")).toContain(
+      "changes Codex OpenRouter routing under user-global authorization",
+    );
   });
 
   test("security review includes CISA gate and tests", async () => {
@@ -1455,6 +1556,176 @@ enabled = true
     ).toContain("No JSON object found");
   });
 
+  test("fake ACP invokes onStarted only for simulated executions", async () => {
+    const workspaceDir = await tempCwd();
+    const started: string[] = [];
+    const input: AgentRunInput = {
+      traceId: "tr_fake_agent_started",
+      agent: "codex",
+      role: "implementation_reviewer",
+      tool: "plan_review",
+      prompt: "review plan",
+      workspaceDir,
+      timeoutMs: 1_000,
+      networkMode: "model_only",
+      onStarted: () => started.push("codex"),
+    };
+
+    const preflight = await new FakeAgentManager({
+      codex: "preflight_failure",
+    }).runAgent(input);
+    const missingOpenRouterKey = await new FakeAgentManager({
+      codex: "openrouter_key_missing",
+    }).runAgent(input);
+    const completed = await new FakeAgentManager().runAgent(input);
+
+    expect(preflight).toMatchObject({
+      status: "failed",
+      error: { code: "AGENT_CONFIG_INVALID" },
+    });
+    expect(missingOpenRouterKey).toMatchObject({
+      status: "failed",
+      error: { code: "OPENROUTER_KEY_MISSING" },
+    });
+    expect(completed.status).toBe("completed");
+    expect(started).toEqual(["codex"]);
+  });
+
+  test("waits for agent-started audit writes before recording completion", async () => {
+    const eventTypes: string[] = [];
+    const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
+      warnings: [],
+      write(event) {
+        const type = String(event.type);
+        if (type === "agent_started") {
+          return new Promise((resolve) => {
+            setTimeout(() => {
+              eventTypes.push(type);
+              resolve();
+            }, 0);
+          });
+        }
+        eventTypes.push(type);
+        return Promise.resolve();
+      },
+      async finalize() {
+        eventTypes.push("finalized");
+      },
+    });
+
+    await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager: new FakeAgentManager(),
+        traceWriterFactory,
+      },
+    );
+
+    expect(eventTypes.indexOf("agent_started")).toBeLessThan(
+      eventTypes.indexOf("agent_completed"),
+    );
+    expect(eventTypes.at(-1)).toBe("finalized");
+  });
+
+  test("omits agent-started audit writes delivered after agents settle", async () => {
+    const eventTypes: string[] = [];
+    const baseManager = new FakeAgentManager();
+    const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
+      warnings: [],
+      write(event) {
+        eventTypes.push(String(event.type));
+        return Promise.resolve();
+      },
+      async finalize() {
+        eventTypes.push("finalized");
+      },
+    });
+    const agentManager = {
+      runAgent(input: AgentRunInput) {
+        return baseManager.runAgent(input);
+      },
+      async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+        const results = await Promise.all(
+          inputs.map(({ onStarted: _onStarted, ...agentInput }) =>
+            baseManager.runAgent(agentInput),
+          ),
+        );
+        setTimeout(() => {
+          void inputs[0]?.onStarted?.();
+        }, 0);
+        return results;
+      },
+    };
+
+    await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager,
+        traceWriterFactory,
+      },
+    );
+    await Bun.sleep(10);
+
+    expect(eventTypes).not.toContain("agent_started");
+    expect(eventTypes.at(-1)).toBe("finalized");
+  });
+
+  test("continues after rejected agent-started audit writes", async () => {
+    const baseManager = new FakeAgentManager();
+    const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
+      warnings: [],
+      write(event) {
+        if (event.type === "agent_started") {
+          return Promise.reject(
+            new Error("simulated agent-started audit failure"),
+          );
+        }
+        return Promise.resolve();
+      },
+      async finalize() {
+        return;
+      },
+    });
+    const agentManager = {
+      runAgent(input: AgentRunInput) {
+        return baseManager.runAgent(input);
+      },
+      async runAll(inputs: AgentRunInput[]) {
+        const results = await Promise.all(
+          inputs.map((input) => baseManager.runAgent(input)),
+        );
+        await Bun.sleep(10);
+        return results;
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config: kyosoConfigSchema.parse(defaultConfig),
+        agentManager,
+        traceWriterFactory,
+      },
+    );
+
+    expect(result.decision).toBe("approve");
+    expect(result.agentOpinions.map((opinion) => opinion.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+    expect(result.audit.warnings).toContain(
+      "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
+    );
+  });
+
   test("one backend timeout returns degraded result", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
@@ -1483,6 +1754,7 @@ enabled = true
       { scenario: "auth_failure", code: "AUTH_FAILED" },
       { scenario: "permission_request", code: "PERMISSION_DENIED" },
       { scenario: "write_attempt", code: "WRITE_ATTEMPT_DENIED" },
+      { scenario: "openrouter_key_missing", code: "OPENROUTER_KEY_MISSING" },
     ];
 
     for (const { scenario, code } of scenarios) {
@@ -1627,6 +1899,154 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("passes options.env to the default OpenRouter ACP manager", async () => {
+    const cwd = await tempCwd();
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          env: { FAKE_ACP_FINDING_SEVERITY: "none" },
+        },
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd,
+        config,
+        env: {
+          PATH: process.env.PATH ?? "",
+          OPENROUTER_API_KEY: "from-options-env",
+        },
+      },
+    );
+
+    expect(result.agentOpinions[0]).toMatchObject({
+      agent: "codex",
+      status: "completed",
+    });
+    expect(result.agentOpinions[0]?.summary).toContain(
+      "OPENROUTER_API_KEY_PRESENT=true",
+    );
+    expect(result.agentOpinions[0]?.summary).toContain(
+      "MODEL_PROVIDER=kyoso-openrouter",
+    );
+    expect(JSON.stringify(result)).not.toContain("from-options-env");
+  });
+
+  test("uses options.env when selecting the default fake manager", async () => {
+    const config = singleAgentConfig("codex");
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config,
+        env: { KYOSO_TEST_FAKE_AGENTS: "1" },
+      },
+    );
+
+    expect(result.agentOpinions[0]).toMatchObject({
+      agent: "codex",
+      status: "completed",
+    });
+  });
+
+  test("OpenRouter key preflight failure keeps the other ACP reviewer running", async () => {
+    const cwd = await tempCwd();
+    const pidPath = join(cwd, "openrouter-agent.pid");
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          env: {
+            FAKE_ACP_FINDING_SEVERITY: "none",
+            FAKE_ACP_PID_FILE: pidPath,
+          },
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          command: "bun",
+          args: ["run", fixture],
+          env: { FAKE_ACP_FINDING_SEVERITY: "none" },
+        },
+      },
+    };
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd,
+        config,
+        agentManager: new SubprocessAcpAgentManager(config, {
+          PATH: process.env.PATH ?? "",
+        }),
+      },
+    );
+
+    expect(result.degraded).toBe(true);
+    expect(
+      result.agentOpinions.find((opinion) => opinion.agent === "codex"),
+    ).toMatchObject({
+      status: "failed",
+      errorCode: "OPENROUTER_KEY_MISSING",
+    });
+    expect(
+      result.agentOpinions.find((opinion) => opinion.agent === "claude"),
+    ).toMatchObject({ status: "completed" });
+    expect(existsSync(pidPath)).toBe(false);
+    const traceEvents = await readTraceEvents(cwd, config, result);
+    expect(
+      traceEvents.find(
+        (event) => event.type === "agent_started" && event.agent === "codex",
+      ),
+    ).toBeUndefined();
+    expect(
+      traceEvents.find(
+        (event) => event.type === "agent_completed" && event.agent === "codex",
+      ),
+    ).toMatchObject({
+      status: "failed",
+      errorCode: "OPENROUTER_KEY_MISSING",
+    });
+    expect(
+      traceEvents.find(
+        (event) => event.type === "agent_started" && event.agent === "claude",
+      ),
+    ).toBeDefined();
   });
 
   test("TOML model pin reaches the subprocess environment", async () => {

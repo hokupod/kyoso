@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-15
+
+### Added
+
+- User-authorized project-scoped `agents.codex.provider = "openrouter"` and
+  inherited OpenRouter model overrides, with a required non-empty Codex model
+  for provider selection and a user-global exact absolute-directory
+  `allowProjectProvider` allowlist,
+  a `provider = "default"` project opt-out that clears an inherited OpenRouter
+  model unless the reset layer supplies one, and a fixed OpenRouter Responses
+  API preset.
+- OpenRouter readiness in `kyoso doctor`, including detected/missing key
+  guidance without exposing credential values.
+- `kyoso setup --with-openrouter` for explicit `OPENROUTER_API_KEY` forwarding
+  in newly generated manual Codex and Claude Code MCP registrations. New Codex
+  registrations also include `CODEX_HOME` and `CODEX_ACCESS_TOKEN` alongside
+  the existing credential allowlist.
+- A release-gated pinned Codex ACP/OpenRouter smoke command that requires an
+  explicit environment opt-in and never accepts credentials through argv.
+
+### Changed
+
+- Forward `OPENROUTER_API_KEY` to the Codex child only for the OpenRouter
+  provider; omit the provider to retain existing Codex login, OpenAI/Codex key,
+  and `CODEX_CONFIG` behavior.
+- Preserve existing MCP registrations during setup, including disabled entries;
+  existing users update their environment allowlist manually.
+- Omit `OPENROUTER_API_KEY` from new manual MCP registrations unless
+  `--with-openrouter` is explicitly requested.
+- Keep the released Marketplace Plugin environment contract unchanged: it does
+  not forward `OPENROUTER_API_KEY` until a later coordinated Plugin
+  promotion.
+
+### Fixed
+
+- Require the explicit `--set` provider and model pair when direct CLI input
+  selects OpenRouter, preventing a project-supplied model from completing that
+  external-routing selection.
+- Resolve existing project allowlist directories by real path and document
+  intentional preflight-only audit completion events.
+
 ## [0.9.1] - 2026-07-13
 
 ### Added

@@ -1,6 +1,11 @@
 const PROJECT_GLOBAL_ONLY_MESSAGE =
   "Move global-only settings to the user global config:";
 
+const PROJECT_GLOBAL_ONLY_REASONS: Record<string, string> = {
+  "agents.codex.allowProjectProvider":
+    "must be a user-global exact project-directory allowlist",
+};
+
 type ProjectScopeOptions = {
   projectPath: string;
   globalConfigPath: string;
@@ -14,6 +19,7 @@ type Violation = {
 export const kyosoConfigOverridePaths = [
   "agents.codex.enabled",
   "agents.codex.model",
+  "agents.codex.provider",
   "agents.codex.effort",
   "agents.codex.role",
   "agents.codex.timeoutMs",
@@ -68,6 +74,11 @@ export function collectProjectScopeViolations(config: unknown): Violation[] {
   const violations: Violation[] = [];
   for (const leaf of leaves) {
     const path = leaf.path.join(".");
+    const globalOnlyReason = PROJECT_GLOBAL_ONLY_REASONS[path];
+    if (globalOnlyReason) {
+      violations.push({ path, reason: globalOnlyReason });
+      continue;
+    }
     if (!isAllowedProjectPath(leaf.path)) {
       violations.push({ path });
       continue;

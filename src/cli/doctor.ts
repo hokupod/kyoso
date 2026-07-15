@@ -1,11 +1,24 @@
 import { accessSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
+import { z } from "zod";
 import { inspectAuditStateRootCapability } from "../audit/stateRoot.js";
 import {
+  getConfigValidationContext,
   loadConfig,
+  ProjectOpenRouterAuthorizationError,
   resolveGlobalTomlConfigPath,
 } from "../config/loadConfig.js";
+import {
+  CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE,
+  CODEX_OPENROUTER_PROVIDER,
+} from "../config/schema.js";
 import { resolveJudgeProvider } from "../judge/provider.js";
+import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
+import {
+  hasUsableEnvValue,
+  isUnexpandedEnvPlaceholder,
+  OPENROUTER_API_KEY_ENV,
+} from "../utils/env.js";
 import {
   formatCodexInspectionFailure,
   inspectCodexMcpList,
@@ -45,7 +58,7 @@ export async function runDoctor(options: {
   ) => CodexMcpListInspection;
 }): Promise<string> {
   const env = options.env ?? process.env;
-  const loaded = await loadConfig(options);
+  const { loaded, configValidationFallback } = await loadDoctorConfig(options);
   const globalConfigPath = resolveGlobalTomlConfigPath(env);
   const projectTomlPath = resolve(options.cwd, "kyoso.toml");
   const projectTsPath = resolve(options.cwd, "kyoso.config.ts");
@@ -58,20 +71,52 @@ export async function runDoctor(options: {
   );
 
   lines.push("", "Config");
-  lines.push(
-    `  global config.toml: ${formatLayer(loaded, "global_toml", globalConfigPath)}`,
-  );
-  lines.push(
-    `  kyoso.toml: ${formatLayer(loaded, "project_toml", projectTomlPath)}`,
-  );
-  lines.push(
-    `  kyoso.config.ts: ${formatProjectTsLayer(loaded, projectTsPath)}`,
-  );
-  lines.push(
-    `  trusted config: ${formatTrustStatus(loaded.configTrustStatus)}`,
-  );
+  if (configValidationFallback) {
+    lines.push(
+      formatFallbackConfigLayer(
+        "global config.toml",
+        "global_toml",
+        globalConfigPath,
+        configValidationFallback,
+      ),
+    );
+    lines.push(
+      formatFallbackConfigLayer(
+        "kyoso.toml",
+        "project_toml",
+        projectTomlPath,
+        configValidationFallback,
+      ),
+    );
+    lines.push(
+      formatFallbackConfigLayer(
+        "kyoso.config.ts",
+        "project_ts",
+        projectTsPath,
+        configValidationFallback,
+      ),
+    );
+    lines.push(formatFallbackTrustedConfigStatus(configValidationFallback));
+  } else {
+    lines.push(
+      `  global config.toml: ${formatLayer(loaded, "global_toml", globalConfigPath)}`,
+    );
+    lines.push(
+      `  kyoso.toml: ${formatLayer(loaded, "project_toml", projectTomlPath)}`,
+    );
+    lines.push(
+      `  kyoso.config.ts: ${formatProjectTsLayer(loaded, projectTsPath)}`,
+    );
+    lines.push(
+      `  trusted config: ${formatTrustStatus(loaded.configTrustStatus)}`,
+    );
+  }
   if (loaded.configHash) lines.push(`  config hash: ${loaded.configHash}`);
   for (const warning of loaded.warnings) lines.push(`  warning: ${warning}`);
+  if (configValidationFallback) {
+    lines.push(`  warning: ${configValidationFallback.warning}`);
+    lines.push(`  hint: ${configValidationFallback.hint}`);
+  }
 
   const setup = detectSetup({ cwd: options.cwd, env });
   const cli = detectCli({ cwd: options.cwd, env });
@@ -107,6 +152,11 @@ export async function runDoctor(options: {
   appendIntegration(lines, claudeIntegration);
 
   lines.push("", "ACP agents");
+  if (configValidationFallback) {
+    lines.push(
+      "  note: user-global config is not reflected; all agent diagnostics below use safe defaults.",
+    );
+  }
   const agentCommandExists = {
     codex: commandExists(loaded.config.agents.codex.command, env),
     claude: commandExists(loaded.config.agents.claude.command, env),
@@ -118,12 +168,56 @@ export async function runDoctor(options: {
       `  ${agent === "codex" ? "Codex" : "Claude"}: ${exists ? "ok" : "warning command not found"}`,
     );
     lines.push(`    command: ${[config.command, ...config.args].join(" ")}`);
-    if (!exists && config.command === "npx" && commandExists("bunx", env)) {
+    if (
+      !configValidationFallback &&
+      !exists &&
+      config.command === "npx" &&
+      commandExists("bunx", env)
+    ) {
       lines.push('    hint: set agents.<name>.command = "bunx" in config.toml');
     }
-    if (agent === "claude") {
-      const hasApiKey = hasEnv(env, "ANTHROPIC_API_KEY");
-      const hasOAuthToken = hasEnv(env, "CLAUDE_CODE_OAUTH_TOKEN");
+    if (
+      agent === "codex" &&
+      loaded.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
+    ) {
+      lines.push(`    provider: ${CODEX_OPENROUTER_PROVIDER}`);
+      lines.push(
+        `    model: ${sanitizeTextForDisplay(loaded.config.agents.codex.model ?? "")}`,
+      );
+      const configuredKey =
+        loaded.config.agents.codex.env[OPENROUTER_API_KEY_ENV];
+      if (
+        hasUsableEnvValue(
+          loaded.config.agents.codex.env,
+          OPENROUTER_API_KEY_ENV,
+        )
+      ) {
+        lines.push(
+          `    auth: detected ${OPENROUTER_API_KEY_ENV} from agents.codex.env`,
+        );
+      } else if (hasUsableEnvValue(env, OPENROUTER_API_KEY_ENV)) {
+        lines.push(`    auth: detected ${OPENROUTER_API_KEY_ENV}`);
+      } else if (
+        isUnexpandedEnvPlaceholder(configuredKey) ||
+        isUnexpandedEnvPlaceholder(env[OPENROUTER_API_KEY_ENV])
+      ) {
+        lines.push(
+          `    warning: ${OPENROUTER_API_KEY_ENV} placeholder was not expanded by the client`,
+        );
+        lines.push(
+          `    hint: expand ${OPENROUTER_API_KEY_ENV} in the MCP registration, restart the client, then run \`kyoso doctor\``,
+        );
+      } else {
+        lines.push(
+          `    warning: ${OPENROUTER_API_KEY_ENV} is not visible to the Kyoso process`,
+        );
+        lines.push(
+          `    hint: add ${OPENROUTER_API_KEY_ENV} to the MCP registration, restart the client, then run \`kyoso doctor\``,
+        );
+      }
+    } else if (agent === "claude") {
+      const hasApiKey = hasUsableEnvValue(env, "ANTHROPIC_API_KEY");
+      const hasOAuthToken = hasUsableEnvValue(env, "CLAUDE_CODE_OAUTH_TOKEN");
       if (!hasApiKey && !hasOAuthToken) {
         lines.push(
           "    auth: set ANTHROPIC_API_KEY (API billing) or run `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN (subscription)",
@@ -184,6 +278,154 @@ export async function runDoctor(options: {
 }
 
 type DoctorIntegrationMode = IntegrationMode | "plugin-mcp" | "plugin-skill";
+
+async function loadDoctorConfig(
+  options: NonNullable<Parameters<typeof loadConfig>[0]>,
+): Promise<{
+  loaded: Awaited<ReturnType<typeof loadConfig>>;
+  configValidationFallback?: DoctorConfigValidationFallback;
+}> {
+  try {
+    return { loaded: await loadConfig(options) };
+  } catch (error) {
+    const configValidationFallback = doctorConfigValidationFallback(error);
+    if (!configValidationFallback) throw error;
+
+    return {
+      loaded: await loadConfig({
+        cwd: options.cwd,
+        env: options.env,
+        ignoreConfig: true,
+      }),
+      configValidationFallback,
+    };
+  }
+}
+
+type DoctorConfigValidationFallback = {
+  warning: string;
+  hint: string;
+  affectedLayer?: "global_toml" | "project_toml" | "project_ts";
+  affectedPath?: string;
+  trustedConfigExecution?: "authorization" | "validation";
+};
+
+function formatFallbackTrustedConfigStatus(
+  fallback: DoctorConfigValidationFallback,
+): string {
+  if (fallback.trustedConfigExecution === "authorization") {
+    return "  trusted config: executed but not applied after authorization failure";
+  }
+  if (fallback.trustedConfigExecution === "validation") {
+    return "  trusted config: executed but not applied after validation failure";
+  }
+  return "  trusted config: not evaluated after validation failure";
+}
+
+function formatFallbackConfigLayer(
+  label: string,
+  layer: NonNullable<DoctorConfigValidationFallback["affectedLayer"]>,
+  path: string,
+  fallback: DoctorConfigValidationFallback,
+): string {
+  if (!fallback.affectedLayer || fallback.affectedLayer !== layer) {
+    return `  ${label}: not applied in safe-default diagnostics`;
+  }
+  const affectedPath = fallback.affectedPath ?? path;
+  return `  ${label}: not applied after validation failure; check ${affectedPath}`;
+}
+
+function doctorConfigValidationFallback(
+  error: unknown,
+): DoctorConfigValidationFallback | undefined {
+  if (error instanceof ProjectOpenRouterAuthorizationError) {
+    const projectDirectory = sanitizeTextForDisplay(error.projectDirectory);
+    return {
+      warning: `project config ${sanitizeTextForDisplay(error.projectPath)} changes Codex OpenRouter routing without user-global authorization. Doctor is using safe defaults for diagnostics.`,
+      hint: `add the exact project directory ${JSON.stringify(projectDirectory)} to agents.codex.allowProjectProvider in user-global ${sanitizeTextForDisplay(error.globalConfigPath)} (for a new list: allowProjectProvider = [${JSON.stringify(projectDirectory)}]), then run \`kyoso doctor\` again`,
+      affectedLayer: error.layer,
+      affectedPath: sanitizeTextForDisplay(error.projectPath),
+      trustedConfigExecution:
+        error.layer === "project_ts" ? "authorization" : undefined,
+    };
+  }
+
+  return openRouterConfigValidationFallback(error);
+}
+
+function openRouterConfigValidationFallback(
+  error: unknown,
+): DoctorConfigValidationFallback | undefined {
+  if (!(error instanceof z.ZodError)) return undefined;
+
+  const issuePaths = error.issues.map((issue) =>
+    issue.path.map(String).join("."),
+  );
+  const hasProjectProviderAllowlistIssue = error.issues.some((issue, index) =>
+    isCodexProjectProviderAllowlistIssue(issue, issuePaths[index] ?? ""),
+  );
+  if (
+    issuePaths.length === 0 ||
+    !error.issues.some(
+      (issue, index) =>
+        isSupportedCodexProviderIssue(issue, issuePaths[index] ?? "") ||
+        isCodexProjectProviderAllowlistIssue(issue, issuePaths[index] ?? ""),
+    )
+  ) {
+    return undefined;
+  }
+
+  const detail = sanitizeTextForDisplay(
+    error.issues
+      .map(
+        (issue, index) =>
+          `${issuePaths[index] ?? "agents.codex"}: ${issue.message}`,
+      )
+      .join("; "),
+  );
+  const context = getConfigValidationContext(error);
+  const configSource = context?.source;
+  const trustedProjectTsSource =
+    context?.projectTsExecuted && configSource?.layer === "project_ts"
+      ? configSource
+      : undefined;
+  return {
+    warning: `invalid Codex OpenRouter configuration: ${detail}. Doctor is using safe defaults for diagnostics.`,
+    hint: hasProjectProviderAllowlistIssue
+      ? 'migrate user-global agents.codex.allowProjectProvider to an absolute directory string[] for exact matching (for example: allowProjectProvider = ["/absolute/project-directory"]); remove legacy booleans and relative paths, then run `kyoso doctor` again'
+      : 'set agents.codex.provider = "openrouter" with a non-empty agents.codex.model, or remove agents.codex.provider; then run `kyoso doctor` again',
+    affectedLayer: trustedProjectTsSource ? "project_ts" : undefined,
+    affectedPath: trustedProjectTsSource
+      ? sanitizeTextForDisplay(trustedProjectTsSource.path)
+      : undefined,
+    trustedConfigExecution: trustedProjectTsSource ? "validation" : undefined,
+  };
+}
+
+function isSupportedCodexProviderIssue(
+  issue: z.core.$ZodIssue,
+  path: string,
+): boolean {
+  if (path === "agents.codex.provider") {
+    return issue.code === "invalid_value";
+  }
+
+  return (
+    path === "agents.codex.model" &&
+    issue.code === "custom" &&
+    issue.params?.kyosoIssue === CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE
+  );
+}
+
+function isCodexProjectProviderAllowlistIssue(
+  _issue: z.core.$ZodIssue,
+  path: string,
+): boolean {
+  return (
+    path === "agents.codex.allowProjectProvider" ||
+    path.startsWith("agents.codex.allowProjectProvider.")
+  );
+}
 
 type DoctorIntegration = {
   client: "Codex" | "Claude Code";
@@ -610,10 +852,6 @@ function formatClaudeDualAuthWarning(preferApiKey: boolean): string {
     return "    auth policy: Kyoso forwards only ANTHROPIC_API_KEY because agents.claude.auth.preferApiKey is true";
   }
   return "    auth policy: Kyoso forwards only CLAUDE_CODE_OAUTH_TOKEN; set agents.claude.auth.preferApiKey to true to use ANTHROPIC_API_KEY";
-}
-
-function hasEnv(env: NodeJS.ProcessEnv, key: string): boolean {
-  return typeof env[key] === "string" && env[key]!.trim().length > 0;
 }
 
 function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {

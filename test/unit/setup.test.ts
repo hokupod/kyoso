@@ -53,6 +53,26 @@ describe("setup", () => {
     });
   });
 
+  test("omits OpenRouter from the default Codex MCP env allowlist", () => {
+    const envLine = buildCodexMcpToml(commandForRunner("npx"))
+      .split("\n")
+      .find((line) => line.startsWith("env_vars = "));
+
+    expect(envLine).toBe(
+      'env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]',
+    );
+  });
+
+  test("adds OpenRouter to the Codex MCP env allowlist only when requested", () => {
+    const envLine = buildCodexMcpToml(commandForRunner("npx"), true)
+      .split("\n")
+      .find((line) => line.startsWith("env_vars = "));
+
+    expect(envLine).toBe(
+      'env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]',
+    );
+  });
+
   test("renders dry-run output without writing files", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-dry-");
     const output = await runSetup({
@@ -65,10 +85,38 @@ describe("setup", () => {
 
     expect(output).toContain("Codex MCP: dry-run");
     expect(output).toContain("[mcp_servers.kyoso]");
+    expect(output).toContain("Credential scope");
+    expect(output).toContain(
+      "Newly generated and dry-run MCP registrations omit OPENROUTER_API_KEY",
+    );
+    expect(output).toContain(
+      "Use --with-openrouter before writing a new registration to include it.",
+    );
+    expect(output).toContain(
+      "Newly generated and dry-run Codex MCP registrations intentionally forward CODEX_ACCESS_TOKEN for default Codex authentication; OpenRouter mode withholds it from the Codex child.",
+    );
     expect(existsSync(join(home, ".codex", "config.toml"))).toBe(false);
     expect(existsSync(skillDestination("codex", "project", cwd, home))).toBe(
       false,
     );
+  });
+
+  test("writes the Codex OpenRouter allowlist only when requested", async () => {
+    const { cwd, home } = await setupTempDirs("kyoso-setup-openrouter-");
+    const output = await runSetup({
+      cwd,
+      client: "codex",
+      write: true,
+      global: false,
+      withOpenRouter: true,
+      env: { HOME: home },
+    });
+    const config = await readFile(join(home, ".codex", "config.toml"), "utf8");
+
+    expect(output).toContain(
+      "include OPENROUTER_API_KEY because --with-openrouter was set.",
+    );
+    expect(config).toContain("OPENROUTER_API_KEY");
   });
 
   test("writes Codex MCP and skill idempotently", async () => {
@@ -85,6 +133,7 @@ describe("setup", () => {
       client: "codex",
       write: true,
       global: false,
+      withOpenRouter: true,
       env: { HOME: home },
     });
     const config = await readFile(join(home, ".codex", "config.toml"), "utf8");
@@ -92,6 +141,13 @@ describe("setup", () => {
     expect(first).toContain("Codex MCP: created");
     expect(second).toContain("Codex MCP: skipped");
     expect(second).toContain("Codex skill: skipped");
+    expect(second).toContain(
+      "Existing MCP registrations were preserved unchanged; --with-openrouter does not edit them.",
+    );
+    expect(second).not.toContain(
+      "Newly generated and dry-run MCP registrations omit OPENROUTER_API_KEY",
+    );
+    expect(config).not.toContain("OPENROUTER_API_KEY");
     expect(config.match(/\[mcp_servers\.kyoso]/g)).toHaveLength(1);
     expect(
       existsSync(
@@ -216,6 +272,7 @@ describe("setup", () => {
       write: true,
       global: false,
       runner: "bunx",
+      withOpenRouter: true,
       env: { HOME: home },
     });
     const second = await runSetup({
@@ -229,7 +286,10 @@ describe("setup", () => {
     const parsed = JSON.parse(
       await readFile(join(cwd, ".mcp.json"), "utf8"),
     ) as {
-      mcpServers: Record<string, { command: string; args: string[] }>;
+      mcpServers: Record<
+        string,
+        { command: string; args: string[]; env?: Record<string, string> }
+      >;
     };
 
     expect(first).toContain("Claude Code MCP: updated");
@@ -241,6 +301,7 @@ describe("setup", () => {
     expect(parsed.mcpServers.kyoso).toMatchObject({
       command: "bunx",
       args: ["@kyo-so/cli", "mcp"],
+      env: { OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}" },
     });
     expect(
       existsSync(
@@ -320,6 +381,9 @@ describe("setup", () => {
     await expect(
       runSetup({ ...base, client: "codex", command: "node server.js" }),
     ).rejects.toThrow("cannot be combined with --command");
+    await expect(
+      runSetup({ ...base, client: "codex", withOpenRouter: true }),
+    ).rejects.toThrow("cannot be combined with --with-openrouter");
   });
 
   test("shows Skill-only syntax in setup overview and every README", async () => {
@@ -913,14 +977,27 @@ describe("setup", () => {
     });
   });
 
-  test("builds Claude MCP entry with provider env placeholders", () => {
-    expect(buildClaudeMcpEntry(commandForRunner("npx"))).toMatchObject({
+  test("omits OpenRouter from the default Claude MCP env placeholders", () => {
+    expect(buildClaudeMcpEntry(commandForRunner("npx"))).toEqual({
       command: "npx",
       args: ["-y", "@kyo-so/cli", "mcp"],
       env: {
         OPENAI_API_KEY: "${OPENAI_API_KEY}",
         ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
         CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}",
+      },
+    });
+  });
+
+  test("adds OpenRouter to Claude MCP env placeholders only when requested", () => {
+    expect(buildClaudeMcpEntry(commandForRunner("npx"), true)).toEqual({
+      command: "npx",
+      args: ["-y", "@kyo-so/cli", "mcp"],
+      env: {
+        OPENAI_API_KEY: "${OPENAI_API_KEY}",
+        ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
+        CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}",
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
       },
     });
   });

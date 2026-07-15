@@ -30,6 +30,7 @@ export type SetupOptions = {
   client?: string;
   write: boolean;
   global: boolean;
+  withOpenRouter?: boolean;
   runner?: string;
   command?: string;
   skillOnly?: boolean;
@@ -42,12 +43,23 @@ type McpCommand = {
   args: string[];
 };
 
-type StepResult = {
+type StepResultBase = {
   title: string;
   status: "dry-run" | "created" | "updated" | "skipped" | "conflict";
   path?: string;
   detail?: string;
 };
+
+type McpStepResult = StepResultBase & {
+  kind: "mcp";
+  registration: "generated" | "preserved";
+};
+
+type NonMcpStepResult = StepResultBase & {
+  kind: "skill" | "advice";
+};
+
+type StepResult = McpStepResult | NonMcpStepResult;
 
 type SetupContext = {
   cwd: string;
@@ -58,6 +70,7 @@ type SetupContext = {
   scope: SetupScope;
   skillOnly: boolean;
   force: boolean;
+  withOpenRouter: boolean;
   mcpCommand: McpCommand;
   sourceSkillDir: string;
 };
@@ -80,13 +93,16 @@ export async function runSetup(options: SetupOptions): Promise<string> {
     scope: options.global ? "global" : "project",
     skillOnly: options.skillOnly ?? false,
     force: options.force ?? false,
+    withOpenRouter: options.withOpenRouter ?? false,
     mcpCommand: command,
     sourceSkillDir: resolveBundledSkillDir(),
   };
 
   if (!client) return renderSetupOverview(context);
-  if (client === "codex") return renderResults(await setupCodex(context));
-  return renderResults(await setupClaudeCode(context));
+  if (client === "codex") {
+    return renderResults(context, await setupCodex(context));
+  }
+  return renderResults(context, await setupClaudeCode(context));
 }
 
 export function commandForRunner(runner: SetupRunner): McpCommand {
@@ -96,12 +112,24 @@ export function commandForRunner(runner: SetupRunner): McpCommand {
   return { command: "npx", args: ["-y", "@kyo-so/cli", "mcp"] };
 }
 
-export function buildCodexMcpToml(command: McpCommand): string {
+export function buildCodexMcpToml(
+  command: McpCommand,
+  withOpenRouter = false,
+): string {
+  const envVars = [
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "CODEX_HOME",
+    "CODEX_ACCESS_TOKEN",
+    ...(withOpenRouter ? ["OPENROUTER_API_KEY"] : []),
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ];
   return [
     "[mcp_servers.kyoso]",
     `command = ${JSON.stringify(command.command)}`,
     `args = ${JSON.stringify(command.args)}`,
-    'env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]',
+    `env_vars = [${envVars.map((value) => JSON.stringify(value)).join(", ")}]`,
     "startup_timeout_sec = 20",
     "tool_timeout_sec = 360",
     "enabled = true",
@@ -111,15 +139,20 @@ export function buildCodexMcpToml(command: McpCommand): string {
 
 export function buildClaudeMcpEntry(
   command: McpCommand,
+  withOpenRouter = false,
 ): Record<string, unknown> {
+  const env: Record<string, string> = {
+    OPENAI_API_KEY: "${OPENAI_API_KEY}",
+    ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
+    CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}",
+  };
+  if (withOpenRouter) {
+    env.OPENROUTER_API_KEY = "${OPENROUTER_API_KEY}";
+  }
   return {
     command: command.command,
     args: command.args,
-    env: {
-      OPENAI_API_KEY: "${OPENAI_API_KEY}",
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
-      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}",
-    },
+    env,
   };
 }
 
@@ -265,10 +298,12 @@ async function setupClaudeCode(context: SetupContext): Promise<StepResult[]> {
 
 async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
   const configPath = join(context.codexHome, "config.toml");
-  const snippet = buildCodexMcpToml(context.mcpCommand);
+  const snippet = buildCodexMcpToml(context.mcpCommand, context.withOpenRouter);
   const current = await readOptionalFile(configPath);
   if (hasCodexMcpContent(current)) {
     return {
+      kind: "mcp",
+      registration: "preserved",
       title: "Codex MCP",
       status: "skipped",
       path: configPath,
@@ -280,12 +315,21 @@ async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
   }
   const detail = diffForAppend(configPath, snippet);
   if (!context.write) {
-    return { title: "Codex MCP", status: "dry-run", path: configPath, detail };
+    return {
+      kind: "mcp",
+      registration: "generated",
+      title: "Codex MCP",
+      status: "dry-run",
+      path: configPath,
+      detail,
+    };
   }
   const separator = current.length > 0 && !current.endsWith("\n") ? "\n\n" : "";
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, `${current}${separator}${snippet}`, "utf8");
   return {
+    kind: "mcp",
+    registration: "generated",
     title: "Codex MCP",
     status: current.length > 0 ? "updated" : "created",
     path: configPath,
@@ -303,6 +347,8 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
   const mcpServers = recordValue(current.mcpServers);
   if (isRecord(mcpServers.kyoso)) {
     return {
+      kind: "mcp",
+      registration: "preserved",
       title: "Claude Code MCP",
       status: "skipped",
       path: configPath,
@@ -317,12 +363,14 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
     ...current,
     mcpServers: {
       ...mcpServers,
-      kyoso: buildClaudeMcpEntry(context.mcpCommand),
+      kyoso: buildClaudeMcpEntry(context.mcpCommand, context.withOpenRouter),
     },
   };
   const detail = diffForJson(configPath, current, next);
   if (!context.write) {
     return {
+      kind: "mcp",
+      registration: "generated",
       title: "Claude Code MCP",
       status: "dry-run",
       path: configPath,
@@ -332,6 +380,8 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
 
   await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
   return {
+    kind: "mcp",
+    registration: "generated",
     title: "Claude Code MCP",
     status: Object.keys(current).length > 0 ? "updated" : "created",
     path: configPath,
@@ -344,6 +394,8 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
   const existingMcp = detectClaudeMcp(configPath, context.cwd, context.home);
   if (existingMcp.status !== "missing") {
     return {
+      kind: "mcp",
+      registration: "preserved",
       title: "Claude Code MCP",
       status: "skipped",
       path: configPath,
@@ -354,11 +406,15 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
     };
   }
 
-  const json = JSON.stringify(buildClaudeMcpEntry(context.mcpCommand));
+  const json = JSON.stringify(
+    buildClaudeMcpEntry(context.mcpCommand, context.withOpenRouter),
+  );
   const args = ["mcp", "add-json", "kyoso", json, "--scope", "user"];
   const commandLine = ["claude", ...args.map(shellQuote)].join(" ");
   if (!context.write) {
     return {
+      kind: "mcp",
+      registration: "generated",
       title: "Claude Code MCP",
       status: "dry-run",
       path: configPath,
@@ -373,6 +429,8 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
     );
   }
   return {
+    kind: "mcp",
+    registration: "generated",
     title: "Claude Code MCP",
     status: "updated",
     path: configPath,
@@ -398,6 +456,7 @@ async function ensureSkill(
     force: context.force,
   });
   return {
+    kind: "skill",
     title,
     ...result,
   };
@@ -417,8 +476,8 @@ function renderSetupOverview(context: SetupContext): string {
     `  claude-code: MCP ${statusWord(detected["claude-code"].mcp)}, skill ${statusWord(detected["claude-code"].skill)}`,
     "",
     "Commands",
-    "  kyoso setup codex [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]",
-    "  kyoso setup claude-code [--write] [--runner npx|bunx] [--command <command>] [--global] [--force]",
+    "  kyoso setup codex [--write] [--with-openrouter] [--runner npx|bunx] [--command <command>] [--global] [--force]",
+    "  kyoso setup claude-code [--write] [--with-openrouter] [--runner npx|bunx] [--command <command>] [--global] [--force]",
     "  kyoso setup codex --skill-only [--write] [--global] [--force]",
     "  kyoso setup claude-code --skill-only [--write] [--global] [--force]",
     "",
@@ -427,7 +486,20 @@ function renderSetupOverview(context: SetupContext): string {
   ].join("\n");
 }
 
-function renderResults(results: StepResult[]): string {
+function renderResults(context: SetupContext, results: StepResult[]): string {
+  const mcpSteps = results.filter(
+    (result): result is McpStepResult => result.kind === "mcp",
+  );
+  const includesGeneratedMcp = mcpSteps.some(
+    (result) => result.registration === "generated",
+  );
+  const includesGeneratedCodexMcp = mcpSteps.some(
+    (result) =>
+      result.registration === "generated" && result.title === "Codex MCP",
+  );
+  const includesPreservedMcp = mcpSteps.some(
+    (result) => result.registration === "preserved",
+  );
   return [
     "Kyoso setup",
     "",
@@ -435,6 +507,30 @@ function renderResults(results: StepResult[]): string {
       `${result.title}: ${result.status}${result.path ? ` (${result.path})` : ""}`,
       ...(result.detail ? indent(result.detail).split("\n") : []),
     ]),
+    ...(mcpSteps.length > 0
+      ? [
+          "",
+          "Credential scope",
+          ...(includesGeneratedMcp
+            ? [
+                context.withOpenRouter
+                  ? "  Newly generated and dry-run MCP registrations include OPENROUTER_API_KEY because --with-openrouter was set."
+                  : "  Newly generated and dry-run MCP registrations omit OPENROUTER_API_KEY. Use --with-openrouter before writing a new registration to include it.",
+              ]
+            : []),
+          ...(includesGeneratedCodexMcp
+            ? [
+                "  Newly generated and dry-run Codex MCP registrations intentionally forward CODEX_ACCESS_TOKEN for default Codex authentication; OpenRouter mode withholds it from the Codex child.",
+              ]
+            : []),
+          ...(includesPreservedMcp
+            ? [
+                "  Existing MCP registrations were preserved unchanged; --with-openrouter does not edit them.",
+              ]
+            : []),
+          "  Use --with-openrouter only when OpenRouter is intentionally selected.",
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -459,6 +555,9 @@ function validateSkillOnlyOptions(
   }
   if (options.command !== undefined) {
     throw new Error("--skill-only cannot be combined with --command.");
+  }
+  if (options.withOpenRouter) {
+    throw new Error("--skill-only cannot be combined with --with-openrouter.");
   }
 }
 
@@ -770,6 +869,7 @@ function singleAgentAdvice(
   if (client === "claude-code" && !commandExists("codex", context.env)) {
     return [
       {
+        kind: "advice",
         title: "Single-agent config",
         status: "skipped",
         detail: [
@@ -785,6 +885,7 @@ function singleAgentAdvice(
   if (client === "codex" && !commandExists("claude", context.env)) {
     return [
       {
+        kind: "advice",
         title: "Single-agent config",
         status: "skipped",
         detail: [

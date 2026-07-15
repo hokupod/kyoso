@@ -4,6 +4,20 @@ defaultMode = "model_only"
 [agents.codex]
 # Omit model to use the user's Codex default from ~/.codex/config.toml.
 # model = "gpt-5.5"
+#
+# To opt in here, or override a model while OpenRouter is inherited, first add
+# this exact absolute project directory to
+# `allowProjectProvider = ["/absolute/path/to/project"]` under `[agents.codex]`
+# in user-global `~/.config/kyoso/config.toml`. Project TOML and `--set` cannot
+# grant that authorization; legacy boolean values are rejected. A non-empty model
+# is required.
+# provider = "openrouter"
+# model = "openai/o4-mini"
+#
+# To reset an inherited user-global OpenRouter selection for this project:
+# provider = "default"
+#
+# Remove provider to return to the existing Codex provider/login behavior.
 
 [agents.claude]
 # Omit model to use the Claude adapter default.

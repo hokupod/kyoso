@@ -140,6 +140,10 @@ export type AgentRunInput = {
   workspaceDir: string;
   timeoutMs: number;
   networkMode: NetworkMode;
+  // Called once after the agent process has actually started. Preflight failures
+  // and spawn failures must not invoke this callback. Managers await a returned
+  // promise before settling a started agent result.
+  onStarted?: (() => void) | (() => Promise<void>);
 };
 
 export type AgentRunResult = {

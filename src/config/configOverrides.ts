@@ -1,4 +1,9 @@
-import { kyosoConfigSchema, type KyosoConfig } from "./schema.js";
+import {
+  CODEX_DEFAULT_PROVIDER,
+  CODEX_OPENROUTER_PROVIDER,
+  kyosoConfigSchema,
+  type KyosoConfig,
+} from "./schema.js";
 import { isAllowedConfigOverridePath } from "./projectScope.js";
 
 type ParsedConfigOverride = {
@@ -28,6 +33,16 @@ export function applyConfigOverrides(
       ),
     );
   }
+  clearInheritedOpenRouterModelForProviderReset(
+    baseConfig,
+    overridden,
+    overrides,
+  );
+  assertOpenRouterProviderOverrideIncludesModel(
+    baseConfig,
+    overridden,
+    overrides,
+  );
 
   const parsed = kyosoConfigSchema.safeParse(overridden);
   if (parsed.success) return parsed.data;
@@ -39,6 +54,58 @@ export function applyConfigOverrides(
   throw new Error(
     `Invalid --set value ${JSON.stringify(assignment)}: ${issuePath}: ${issue?.message ?? "config validation failed"}.`,
   );
+}
+
+function assertOpenRouterProviderOverrideIncludesModel(
+  baseConfig: Record<string, unknown>,
+  overridden: Record<string, unknown>,
+  overrides: ParsedConfigOverride[],
+): void {
+  const providerPath = ["agents", "codex", "provider"];
+  const modelPath = ["agents", "codex", "model"];
+  const selectsOpenRouter =
+    readPath(overridden, providerPath) === CODEX_OPENROUTER_PROVIDER;
+  const alreadySelected =
+    readPath(baseConfig, providerPath) === CODEX_OPENROUTER_PROVIDER;
+  const suppliesModel = overrides.some(
+    (override) => override.path.join(".") === modelPath.join("."),
+  );
+  if (!selectsOpenRouter || alreadySelected || suppliesModel) return;
+
+  const assignment =
+    findAssignmentForPath(overrides, providerPath.join(".")) ??
+    "agents.codex.provider=openrouter";
+  throw new Error(
+    `Invalid --set value ${JSON.stringify(assignment)}: selecting agents.codex.provider=openrouter requires agents.codex.model in the same --set invocation.`,
+  );
+}
+
+function clearInheritedOpenRouterModelForProviderReset(
+  baseConfig: Record<string, unknown>,
+  overridden: Record<string, unknown>,
+  overrides: ParsedConfigOverride[],
+): void {
+  const providerPath = ["agents", "codex", "provider"];
+  const modelPath = ["agents", "codex", "model"];
+  const selectsDefaultProvider = overrides.some(
+    (override) =>
+      override.path.join(".") === providerPath.join(".") &&
+      override.value === CODEX_DEFAULT_PROVIDER,
+  );
+  const suppliesModel = overrides.some(
+    (override) => override.path.join(".") === modelPath.join("."),
+  );
+  if (
+    !selectsDefaultProvider ||
+    suppliesModel ||
+    readPath(baseConfig, providerPath) !== CODEX_OPENROUTER_PROVIDER ||
+    readPath(overridden, providerPath) !== CODEX_DEFAULT_PROVIDER
+  ) {
+    return;
+  }
+
+  const codex = readPath(overridden, ["agents", "codex"]);
+  if (isRecord(codex)) delete codex.model;
 }
 
 function findAssignmentForPath(

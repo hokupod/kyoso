@@ -19,7 +19,11 @@ export function sanitizeText(value: string): string {
 }
 
 export function sanitizeTextForDisplay(value: string, maxChars = 240): string {
-  const compact = sanitizeText(value).replace(/\s+/g, " ").trim();
+  const compact = sanitizeText(value)
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (compact.length <= maxChars) return compact;
   return `${compact.slice(0, Math.max(0, maxChars - 3))}...`;
 }

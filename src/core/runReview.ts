@@ -1,5 +1,9 @@
 import { resolve } from "node:path";
-import { kyosoConfigSchema, type KyosoConfig } from "../config/schema.js";
+import {
+  CODEX_OPENROUTER_PROVIDER,
+  kyosoConfigSchema,
+  type KyosoConfig,
+} from "../config/schema.js";
 import { defaultConfig } from "../config/defaultConfig.js";
 import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
 import { applyConfigOverrides } from "../config/configOverrides.js";
@@ -273,7 +277,9 @@ export async function runReview(
       timestamp: new Date().toISOString(),
     });
 
-    const manager = options.agentManager ?? defaultAgentManager(loaded.config);
+    const manager =
+      options.agentManager ??
+      defaultAgentManager(loaded.config, options.env ?? process.env);
     const agentResults = await runAgents({
       tool,
       request: built.request,
@@ -283,6 +289,7 @@ export async function runReview(
       networkMode,
       manager,
       trace,
+      warnings,
     });
 
     warnings.push(
@@ -649,41 +656,64 @@ async function runAgents(input: {
   networkMode: "model_only" | "unrestricted";
   manager: AcpAgentManager;
   trace: { write(event: Record<string, unknown>): Promise<void> };
+  warnings: string[];
 }): Promise<AgentRunResult[]> {
   const agentRoles = resolveAgentRoles(input.config);
+  const startedWrites: Promise<void>[] = [];
+  let acceptingStartedEvents = true;
   const agentInputs = (["codex", "claude"] as const)
     .filter((agent) => input.config.agents[agent].enabled)
-    .map((agent) => ({
-      traceId: input.traceId,
-      agent,
-      role: agentRoles[agent] ?? input.config.agents[agent].role,
-      tool: input.tool,
-      prompt: buildAgentPrompt(
-        input.tool,
-        input.request,
-        agent,
-        agentRoles[agent] ?? input.config.agents[agent].role,
-      ),
-      workspaceDir: input.workspaceDir,
-      timeoutMs:
-        input.request.options?.maxAgentTimeoutMs ??
-        input.config.agents[agent].timeoutMs ??
-        DEFAULT_AGENT_TIMEOUT_MS,
-      networkMode: input.networkMode,
-    }));
-
-  await Promise.all(
-    agentInputs.map((agentInput) =>
-      input.trace.write({
-        type: "agent_started",
+    .map((agent) => {
+      const agentConfig = input.config.agents[agent];
+      const role = agentRoles[agent] ?? agentConfig.role;
+      return {
         traceId: input.traceId,
-        agent: agentInput.agent,
-        role: agentInput.role,
-        timestamp: new Date().toISOString(),
-      }),
-    ),
-  );
+        agent,
+        role,
+        tool: input.tool,
+        prompt: buildAgentPrompt(input.tool, input.request, agent, role),
+        workspaceDir: input.workspaceDir,
+        timeoutMs:
+          input.request.options?.maxAgentTimeoutMs ??
+          agentConfig.timeoutMs ??
+          DEFAULT_AGENT_TIMEOUT_MS,
+        networkMode: input.networkMode,
+        onStarted: () => {
+          if (!acceptingStartedEvents) return Promise.resolve();
+          const event: Record<string, unknown> = {
+            type: "agent_started",
+            traceId: input.traceId,
+            agent,
+            role,
+            timestamp: new Date().toISOString(),
+          };
+          if (agentConfig.model) {
+            event.model = sanitizeTextForDisplay(agentConfig.model);
+          }
+          if (
+            agent === "codex" &&
+            input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
+          ) {
+            event.provider = CODEX_OPENROUTER_PROVIDER;
+          }
+          const write = (async () => {
+            try {
+              await input.trace.write(event);
+            } catch {
+              input.warnings.push(
+                "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
+              );
+            }
+          })();
+          startedWrites.push(write);
+          return write;
+        },
+      };
+    });
+
   const results = await input.manager.runAll(agentInputs);
+  acceptingStartedEvents = false;
+  await Promise.all(startedWrites);
   await Promise.all(
     results.map((result) => {
       const event: Record<string, unknown> = {
@@ -725,9 +755,14 @@ function resolveAgentRoles(
   return roles;
 }
 
-function defaultAgentManager(config: KyosoConfig): AcpAgentManager {
-  if (process.env.KYOSO_TEST_FAKE_AGENTS === "1") return new FakeAgentManager();
-  return new SubprocessAcpAgentManager(config);
+function defaultAgentManager(
+  config: KyosoConfig,
+  parentEnv: NodeJS.ProcessEnv,
+): AcpAgentManager {
+  if (parentEnv.KYOSO_TEST_FAKE_AGENTS === "1") {
+    return new FakeAgentManager();
+  }
+  return new SubprocessAcpAgentManager(config, parentEnv);
 }
 
 function normalizeAgentRunResult(result: AgentRunResult): AgentRunResult {

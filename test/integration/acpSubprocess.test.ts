@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,15 +15,111 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
   test("completes a happy-path ACP session and normalizes findings", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"));
+    let startEvents = 0;
 
-    const result = await manager.runAgent(agentInput(cwd));
+    const result = await manager.runAgent(
+      agentInput(cwd, { onStarted: () => (startEvents += 1) }),
+    );
 
     expect(result.status).toBe("completed");
+    expect(startEvents).toBe(1);
     expect(result.normalized?.summary).toContain("read snapshot context");
     expect(result.normalized?.findings[0]?.title).toBe(
       "Fake ACP subprocess finding",
     );
     expect(result.normalized?.testsToAdd).toContain("fake ACP subprocess test");
+  });
+
+  test("does not settle a spawned agent before asynchronous start tracing completes", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"));
+    let releaseStartedWrite: (() => void) | undefined;
+    const startedWrite = new Promise<void>((resolve) => {
+      releaseStartedWrite = resolve;
+    });
+    let onStartedCalled = false;
+
+    const resultPromise = manager.runAgent(
+      agentInput(cwd, {
+        onStarted: () => {
+          onStartedCalled = true;
+          return startedWrite;
+        },
+      }),
+    );
+
+    await waitFor(() => onStartedCalled);
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+    await Bun.sleep(100);
+    expect(settled).toBe(false);
+
+    releaseStartedWrite?.();
+    expect((await resultPromise).status).toBe("completed");
+  });
+
+  test("forwards the OpenRouter preset without exposing the key in output", async () => {
+    const cwd = await fakeWorkspace();
+    const key = "openrouter-subprocess-test-key";
+    const manager = new SubprocessAcpAgentManager(
+      openRouterAcpConfig("happy", { OPENROUTER_API_KEY: key }),
+    );
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result.status).toBe("completed");
+    expect(result.normalized?.summary).toContain(
+      "OPENROUTER_API_KEY_PRESENT=true",
+    );
+    expect(result.normalized?.summary).toContain(
+      "MODEL_PROVIDER=kyoso-openrouter",
+    );
+    expect(result.normalized?.summary).toContain(
+      "CODEX_CONFIG_MODEL=openai/o4-mini",
+    );
+    expect(result.normalized?.summary).toContain(
+      "CODEX_CONFIG_OPENROUTER_PRESET=true",
+    );
+    expect(JSON.stringify(result)).not.toContain(key);
+  });
+
+  test("returns a structured failure before spawning an OpenRouter child when the key is missing", async () => {
+    const cwd = await fakeWorkspace();
+    const pidPath = join(cwd, "openrouter-agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      openRouterAcpConfig("happy", { FAKE_ACP_PID_FILE: pidPath }),
+      { PATH: process.env.PATH ?? "" },
+    );
+    let startEvents = 0;
+
+    const result = await manager.runAgent(
+      agentInput(cwd, { onStarted: () => (startEvents += 1) }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "OPENROUTER_KEY_MISSING" },
+    });
+    expect(result.error?.detail).toBeUndefined();
+    expect(startEvents).toBe(0);
+    expect(existsSync(pidPath)).toBe(false);
+  });
+
+  test("keeps a sanitized detail for an unexpected child-environment preflight failure", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"), {});
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        code: "AGENT_CONFIG_INVALID",
+        detail: "PATH is required to launch ACP child agents.",
+      },
+    });
   });
 
   test("keeps malformed ACP output as a completed low-confidence parse fallback", async () => {
@@ -43,13 +140,44 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
   test("classifies immediate ACP child crashes from stderr", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("crash"));
+    let startEvents = 0;
 
-    const result = await manager.runAgent(agentInput(cwd));
+    const result = await manager.runAgent(
+      agentInput(cwd, { onStarted: () => (startEvents += 1) }),
+    );
 
     expect(result.status).toBe("failed");
     expect(result.error?.code).toBe("AUTH_FAILED");
     expect(result.error?.message).toContain("authentication failed");
     expect(result.error?.detail).toContain("auth failed");
+    expect(startEvents).toBe(1);
+  });
+
+  test("does not relabel an unexpected launch error as a preflight failure", async () => {
+    const cwd = await fakeWorkspace();
+    const config = fakeAcpConfig("happy");
+    const manager = new SubprocessAcpAgentManager({
+      ...config,
+      agents: {
+        ...config.agents,
+        codex: {
+          ...config.agents.codex,
+          args: ["\0"],
+        },
+      },
+    });
+    let startEvents = 0;
+
+    const result = await manager.runAgent(
+      agentInput(cwd, { onStarted: () => (startEvents += 1) }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { code: "AGENT_FAILED" },
+    });
+    expect(result.error?.code).not.toBe("AGENT_CONFIG_INVALID");
+    expect(startEvents).toBe(0);
   });
 
   test("forwards codex effort as reasoning_effort before prompting", async () => {
@@ -168,6 +296,24 @@ function fakeAcpConfig(
   };
 }
 
+function openRouterAcpConfig(
+  mode: FakeAcpMode,
+  env: Record<string, string> = {},
+): KyosoConfig {
+  const baseConfig = fakeAcpConfig(mode, env);
+  return {
+    ...baseConfig,
+    agents: {
+      ...baseConfig.agents,
+      codex: {
+        ...baseConfig.agents.codex,
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    },
+  };
+}
+
 async function fakeWorkspace(): Promise<string> {
   const cwd = await mkdtemp(join(tmpdir(), "kyoso-acp-"));
   await mkdir(join(cwd, "context"), { recursive: true });
@@ -205,4 +351,12 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (condition()) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("Timed out waiting for condition");
 }

@@ -1,6 +1,6 @@
 {
   "name": "@kyo-so/cli",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Kyo-so: MCP-native, ACP-powered multi-agent review gates for AI coding workflows.",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -43,6 +43,7 @@
     "lint": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "smoke:openrouter:codex-acp": "bun run src/cli/main.ts openrouter-acp-smoke",
     "plugin:sync": "node scripts/plugin-sync.mjs",
     "plugin:verify": "node scripts/verify-plugin.mjs",
     "plugin:verify:registry": "node scripts/verify-plugin-registry.mjs",

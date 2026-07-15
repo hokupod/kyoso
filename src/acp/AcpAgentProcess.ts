@@ -16,28 +16,72 @@ import type {
   AgentRunResult,
 } from "../core/types.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
-import { buildChildEnv } from "../utils/env.js";
+import { ChildEnvPreflightError, buildChildEnv } from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
 import { normalizeAgentOutput } from "./normalize.js";
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
-  constructor(private readonly config: KyosoConfig) {
+  constructor(
+    private readonly config: KyosoConfig,
+    private readonly parentEnv: NodeJS.ProcessEnv = process.env,
+  ) {
     super();
   }
 
   async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
     const agentConfig = this.config.agents[input.agent];
+    const startedAt = new Date().toISOString();
     if (!agentConfig.enabled) {
       return {
         agent: input.agent,
         role: input.role,
         status: "skipped",
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
+        startedAt,
+        completedAt: startedAt,
       };
     }
 
-    return runSubprocessAgent(input.agent, agentConfig, input);
+    const provider =
+      input.agent === "codex" ? this.config.agents.codex.provider : undefined;
+    let env: NodeJS.ProcessEnv;
+    try {
+      env = buildChildEnv(
+        this.parentEnv,
+        agentConfig.auth.envWhitelist,
+        agentConfig.env,
+        {
+          agent: input.agent,
+          model: agentConfig.model,
+          provider,
+          preferApiKey: agentConfig.auth.preferApiKey,
+        },
+      );
+    } catch (error) {
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "failed",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        error: buildPreflightFailure(error),
+      };
+    }
+
+    try {
+      return await runSubprocessAgent(input.agent, agentConfig, input, env);
+    } catch (error) {
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "failed",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        error: buildAgentFailure(
+          formatAgentErrorDetail(error),
+          "Agent process failed.",
+        ),
+      };
+    }
   }
 }
 
@@ -47,18 +91,9 @@ async function runSubprocessAgent(
   agent: AgentName,
   agentConfig: AgentConfig,
   input: AgentRunInput,
+  env: NodeJS.ProcessEnv,
 ): Promise<AgentRunResult> {
   const startedAt = new Date().toISOString();
-  const env = buildChildEnv(
-    process.env,
-    agentConfig.auth.envWhitelist,
-    agentConfig.env,
-    {
-      agent,
-      model: agentConfig.model,
-      preferApiKey: agentConfig.auth.preferApiKey,
-    },
-  );
 
   return new Promise((resolveResult) => {
     const child = spawn(agentConfig.command, agentConfig.args, {
@@ -70,13 +105,23 @@ async function runSubprocessAgent(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let startedWrite: Promise<void> | undefined;
+    child.once("spawn", () => {
+      if (settled) return;
+      startedWrite = Promise.resolve()
+        .then(() => input.onStarted?.())
+        .catch(() => undefined);
+    });
+
     const abortController = new AbortController();
 
     const resolveOnce = (result: AgentRunResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      resolveResult(result);
+      void (startedWrite ?? Promise.resolve()).then(() =>
+        resolveResult(result),
+      );
     };
 
     const timeout = setTimeout(() => {
@@ -381,6 +426,26 @@ function buildAgentFailure(
   return {
     code,
     message: safeAgentFailureMessage(code, fallbackMessage),
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function buildPreflightFailure(error: unknown): {
+  code: string;
+  message: string;
+  detail?: string;
+} {
+  if (error instanceof ChildEnvPreflightError) {
+    return {
+      code: error.code,
+      message: error.message,
+    };
+  }
+  const detail = sanitizeTextForDisplay(formatAgentErrorDetail(error));
+  return {
+    code: "AGENT_CONFIG_INVALID",
+    message:
+      "Agent configuration is invalid. Run kyoso doctor and check agent configuration.",
     ...(detail ? { detail } : {}),
   };
 }

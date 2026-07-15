@@ -10,6 +10,8 @@ export type FakeAgentScenario =
   | "markdown_json"
   | "timeout"
   | "malformed"
+  | "preflight_failure"
+  | "openrouter_key_missing"
   | "auth_failure"
   | "permission_request"
   | "write_attempt";
@@ -48,6 +50,7 @@ export class FakeAgentManager extends BaseAcpAgentManager {
     this.calls.push(input);
     const startedAt = new Date().toISOString();
     if (input.role === "finding_verifier") {
+      await input.onStarted?.();
       return verifierResult(
         input,
         startedAt,
@@ -56,6 +59,31 @@ export class FakeAgentManager extends BaseAcpAgentManager {
     }
 
     const scenario = this.scenarios[input.agent] ?? "success";
+
+    if (
+      scenario === "preflight_failure" ||
+      scenario === "openrouter_key_missing"
+    ) {
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "failed",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        error: {
+          code:
+            scenario === "openrouter_key_missing"
+              ? "OPENROUTER_KEY_MISSING"
+              : "AGENT_CONFIG_INVALID",
+          message:
+            scenario === "openrouter_key_missing"
+              ? "Fake OpenRouter key is missing."
+              : "Fake agent configuration is invalid.",
+        },
+      };
+    }
+
+    await input.onStarted?.();
 
     if (scenario === "timeout") {
       return {

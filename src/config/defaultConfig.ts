@@ -18,6 +18,7 @@ export const defaultConfig: KyosoConfigInput = {
       args: ["-y", "@agentclientprotocol/codex-acp@1.1.2"],
       role: "implementation_reviewer",
       timeoutMs: 120_000,
+      allowProjectProvider: [],
       env: {
         INITIAL_AGENT_MODE: "read-only",
         KYOSO_CHILD_AGENT: "1",

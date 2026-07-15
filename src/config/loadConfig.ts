@@ -1,11 +1,14 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { stderr, stdin } from "node:process";
-import { extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { z } from "zod";
 import { defaultConfig } from "./defaultConfig.js";
 import { flattenLeaves, mergeProjectTomlConfig } from "./projectScope.js";
 import {
+  CODEX_DEFAULT_PROVIDER,
+  CODEX_OPENROUTER_PROVIDER,
   kyosoConfigKnownLeafPaths,
   kyosoConfigRecordPrefixes,
   kyosoConfigSecuritySensitivePrefixes,
@@ -52,6 +55,57 @@ export type LoadedConfig = {
   warnings: string[];
 };
 
+type ProjectConfigIdentity = {
+  requestedPath: string;
+  canonicalPath: string;
+  canonicalDirectory: string;
+};
+
+export type ConfigValidationContext = {
+  source?: LoadedConfigSource;
+  projectTsExecuted: boolean;
+};
+
+const configValidationContexts = new WeakMap<
+  z.ZodError,
+  ConfigValidationContext
+>();
+
+export function getConfigValidationContext(
+  error: unknown,
+): ConfigValidationContext | undefined {
+  return error instanceof z.ZodError
+    ? configValidationContexts.get(error)
+    : undefined;
+}
+
+export class ProjectOpenRouterAuthorizationError extends Error {
+  readonly code = "PROJECT_OPENROUTER_AUTHORIZATION_REQUIRED";
+  readonly projectPath: string;
+  readonly projectDirectory: string;
+  readonly layer: "project_toml" | "project_ts";
+  readonly globalConfigPath: string;
+
+  constructor(input: {
+    projectPath: string;
+    projectDirectory: string;
+    layer: "project_toml" | "project_ts";
+    globalConfigPath: string;
+  }) {
+    const projectPath = sanitizeWarningText(input.projectPath);
+    const projectDirectory = sanitizeWarningText(input.projectDirectory);
+    const globalConfigPath = sanitizeWarningText(input.globalConfigPath);
+    super(
+      `Project config ${projectPath} changes Codex OpenRouter routing, but its directory ${projectDirectory} is not in the user-global allowlist. Add ${JSON.stringify(projectDirectory)} to agents.codex.allowProjectProvider in ${globalConfigPath} to permit project-level external provider routing.`,
+    );
+    this.name = "ProjectOpenRouterAuthorizationError";
+    this.projectPath = projectPath;
+    this.projectDirectory = projectDirectory;
+    this.layer = input.layer;
+    this.globalConfigPath = globalConfigPath;
+  }
+}
+
 const KNOWN_GLOBAL_CONFIG_LEAF_PATHS = new Set(kyosoConfigKnownLeafPaths);
 const GLOBAL_CONFIG_RECORD_PREFIXES = kyosoConfigRecordPrefixes.map((path) =>
   path.split("."),
@@ -96,13 +150,15 @@ export async function loadConfig(
 
     if (options.configPath) {
       const explicitConfigPath = resolve(cwd, options.configPath);
-      if (!(await exists(explicitConfigPath))) {
+      const projectConfig =
+        await resolveProjectConfigIdentity(explicitConfigPath);
+      if (!projectConfig) {
         throw new Error(
           `Config file not found: ${explicitConfigPath} (from --config)`,
         );
       }
       const loaded = await loadProjectConfig({
-        configPath: explicitConfigPath,
+        projectConfig,
         baseConfig: mergedConfig,
         globalConfigPath,
         options,
@@ -116,25 +172,31 @@ export async function loadConfig(
     } else {
       const projectTomlPath = resolve(cwd, "kyoso.toml");
       const projectTsPath = resolve(cwd, "kyoso.config.ts");
-      const hasProjectToml = await exists(projectTomlPath);
-      const hasProjectTs = await exists(projectTsPath);
-      if (hasProjectToml) {
-        mergedConfig = mergeProjectTomlConfig(
-          mergedConfig,
-          await loadTomlConfigFile(projectTomlPath),
-          { projectPath: projectTomlPath, globalConfigPath },
-        );
-        configPath = projectTomlPath;
-        sources.push({ path: projectTomlPath, layer: "project_toml" });
-        if (hasProjectTs) {
+      const projectToml = await resolveProjectConfigIdentity(projectTomlPath);
+      const projectTs = await resolveProjectConfigIdentity(projectTsPath);
+      if (projectToml) {
+        const loaded = await loadProjectConfig({
+          projectConfig: projectToml,
+          baseConfig: mergedConfig,
+          globalConfigPath,
+          options,
+        });
+        mergedConfig = loaded.mergedConfig;
+        configPath = loaded.configPath;
+        configHash = loaded.configHash;
+        configTrustStatus = loaded.configTrustStatus;
+        sources.push(loaded.source);
+        warnings.push(...loaded.warnings);
+        if (projectTs) {
           warnings.push(
             `kyoso.config.ts was ignored because kyoso.toml takes precedence: ${projectTsPath}`,
           );
         }
-      } else if (hasProjectTs) {
+      } else if (projectTs) {
         const loaded = await loadProjectTsConfig({
-          configPath: projectTsPath,
+          projectConfig: projectTs,
           baseConfig: mergedConfig,
+          globalConfigPath,
           options,
         });
         mergedConfig = loaded.mergedConfig;
@@ -147,9 +209,19 @@ export async function loadConfig(
     }
   }
 
-  const parsed = kyosoConfigSchema.parse(mergedConfig);
+  const parsed = kyosoConfigSchema.safeParse(mergedConfig);
+  if (!parsed.success) {
+    const source = sources.at(-1);
+    configValidationContexts.set(parsed.error, {
+      source,
+      projectTsExecuted:
+        source?.layer === "project_ts" &&
+        isTrustedProjectConfigExecution(configTrustStatus),
+    });
+    throw parsed.error;
+  }
   return {
-    config: parsed,
+    config: parsed.data,
     configPath,
     configHash,
     configTrustStatus,
@@ -235,7 +307,7 @@ function pathStartsWith(path: string[], prefix: string[]): boolean {
 }
 
 async function loadProjectConfig(input: {
-  configPath: string;
+  projectConfig: ProjectConfigIdentity;
   baseConfig: unknown;
   globalConfigPath: string;
   options: LoadConfigOptions;
@@ -247,34 +319,202 @@ async function loadProjectConfig(input: {
   source: LoadedConfigSource;
   warnings: string[];
 }> {
-  const extension = extname(input.configPath);
+  const { canonicalDirectory, canonicalPath, requestedPath } =
+    input.projectConfig;
+  const extension = extname(requestedPath);
   if (extension === ".toml") {
+    const projectTomlConfig = await loadTomlConfigFile(canonicalPath);
+    const projectChangesOpenRouterRoute = projectConfigChangesOpenRouterRoute(
+      projectTomlConfig,
+      input.baseConfig,
+    );
+    await assertProjectOpenRouterAuthorization({
+      projectConfig: projectTomlConfig,
+      projectPath: requestedPath,
+      projectDirectory: canonicalDirectory,
+      layer: "project_toml",
+      baseConfig: input.baseConfig,
+      globalConfigPath: input.globalConfigPath,
+    });
+    const projectMergedConfig = mergeProjectTomlConfig(
+      input.baseConfig,
+      projectTomlConfig,
+      {
+        projectPath: requestedPath,
+        globalConfigPath: input.globalConfigPath,
+      },
+    );
     return {
-      mergedConfig: mergeProjectTomlConfig(
+      mergedConfig: applyProjectCodexProviderReset(
         input.baseConfig,
-        await loadTomlConfigFile(input.configPath),
-        {
-          projectPath: input.configPath,
-          globalConfigPath: input.globalConfigPath,
-        },
+        projectTomlConfig,
+        projectMergedConfig,
       ),
-      configPath: input.configPath,
+      configPath: requestedPath,
       configTrustStatus: "not_found",
-      source: { path: input.configPath, layer: "project_toml" },
-      warnings: [],
+      source: { path: requestedPath, layer: "project_toml" },
+      warnings: projectChangesOpenRouterRoute
+        ? [openRouterProjectConfigWarning(requestedPath)]
+        : [],
     };
   }
   if (extension === ".ts") {
     return await loadProjectTsConfig(input);
   }
   throw new Error(
-    `Unsupported config file extension for ${input.configPath}. Expected .toml or .ts.`,
+    `Unsupported config file extension for ${requestedPath}. Expected .toml or .ts.`,
   );
 }
 
-async function loadProjectTsConfig(input: {
-  configPath: string;
+function projectConfigSelectsOpenRouter(config: unknown): boolean {
+  return flattenLeaves(config).some(
+    (leaf) =>
+      leaf.path.join(".") === "agents.codex.provider" &&
+      leaf.value === CODEX_OPENROUTER_PROVIDER,
+  );
+}
+
+function projectConfigSelectsDefaultProvider(config: unknown): boolean {
+  return flattenLeaves(config).some(
+    (leaf) =>
+      leaf.path.join(".") === "agents.codex.provider" &&
+      leaf.value === CODEX_DEFAULT_PROVIDER,
+  );
+}
+
+function projectConfigSuppliesCodexModel(config: unknown): boolean {
+  return flattenLeaves(config).some(
+    (leaf) => leaf.path.join(".") === "agents.codex.model",
+  );
+}
+
+function projectConfigChangesOpenRouterRoute(
+  projectConfig: unknown,
+  baseConfig: unknown,
+): boolean {
+  return (
+    projectConfigSelectsOpenRouter(projectConfig) ||
+    (configSelectsOpenRouter(baseConfig) &&
+      projectConfigSuppliesCodexModel(projectConfig) &&
+      !projectConfigSelectsDefaultProvider(projectConfig))
+  );
+}
+
+function configSelectsOpenRouter(config: unknown): boolean {
+  return flattenLeaves(config).some(
+    (leaf) =>
+      leaf.path.join(".") === "agents.codex.provider" &&
+      leaf.value === CODEX_OPENROUTER_PROVIDER,
+  );
+}
+
+export function applyProjectCodexProviderReset(
+  baseConfig: unknown,
+  projectConfig: unknown,
+  mergedConfig: unknown,
+): unknown {
+  if (
+    !projectConfigSelectsDefaultProvider(projectConfig) ||
+    projectConfigSuppliesCodexModel(projectConfig) ||
+    !configSelectsOpenRouter(baseConfig) ||
+    !isRecord(mergedConfig) ||
+    !isRecord(mergedConfig.agents) ||
+    !isRecord(mergedConfig.agents.codex)
+  ) {
+    return mergedConfig;
+  }
+
+  const codexWithoutInheritedModel = Object.fromEntries(
+    Object.entries(mergedConfig.agents.codex).filter(
+      ([key]) => key !== "model",
+    ),
+  );
+  return {
+    ...mergedConfig,
+    agents: {
+      ...mergedConfig.agents,
+      codex: codexWithoutInheritedModel,
+    },
+  };
+}
+
+function openRouterProjectConfigWarning(configPath: string): string {
+  return `Project config ${sanitizeWarningText(configPath)} changes Codex OpenRouter routing under user-global authorization; it can route Codex review content through OpenRouter.`;
+}
+
+async function assertProjectOpenRouterAuthorization(input: {
+  projectConfig: unknown;
+  projectPath: string;
+  projectDirectory: string;
+  layer: "project_toml" | "project_ts";
   baseConfig: unknown;
+  globalConfigPath: string;
+}): Promise<void> {
+  if (
+    !projectConfigChangesOpenRouterRoute(input.projectConfig, input.baseConfig)
+  ) {
+    return;
+  }
+
+  if (
+    await projectProviderIsAuthorized(input.baseConfig, input.projectDirectory)
+  ) {
+    return;
+  }
+
+  throw new ProjectOpenRouterAuthorizationError({
+    projectPath: input.projectPath,
+    projectDirectory: input.projectDirectory,
+    layer: input.layer,
+    globalConfigPath: input.globalConfigPath,
+  });
+}
+
+async function projectProviderIsAuthorized(
+  config: unknown,
+  projectDirectory: string,
+): Promise<boolean> {
+  if (!isRecord(config)) return false;
+  const agents = config.agents;
+  if (!isRecord(agents)) return false;
+  const codex = agents.codex;
+  if (!isRecord(codex) || !Array.isArray(codex.allowProjectProvider)) {
+    return false;
+  }
+
+  for (const directory of codex.allowProjectProvider) {
+    if (typeof directory !== "string" || !isAbsolute(directory)) continue;
+    const allowedDirectory = await existingRealpath(directory);
+    if (allowedDirectory === projectDirectory) return true;
+  }
+  return false;
+}
+
+async function resolveProjectConfigIdentity(
+  requestedPath: string,
+): Promise<ProjectConfigIdentity | undefined> {
+  const canonicalPath = await existingRealpath(requestedPath);
+  return canonicalPath === undefined
+    ? undefined
+    : {
+        requestedPath,
+        canonicalPath,
+        canonicalDirectory: dirname(canonicalPath),
+      };
+}
+
+async function existingRealpath(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadProjectTsConfig(input: {
+  projectConfig: ProjectConfigIdentity;
+  baseConfig: unknown;
+  globalConfigPath: string;
   options: LoadConfigOptions;
 }): Promise<{
   mergedConfig: unknown;
@@ -284,52 +524,82 @@ async function loadProjectTsConfig(input: {
   source: LoadedConfigSource;
   warnings: string[];
 }> {
+  const { canonicalDirectory, canonicalPath, requestedPath } =
+    input.projectConfig;
   const warnings = [
     'kyoso.config.ts is deprecated; migrate to kyoso.toml (see README "Configuration")',
   ];
-  const source = await readFile(input.configPath, "utf8");
+  const source = await readFile(canonicalPath, "utf8");
   const configHash = hashConfigSource(source);
   const trustStorePath =
     input.options.trustStorePath ??
     defaultTrustedConfigStorePath(input.options.env);
   const trusted = await isTrustedConfig(
     trustStorePath,
-    input.configPath,
+    canonicalPath,
     configHash,
   );
   const trustDecision = await resolveTrustDecision({
-    configPath: input.configPath,
+    configPath: requestedPath,
     configHash,
     trusted,
     options: input.options,
   });
 
   if (trustDecision.execute) {
-    const userConfig = await loadUserConfig(input.configPath, source);
+    const userConfig = await loadUserConfig(canonicalPath, source);
+    const projectChangesOpenRouterRoute = projectConfigChangesOpenRouterRoute(
+      userConfig,
+      input.baseConfig,
+    );
+    await assertProjectOpenRouterAuthorization({
+      projectConfig: userConfig,
+      projectPath: requestedPath,
+      projectDirectory: canonicalDirectory,
+      layer: "project_ts",
+      baseConfig: input.baseConfig,
+      globalConfigPath: input.globalConfigPath,
+    });
     if (trustDecision.shouldPersist) {
-      await trustConfig(trustStorePath, input.configPath, configHash);
+      await trustConfig(trustStorePath, canonicalPath, configHash);
+    }
+    const projectMergedConfig = deepMerge(input.baseConfig, userConfig);
+    if (projectChangesOpenRouterRoute) {
+      warnings.push(openRouterProjectConfigWarning(requestedPath));
     }
     return {
-      mergedConfig: deepMerge(input.baseConfig, userConfig),
-      configPath: input.configPath,
+      mergedConfig: applyProjectCodexProviderReset(
+        input.baseConfig,
+        userConfig,
+        projectMergedConfig,
+      ),
+      configPath: requestedPath,
       configHash,
       configTrustStatus: trustDecision.status,
-      source: { path: input.configPath, layer: "project_ts" },
+      source: { path: requestedPath, layer: "project_ts" },
       warnings,
     };
   }
 
   warnings.push(
-    `untrusted config was not executed: ${input.configPath}; run \`kyoso doctor --trust-config\` or pass \`--trust-config\` once to trust it`,
+    `untrusted config was not executed: ${requestedPath}; run \`kyoso doctor --trust-config\` or pass \`--trust-config\` once to trust it`,
   );
   return {
     mergedConfig: input.baseConfig,
-    configPath: input.configPath,
+    configPath: requestedPath,
     configHash,
     configTrustStatus: trustDecision.status,
-    source: { path: input.configPath, layer: "project_ts" },
+    source: { path: requestedPath, layer: "project_ts" },
     warnings,
   };
+}
+
+function isTrustedProjectConfigExecution(status: ConfigTrustStatus): boolean {
+  return (
+    status === "trusted" ||
+    status === "trusted_by_flag" ||
+    status === "trusted_interactively"
+  );
 }
 
 async function loadUserConfig(

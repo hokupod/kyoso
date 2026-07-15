@@ -107,10 +107,11 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         path: join(process.cwd(), "src/foo.ts"),
       },
     );
+    const codexConfig = readCodexConfigMetadata();
     const baseSummary =
       manifest.content.includes("review plan") &&
       selectedFile.content.includes("export const foo = 1")
-        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; CODEX_CONFIG=${process.env.CODEX_CONFIG ?? ""}`
+        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; OPENROUTER_API_KEY_PRESENT=${hasEnv("OPENROUTER_API_KEY")}; MODEL_PROVIDER=${process.env.MODEL_PROVIDER ?? ""}; CODEX_CONFIG_MODEL=${codexConfig.model}; CODEX_CONFIG_OPENROUTER_PRESET=${codexConfig.hasOpenRouterPreset}`
         : "fake ACP subprocess reviewed the prompt";
     const opinion = {
       summary: receivedConfigOption
@@ -171,4 +172,32 @@ function findingIdsFromPrompt(prompt: string): string[] {
   return Array.from(prompt.matchAll(/^Finding ID: (.+)$/gm)).map(
     (match) => match[1] ?? "",
   );
+}
+
+function hasEnv(key: string): boolean {
+  return (process.env[key]?.trim().length ?? 0) > 0;
+}
+
+function readCodexConfigMetadata(): {
+  model: string;
+  hasOpenRouterPreset: boolean;
+} {
+  const raw = process.env.CODEX_CONFIG;
+  if (!raw) return { model: "", hasOpenRouterPreset: false };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed)) return { model: "", hasOpenRouterPreset: false };
+    const providers = parsed.model_providers;
+    return {
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      hasOpenRouterPreset:
+        isRecord(providers) && isRecord(providers["kyoso-openrouter"]),
+    };
+  } catch {
+    return { model: "", hasOpenRouterPreset: false };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

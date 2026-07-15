@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -66,6 +67,455 @@ describe("doctor integration modes", () => {
       },
     );
   }
+
+  test("reports OpenRouter key presence without leaking its value", async () => {
+    const context = await doctorFixture();
+    const fakeKey = "openrouter-test-key-must-not-appear";
+    await mkdir(join(context.home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(context.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(context.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      '[agents.codex]\nprovider = "openrouter"\nmodel = "openai/o4-mini"\n',
+      "utf8",
+    );
+
+    const detected = await runDoctor({
+      cwd: context.cwd,
+      env: { ...context.env, OPENROUTER_API_KEY: fakeKey },
+      pluginInspector: () => pluginUnsupported,
+    });
+    const missing = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(detected).toContain("provider: openrouter");
+    expect(detected).toContain("model: openai/o4-mini");
+    expect(detected).toContain("auth: detected OPENROUTER_API_KEY");
+    expect(detected).toContain(
+      "can route Codex review content through OpenRouter",
+    );
+    expect(detected).not.toContain(fakeKey);
+    expect(missing).toContain(
+      "warning: OPENROUTER_API_KEY is not visible to the Kyoso process",
+    );
+    expect(missing).toContain("restart the client, then run `kyoso doctor`");
+    expect(missing).not.toContain(fakeKey);
+
+    await writeFile(
+      join(context.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(context.cwd)}]
+
+[agents.codex.env]
+OPENROUTER_API_KEY = "openrouter-configured-test-key"
+`,
+      "utf8",
+    );
+    const configured = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(configured).toContain(
+      "auth: detected OPENROUTER_API_KEY from agents.codex.env",
+    );
+    expect(configured).not.toContain("openrouter-configured-test-key");
+
+    const placeholderContext = await doctorFixture();
+    await mkdir(join(placeholderContext.home, ".config", "kyoso"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(placeholderContext.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(placeholderContext.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(placeholderContext.cwd, "kyoso.toml"),
+      '[agents.codex]\nprovider = "openrouter"\nmodel = "openai/o4-mini"\n',
+      "utf8",
+    );
+    const placeholder = await runDoctor({
+      cwd: placeholderContext.cwd,
+      env: {
+        ...placeholderContext.env,
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+      },
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(placeholder).toContain(
+      "warning: OPENROUTER_API_KEY placeholder was not expanded by the client",
+    );
+  });
+
+  test("sanitizes a project OpenRouter model before rendering doctor output", async () => {
+    const context = await doctorFixture();
+    await mkdir(join(context.home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(context.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(context.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini\\u001b[31m\\nforged"
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("model: openai/o4-mini forged");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("model: openai/o4-mini\nforged");
+  });
+
+  test("keeps doctor best-effort for schema-invalid Codex provider and model config", async () => {
+    const cases = [
+      {
+        config: '[agents.codex]\nprovider = "unsupported-provider"\n',
+        issuePath: "agents.codex.provider",
+      },
+      {
+        config: '[agents.codex]\nprovider = "openrouter"\nmodel = ""\n',
+        issuePath: "agents.codex.model",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const context = await doctorFixture();
+      const globalConfigDir = join(context.home, ".config", "kyoso");
+      const globalConfigPath = join(globalConfigDir, "config.toml");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(globalConfigPath, testCase.config, "utf8");
+
+      const output = await runDoctor({
+        cwd: context.cwd,
+        env: context.env,
+        pluginInspector: () => pluginUnsupported,
+      });
+
+      expect(output).toContain("Kyoso doctor");
+      expect(output).toContain(
+        "warning: invalid Codex OpenRouter configuration:",
+      );
+      expect(output).toContain(testCase.issuePath);
+      expect(output).toContain(
+        "Doctor is using safe defaults for diagnostics.",
+      );
+      expect(output).toContain(
+        'hint: set agents.codex.provider = "openrouter" with a non-empty agents.codex.model',
+      );
+      expect(output).toContain(
+        "global config.toml: not applied in safe-default diagnostics",
+      );
+      expect(output).toContain(
+        "kyoso.toml: not applied in safe-default diagnostics",
+      );
+      expect(output).toContain(
+        "kyoso.config.ts: not applied in safe-default diagnostics",
+      );
+      expect(output).not.toContain(
+        `global config.toml: not applied after validation failure; check ${globalConfigPath}`,
+      );
+    }
+  });
+
+  test("marks fallback agent diagnostics as safe defaults and suppresses command migration hints", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      '[agents.codex]\nprovider = "unsupported-provider"\n',
+      "utf8",
+    );
+    await createExecutable(join(context.bin, "bunx"));
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain(
+      "note: user-global config is not reflected; all agent diagnostics below use safe defaults.",
+    );
+    expect(output).toContain("Codex: warning command not found");
+    expect(output).toContain(
+      "command: npx -y @agentclientprotocol/codex-acp@1.1.2",
+    );
+    expect(output).not.toContain(
+      'hint: set agents.<name>.command = "bunx" in config.toml',
+    );
+  });
+
+  test("keeps doctor best-effort for legacy and relative project provider allowlists", async () => {
+    const cases = [
+      {
+        config: "[agents.codex]\nallowProjectProvider = true\n",
+        issuePath: "agents.codex.allowProjectProvider",
+      },
+      {
+        config: '[agents.codex]\nallowProjectProvider = ["."]\n',
+        issuePath: "agents.codex.allowProjectProvider.0",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const context = await doctorFixture();
+      const globalConfigDir = join(context.home, ".config", "kyoso");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(
+        join(globalConfigDir, "config.toml"),
+        testCase.config,
+        "utf8",
+      );
+
+      const output = await runDoctor({
+        cwd: context.cwd,
+        env: context.env,
+        pluginInspector: () => pluginUnsupported,
+      });
+
+      expect(output).toContain("Kyoso doctor");
+      expect(output).toContain(
+        "warning: invalid Codex OpenRouter configuration:",
+      );
+      expect(output).toContain(testCase.issuePath);
+      expect(output).toContain(
+        "Doctor is using safe defaults for diagnostics.",
+      );
+      expect(output).toContain(
+        "hint: migrate user-global agents.codex.allowProjectProvider to an absolute directory string[] for exact matching",
+      );
+      expect(output).toContain(
+        'allowProjectProvider = ["/absolute/project-directory"]',
+      );
+      expect(output).toContain(
+        "global config.toml: not applied in safe-default diagnostics",
+      );
+    }
+  });
+
+  test("keeps doctor best-effort for mixed OpenRouter and unrelated schema errors", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      `[agents.codex]
+provider = "unsupported-provider"
+
+[workspace]
+maxContextBytes = 0
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("Kyoso doctor");
+    expect(output).toContain(
+      "warning: invalid Codex OpenRouter configuration:",
+    );
+    expect(output).toContain("agents.codex.provider");
+    expect(output).toContain("workspace.maxContextBytes");
+    expect(output).toContain(
+      "global config.toml: not applied in safe-default diagnostics",
+    );
+  });
+
+  test("keeps doctor best-effort for an unauthorized project OpenRouter selection", async () => {
+    const context = await doctorFixture();
+    const projectDirectory = await realpath(context.cwd);
+    const globalConfigPath = join(
+      context.home,
+      ".config",
+      "kyoso",
+      "config.toml",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      '[agents.codex]\nprovider = "openrouter"\nmodel = "openai/o4-mini"\n',
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("Kyoso doctor");
+    expect(output).toContain(
+      `warning: project config ${join(context.cwd, "kyoso.toml")} changes Codex OpenRouter routing without user-global authorization.`,
+    );
+    expect(output).toContain("Doctor is using safe defaults for diagnostics.");
+    expect(output).toContain(
+      `hint: add the exact project directory ${JSON.stringify(projectDirectory)} to agents.codex.allowProjectProvider in user-global ${globalConfigPath} (for a new list: allowProjectProvider = [${JSON.stringify(projectDirectory)}]), then run \`kyoso doctor\` again`,
+    );
+    expect(output).toContain(
+      "global config.toml: not applied in safe-default diagnostics",
+    );
+    expect(output).toContain(
+      `kyoso.toml: not applied after validation failure; check ${join(context.cwd, "kyoso.toml")}`,
+    );
+    expect(output).not.toContain(
+      `global config.toml: not applied after validation failure; check ${globalConfigPath}`,
+    );
+    expect(output).not.toContain("provider: openrouter");
+  });
+
+  test("reports the actual trusted legacy config that lacks OpenRouter authorization", async () => {
+    const context = await doctorFixture();
+    const configPath = join(context.cwd, "kyoso.config.ts");
+    const trustStorePath = join(context.cwd, "trusted-configs.json");
+    await writeFile(
+      configPath,
+      `export default {
+  agents: {
+    codex: {
+      provider: "openrouter",
+      model: "openai/o4-mini",
+    },
+  },
+};
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      trustConfig: true,
+      trustStorePath,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain(
+      `warning: project config ${configPath} changes Codex OpenRouter routing without user-global authorization.`,
+    );
+    expect(output).toContain(
+      `kyoso.config.ts: not applied after validation failure; check ${configPath}`,
+    );
+    expect(output).toContain(
+      "kyoso.toml: not applied in safe-default diagnostics",
+    );
+    expect(output).toContain(
+      "trusted config: executed but not applied after authorization failure",
+    );
+  });
+
+  test("reports trusted legacy config execution after its OpenRouter validation fails", async () => {
+    const context = await doctorFixture();
+    const configPath = join(context.cwd, "kyoso.config.ts");
+    const trustStorePath = join(context.cwd, "trusted-configs.json");
+    await mkdir(join(context.home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(context.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(context.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      configPath,
+      `export default {
+  agents: {
+    codex: {
+      provider: "openrouter",
+    },
+  },
+};
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      trustConfig: true,
+      trustStorePath,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain(
+      "warning: invalid Codex OpenRouter configuration:",
+    );
+    expect(output).toContain("agents.codex.model");
+    expect(output).toContain(
+      `kyoso.config.ts: not applied after validation failure; check ${configPath}`,
+    );
+    expect(output).toContain(
+      "trusted config: executed but not applied after validation failure",
+    );
+    expect(output).not.toContain(
+      "trusted config: not evaluated after validation failure",
+    );
+  });
+
+  test("preserves doctor failures for unrelated schema-invalid config", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      "[workspace]\nmaxContextBytes = 0\n",
+      "utf8",
+    );
+
+    await expect(
+      runDoctor({
+        cwd: context.cwd,
+        env: context.env,
+        pluginInspector: () => pluginUnsupported,
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("does not treat an ordinary Codex model type error as an OpenRouter fallback", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      "[agents.codex]\nmodel = 42\n",
+      "utf8",
+    );
+
+    await expect(
+      runDoctor({
+        cwd: context.cwd,
+        env: context.env,
+        pluginInspector: () => pluginUnsupported,
+      }),
+    ).rejects.toThrow();
+  });
 
   test("uses CODEX_HOME for the Codex MCP and HOME for the user Skill", async () => {
     const context = await doctorFixture();

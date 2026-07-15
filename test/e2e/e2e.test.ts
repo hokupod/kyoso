@@ -28,6 +28,7 @@ describe("e2e surfaces", () => {
     expect(stdout).toContain(
       "setup codex|claude-code --skill-only [--write] [--global] [--force]",
     );
+    expect(stdout).toContain("[--with-openrouter]");
   });
 
   test("CLI parses --skill-only without producing an MCP step", async () => {
@@ -94,6 +95,7 @@ describe("e2e surfaces", () => {
       ["setup", "--skill-only"],
       ["setup", "codex", "--skill-only", "--runner", "npx"],
       ["setup", "codex", "--skill-only", "--command", "node server.js"],
+      ["setup", "codex", "--skill-only", "--with-openrouter"],
     ]) {
       const invalid = Bun.spawn(
         ["bun", "run", join(process.cwd(), "src/cli/main.ts"), ...args],
@@ -110,7 +112,9 @@ describe("e2e surfaces", () => {
           ? "cannot be combined with --runner"
           : args.includes("--command")
             ? "cannot be combined with --command"
-            : "requires setup client",
+            : args.includes("--with-openrouter")
+              ? "cannot be combined with --with-openrouter"
+              : "requires setup client",
       );
     }
   });

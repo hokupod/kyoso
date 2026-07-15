@@ -12,9 +12,9 @@ export const MINIMUM_SUPPORTED_CODEX_VERSION = "0.144.0-alpha.4";
 
 export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
   distribution: {
-    pluginVersion: "0.3.1",
+    pluginVersion: "0.4.0",
     mcpCommand: "npx",
-    mcpPackagePin: "@kyo-so/cli@0.9.1",
+    mcpPackagePin: "@kyo-so/cli@0.10.0",
   },
   marketplace: {
     name: "kyoso",
@@ -42,6 +42,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
         "CODEX_API_KEY",
         "CODEX_HOME",
         "CODEX_ACCESS_TOKEN",
+        "OPENROUTER_API_KEY",
         "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
       ],
@@ -58,6 +59,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
         "CODEX_API_KEY",
         "CODEX_HOME",
         "CODEX_ACCESS_TOKEN",
+        "OPENROUTER_API_KEY",
         "ANTHROPIC_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
       ],
@@ -104,6 +106,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
       OPENAI_API_KEY: true,
       CODEX_API_KEY: true,
       CODEX_ACCESS_TOKEN: true,
+      OPENROUTER_API_KEY: true,
       ANTHROPIC_API_KEY: true,
       CLAUDE_CODE_OAUTH_TOKEN: true,
     },

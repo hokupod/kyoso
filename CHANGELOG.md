@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Promote the Marketplace Plugin to `0.4.0`, pin its Codex and Claude Code MCP
+  definitions to `@kyo-so/cli@0.10.0`, and allow clients to forward
+  `OPENROUTER_API_KEY` by name for the existing OpenRouter project opt-in.
+
 ## [0.10.0] - 2026-07-15
 
 ### Added

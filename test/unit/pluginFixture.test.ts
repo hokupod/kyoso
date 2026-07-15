@@ -20,6 +20,9 @@ describe("Codex Plugin fixture", () => {
     const manifest = await readJson(
       join(root, "plugins", "kyoso", ".codex-plugin", "plugin.json"),
     );
+    const claudeManifest = await readJson(
+      join(root, "plugins", "kyoso", ".claude-plugin", "plugin.json"),
+    );
     const mcp = await readJson(
       join(root, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
     );
@@ -57,12 +60,16 @@ describe("Codex Plugin fixture", () => {
           "CODEX_API_KEY",
           "CODEX_HOME",
           "CODEX_ACCESS_TOKEN",
+          "OPENROUTER_API_KEY",
           "ANTHROPIC_API_KEY",
           "CLAUDE_CODE_OAUTH_TOKEN",
         ],
         startup_timeout_sec: 20,
         tool_timeout_sec: 360,
       },
+    });
+    expect(claudeManifest.mcpServers.kyoso.env).toEqual({
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
     });
     expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+/);
   });
@@ -447,6 +454,15 @@ describe("Codex Plugin fixture", () => {
                 "Claude plugin MCP env has unsupported variable: PATH",
               ],
             },
+            {
+              name: "literal Claude MCP credential",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.env.OPENROUTER_API_KEY = "literal";
+              },
+              expected: [
+                "Claude plugin MCP env OPENROUTER_API_KEY must forward",
+              ],
+            },
           ];
 
           for (const scenario of scenarios) {
@@ -512,12 +528,6 @@ describe("Codex Plugin fixture", () => {
             cpSync("package.json", join(fixture, "package.json"));
             cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
-            const claudeManifestPath = join(fixture, "plugins", "kyoso", ".claude-plugin", "plugin.json");
-            const claudeManifest = JSON.parse(readFileSync(claudeManifestPath, "utf8"));
-            claudeManifest.mcpServers.kyoso.env = {
-              OPENAI_API_KEY: "$" + "{OPENAI_API_KEY}",
-            };
-            writeFileSync(claudeManifestPath, JSON.stringify(claudeManifest));
             const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
             const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));

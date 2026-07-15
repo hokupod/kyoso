@@ -50,11 +50,11 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 
 PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
 
-`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、利用者が管理するクライアント登録テンプレートであり、Marketplace Plugin の manifest を変更・定義するものではありません。Stage A では同 manifest の公開済み CLI pin と環境契約を固定し、変更は Stage B の promotion でのみ行います。
+`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Marketplace Plugin `0.4.0` は `@kyo-so/cli@0.10.0` へpinしています。
 
 PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
 
-次回のPlugin promotionまでは、公開済みMarketplace Pluginは`OPENROUTER_API_KEY`を転送しません。OpenRouterのproject opt-inには、manual MCP registrationを伴うCLI／source経路を使ってください。この制約はpromotion後に対応Plugin versionの記載へ置き換えます。
+Marketplace Plugin `0.4.0` はMCP processへ`OPENROUTER_API_KEY`の変数名を公開しますが、credential値は保存しません。KyosoはOpenRouterを明示選択したCodex childだけへ値を転送し、展開されていないplaceholderは未設定として扱います。
 
 #### CLI＋Skill-only
 

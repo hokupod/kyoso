@@ -111,7 +111,7 @@ export const defaultConfig: KyosoConfigInput = {
     },
   },
   judge: {
-    mode: "deterministic_plus_llm",
+    mode: "deterministic_only",
     provider: "auto",
     timeoutMs: 60_000,
   },
@@ -120,6 +120,13 @@ export const defaultConfig: KyosoConfigInput = {
     maxFindings: 5,
     timeoutMs: 90_000,
     allowDemotion: false,
+  },
+  reviewBudget: {
+    maxModelCalls: 4,
+    maxTotalWallTimeMs: 480_000,
+    maxAgentOutputBytes: 65_536,
+    maxFindingsPerAgent: 10,
+    skipOptionalPhasesWhenTokenUsageUnknown: true,
   },
   audit: {
     enabled: true,

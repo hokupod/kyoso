@@ -4,6 +4,7 @@ import type {
   CrossModelAnalysis,
   KyosoResult,
   JudgeProvider,
+  ModelTokenUsage,
   NormalizedAgentOpinion,
   ReviewTool,
 } from "../core/types.js";
@@ -24,7 +25,13 @@ export type JudgeRunResult = {
   provider: ResolvedJudgeProvider;
   status: "completed" | "deterministic_fallback" | "failed_fallback";
   output: JudgeOutput;
+  usage?: ModelTokenUsage;
   error?: string;
+};
+
+export type JudgeProviderOutput = {
+  output: JudgeOutput;
+  usage?: ModelTokenUsage;
 };
 
 export type JudgeRunInput = {
@@ -39,6 +46,7 @@ export type JudgeRunInput = {
   config: KyosoConfig["judge"];
   requestedProvider?: JudgeProvider;
   env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
 };
 
 export function resolveJudgeProvider(
@@ -73,9 +81,17 @@ export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
   try {
     const output =
       provider === "openai"
-        ? await runOpenAiJudge(input, input.config.timeoutMs)
-        : await runAnthropicJudge(input, input.config.timeoutMs);
-    return { provider, status: "completed", output };
+        ? await runOpenAiJudge(input, input.timeoutMs ?? input.config.timeoutMs)
+        : await runAnthropicJudge(
+            input,
+            input.timeoutMs ?? input.config.timeoutMs,
+          );
+    return {
+      provider,
+      status: "completed",
+      output: output.output,
+      ...(output.usage ? { usage: output.usage } : {}),
+    };
   } catch (error) {
     return {
       provider,

@@ -357,10 +357,8 @@ export default defineConfig({
     expect(output).toContain(
       "auth policy: Kyoso forwards only CLAUDE_CODE_OAUTH_TOKEN; set agents.claude.auth.preferApiKey to true to use ANTHROPIC_API_KEY",
     );
-    expect(output).toContain("provider: anthropic");
-    expect(output).toContain(
-      "billing: direct provider API calls (pay-per-token billing)",
-    );
+    expect(output).toContain("provider: deterministic_fallback");
+    expect(output).toContain("billing: none (deterministic fallback)");
   });
 
   test("MCP stdio starts and lists tools without stdout pollution", async () => {

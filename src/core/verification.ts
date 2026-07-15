@@ -66,9 +66,15 @@ export function groupVerificationTargetsByVerifier(
   }));
 }
 
-export function markVerificationOverflow(targets: VerificationTarget[]): void {
+export function markVerificationOverflow(
+  targets: VerificationTarget[],
+  reason?: string,
+): void {
   for (const target of targets) {
-    target.finding.verification = { status: "not_verified" };
+    target.finding.verification = {
+      status: "not_verified",
+      ...(reason ? { note: reason } : {}),
+    };
   }
 }
 

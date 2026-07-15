@@ -14,6 +14,8 @@ export function renderMarkdownResult(
     "",
     `**Decision:** ${result.decision}`,
     `**Mode:** ${tool}`,
+    `**Completion:** ${formatCompletion(result)}`,
+    `**Request fingerprint:** ${shortFingerprint(result.requestFingerprint)}`,
     `**Agents:** ${result.agentOpinions.map((opinion) => `${title(opinion.agent)} ${opinion.status}`).join(", ")}`,
     `**Review mode:** ${formatReviewMode(result)}`,
     ...(result.verificationMode
@@ -27,6 +29,8 @@ export function renderMarkdownResult(
     "",
     options.summaryText ?? defaultSummaryText(result),
   ];
+
+  lines.push(...formatExecutionBudget(result));
 
   if (result.cisaSecureByDesign) {
     lines.push(
@@ -160,9 +164,52 @@ export function renderMarkdownResult(
 export function defaultSummaryText(
   result: Omit<KyosoResult, "summaryMarkdown">,
 ): string {
+  if (result.completion.status === "incomplete") {
+    const reasons =
+      result.completion.reasons.length > 0
+        ? result.completion.reasons.join(", ")
+        : "unspecified coverage gap";
+    return `Review incomplete (${reasons}). Decision is block because review coverage is incomplete, not because a code finding was established.`;
+  }
   return result.findings.length === 0
     ? "No blocking findings were detected from the supplied context."
     : `${result.findings.length} finding(s) require attention.`;
+}
+
+function formatExecutionBudget(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+): string[] {
+  const budget = result.executionBudget;
+  const agentOutputs = Object.entries(budget.agentOutputBytes);
+  const outputLines =
+    agentOutputs.length > 0
+      ? agentOutputs.map(
+          ([agent, bytes]) => `- ${title(agent)}: ${bytes} bytes`,
+        )
+      : ["- None reported."];
+  const totalTokens = budget.tokenUsage.totals.totalTokens;
+  return [
+    "",
+    "## Execution Budget",
+    "",
+    `- Model calls: ${budget.modelCalls.planned} planned / ${budget.modelCalls.consumed} consumed / ${budget.modelCalls.skipped} skipped`,
+    `- Wall time: ${budget.wallTime.consumedMs}ms consumed / ${budget.wallTime.limitMs}ms limit`,
+    `- Token usage: ${budget.tokenUsage.status} (${budget.tokenUsage.reportedCalls} reported, ${budget.tokenUsage.unknownCalls} unknown${totalTokens === undefined ? "" : `, ${totalTokens} total`})`,
+    "- Agent output:",
+    ...outputLines,
+  ];
+}
+
+function formatCompletion(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+): string {
+  if (result.completion.status === "complete") return "complete";
+  const reasons = result.completion.reasons.join(", ") || "unspecified";
+  return `incomplete (${reasons}; retryable=${String(result.completion.retryable)})`;
+}
+
+function shortFingerprint(value: string): string {
+  return value.length <= 20 ? value : `${value.slice(0, 20)}…`;
 }
 
 function title(value: string): string {

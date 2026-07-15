@@ -14,7 +14,8 @@ export type FakeAgentScenario =
   | "openrouter_key_missing"
   | "auth_failure"
   | "permission_request"
-  | "write_attempt";
+  | "write_attempt"
+  | "unknown_usage";
 
 export type FakeVerifierVerdict = {
   findingId: string;
@@ -135,9 +136,13 @@ export class FakeAgentManager extends BaseAcpAgentManager {
       role: input.role,
       status: "completed",
       rawText,
-      normalized: scenario === "success" ? opinion : undefined,
+      normalized:
+        scenario === "success" || scenario === "unknown_usage"
+          ? opinion
+          : undefined,
       startedAt,
       completedAt: new Date().toISOString(),
+      ...(scenario === "unknown_usage" ? {} : { usage: fakeUsage() }),
     };
   }
 }
@@ -187,7 +192,12 @@ function verifierResult(
     rawText,
     startedAt,
     completedAt: new Date().toISOString(),
+    usage: fakeUsage(),
   };
+}
+
+function fakeUsage() {
+  return { totalTokens: 20, inputTokens: 12, outputTokens: 8 };
 }
 
 function findingIdsFromPrompt(prompt: string): string[] {

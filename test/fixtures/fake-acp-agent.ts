@@ -68,7 +68,47 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
           },
         },
       });
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+
+    if (mode === "chunked") {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: { type: "text", text: "あ" },
+        },
+      });
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: { type: "text", text: "b" },
+        },
+      });
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+
+    if (mode === "thought_chunked") {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          messageId: "fake-thought",
+          content: { type: "text", text: "あ" },
+        },
+      });
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: { type: "text", text: "b" },
+        },
+      });
+      return { stopReason: "end_turn", usage: fakeUsage() };
     }
 
     const promptText = promptToText(
@@ -93,7 +133,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
           },
         },
       });
-      return { stopReason: "end_turn" };
+      return { stopReason: "end_turn", usage: fakeUsage() };
     }
 
     const manifest = await ctx.client.request(methods.client.fs.readTextFile, {
@@ -145,7 +185,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         },
       },
     });
-    return { stopReason: "end_turn" };
+    return { stopReason: "end_turn", usage: fakeUsage() };
   });
 
 const stream = ndJsonStream(
@@ -176,6 +216,10 @@ function findingIdsFromPrompt(prompt: string): string[] {
 
 function hasEnv(key: string): boolean {
   return (process.env[key]?.trim().length ?? 0) > 0;
+}
+
+function fakeUsage() {
+  return { totalTokens: 20, inputTokens: 12, outputTokens: 8 };
 }
 
 function readCodexConfigMetadata(): {

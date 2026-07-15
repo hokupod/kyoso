@@ -10,6 +10,41 @@ export type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
+export type ReviewBudget = {
+  maxModelCalls: number;
+  maxTotalWallTimeMs: number;
+  maxAgentOutputBytes: number;
+  maxFindingsPerAgent: number;
+  skipOptionalPhasesWhenTokenUsageUnknown: boolean;
+};
+
+export type ReviewBudgetRequest = Partial<ReviewBudget>;
+
+export type ReviewCompletionReason =
+  | "model_call_budget"
+  | "deadline"
+  | "agent_output_limit"
+  | "token_usage_unknown"
+  | "coverage_incomplete"
+  | "disputed_finding";
+
+export type ReviewCompletion = {
+  status: "complete" | "incomplete";
+  reasons: ReviewCompletionReason[];
+  retryable: false;
+};
+
+export type ModelCallKind = "primary" | "verifier" | "judge";
+
+export type ModelTokenUsage = {
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+};
+
 export type FindingCategory =
   | "architecture"
   | "authn"
@@ -57,6 +92,7 @@ export type KyosoReviewRequest = {
   options?: {
     network?: NetworkMode;
     maxAgentTimeoutMs?: number;
+    reviewBudget?: ReviewBudgetRequest;
     includeAgentRawOutputs?: boolean;
     judgeProvider?: JudgeProvider;
     allowSecretRedaction?: boolean;
@@ -139,6 +175,8 @@ export type AgentRunInput = {
   prompt: string;
   workspaceDir: string;
   timeoutMs: number;
+  deadlineAtEpochMs?: number;
+  maxOutputBytes?: number;
   networkMode: NetworkMode;
   // Called once after the agent process has actually started. Preflight failures
   // and spawn failures must not invoke this callback. Managers await a returned
@@ -158,12 +196,56 @@ export type AgentRunResult = {
     detail?: string;
   };
   warnings?: string[];
+  usage?: ModelTokenUsage;
+  outputBytes?: number;
+  stopReason?: string;
   startedAt: string;
   completedAt?: string;
 };
 
+export type ReviewExecutionBudget = {
+  maxModelCalls: number;
+  modelCalls: {
+    planned: number;
+    consumed: number;
+    skipped: number;
+    byKind: Record<
+      ModelCallKind,
+      { planned: number; consumed: number; skipped: number }
+    >;
+  };
+  wallTime: {
+    limitMs: number;
+    consumedMs: number;
+    remainingMs: number;
+  };
+  maxAgentOutputBytes: number;
+  maxFindingsPerAgent: number;
+  skipOptionalPhasesWhenTokenUsageUnknown: boolean;
+  agentOutputBytes: Partial<Record<AgentName, number>>;
+  tokenUsage: {
+    status: "reported" | "partial" | "unknown";
+    reportedCalls: number;
+    unknownCalls: number;
+    totals: ModelTokenUsage;
+  };
+};
+
+export type ReviewModelCallAudit = {
+  kind: ModelCallKind;
+  agent?: AgentName;
+  status: "completed" | "skipped";
+  reason?: string;
+  outputBytes?: number;
+  usage?: ModelTokenUsage;
+  stopReason?: string;
+};
+
 export type KyosoResult = {
   decision: KyosoDecision;
+  completion: ReviewCompletion;
+  executionBudget: ReviewExecutionBudget;
+  requestFingerprint: string;
   degraded: boolean;
   agentsUsed: AgentName[];
   reviewMode: ReviewMode;
@@ -200,6 +282,7 @@ export type KyosoResult = {
     workspaceMode: "temp_snapshot";
     configHash?: string;
     warnings?: string[];
+    modelCalls: ReviewModelCallAudit[];
   };
 };
 

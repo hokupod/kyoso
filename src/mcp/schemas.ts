@@ -33,6 +33,16 @@ export const kyosoReviewRequestSchema = z.object({
     .object({
       network: z.enum(["model_only", "unrestricted"]).optional(),
       maxAgentTimeoutMs: z.number().int().positive().optional(),
+      reviewBudget: z
+        .object({
+          maxModelCalls: z.number().int().positive().optional(),
+          maxTotalWallTimeMs: z.number().int().positive().optional(),
+          maxAgentOutputBytes: z.number().int().positive().optional(),
+          maxFindingsPerAgent: z.number().int().positive().optional(),
+          skipOptionalPhasesWhenTokenUsageUnknown: z.boolean().optional(),
+        })
+        .strict()
+        .optional(),
       includeAgentRawOutputs: z.boolean().optional(),
       judgeProvider: z.enum(["auto", "openai", "anthropic", "none"]).optional(),
       allowSecretRedaction: z.boolean().optional(),

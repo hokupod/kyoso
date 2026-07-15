@@ -371,8 +371,8 @@ Subscription-only setup:
 
 - Codex: use local `codex` login
 - Claude: run `claude setup-token`, then set `CLAUDE_CODE_OAUTH_TOKEN`
-- Judge: set no API keys, so Kyoso uses `deterministic_fallback` (see [Judge](#judge))
-- To avoid OpenAI judge calls when `OPENAI_API_KEY` is present, set `judge.provider = "none"`
+- Judge: the default `deterministic_only` mode needs no API key (see [Judge](#judge))
+- To disable an explicit LLM-judge opt-in, set `judge.mode = "deterministic_only"` or `judge.provider = "none"`
 
 Team admins should also check organization Usage credits. If credits are enabled, billing behavior beyond subscription limits is controlled outside Kyoso.
 
@@ -383,6 +383,23 @@ Kyoso can run when only Claude or only Codex is available. Disable the missing b
 In single-agent mode, the remaining backend runs once as `combined_reviewer` and covers both implementation and architecture/security focus areas. JSON output includes `reviewMode: "single_agent"` and `agentsUsed`; Markdown output states that cross-model verification was not performed and marks disagreements as N/A.
 
 This mode does not provide independent cross-model validation and may retain self-review bias. It still provides a separate read-only review process, temporary snapshots, adversarial review prompts, secret scanning, and deterministic gates.
+
+### Execution budget and review stopping
+
+Every review has a user-global hard ceiling for model calls, total wall time, streamed agent text (message and thought chunks), and findings per agent:
+
+```toml
+[reviewBudget]
+maxModelCalls = 4
+maxTotalWallTimeMs = 480000
+maxAgentOutputBytes = 65536
+maxFindingsPerAgent = 10
+skipOptionalPhasesWhenTokenUsageUnknown = true
+```
+
+`reviewBudget` is user-global only: project `kyoso.toml` and `--set` cannot change it. MCP and library requests may lower a ceiling through `options.reviewBudget`, never raise it. Kyoso reserves both primary reviewers before starting either one, uses any residual calls for verification, and treats the LLM judge as advisory. The default judge mode is `deterministic_only`.
+
+The result includes `completion`, `executionBudget`, and `requestFingerprint`; Markdown and Audit show call counts, wall time, output bytes, and reported or unknown token usage. If `completion.status` is `incomplete`, Kyoso returns a normal `block` result with `retryable: false`: the block means review coverage is incomplete, not that a code defect was established. Do not automatically retry the same fingerprint. At one review checkpoint, the bundled Skill permits one initial pass and one confirmation pass only after material fixes; a third pass requires explicit user approval.
 
 ### Verification
 
@@ -397,11 +414,11 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Phase 1 is annotate-only: verification can update finding confidence and notes, but it does not change severity or the final decision. `allowDemotion` is reserved for a future opt-in phase and is currently a no-op.
+When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Phase 1 is annotate-only: verification can update finding confidence and notes, but it does not change severity. A skipped, failed, budget-exhausted, or overflowed verification leaves the finding marked `not_verified` and returns incomplete coverage. `allowDemotion` is reserved for a future opt-in phase and is currently a no-op.
 
 ### Judge
 
-Judge keys: `judge.<mode|provider|timeoutMs>`. Judge LLMs are optional. Set `OPENAI_API_KEY` or `CODEX_API_KEY` to use the OpenAI judge, or `ANTHROPIC_API_KEY` to use the Anthropic judge. Optional overrides:
+Judge keys: `judge.<mode|provider|timeoutMs>`. Judge LLMs are optional and default to `mode = "deterministic_only"`; credentials alone do not start a judge call. Set `mode = "deterministic_plus_llm"` plus `OPENAI_API_KEY` or `CODEX_API_KEY` for OpenAI, or `ANTHROPIC_API_KEY` for Anthropic. Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`
@@ -411,7 +428,7 @@ Judge defaults intentionally use lightweight models. For a stronger judge, set `
 
 ### Timeouts
 
-Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. MCP clients should allow at least 360 seconds for tool calls. If `verification.enabled` is true, allow at least 480 seconds because Kyoso may run an additional cross-agent verification round.
+Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. The review-wide deadline defaults to 480 seconds, and each phase uses the remaining deadline rather than extending it. MCP clients should allow at least 480 seconds for tool calls.
 
 ### Audit
 

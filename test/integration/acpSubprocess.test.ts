@@ -137,6 +137,59 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.normalized?.summary).toContain("No JSON object found");
   });
 
+  test("counts streamed UTF-8 bytes exactly and cancels output above the cap", async () => {
+    const cwd = await fakeWorkspace();
+    const pidPath = join(cwd, "chunked-agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("chunked", { FAKE_ACP_PID_FILE: pidPath }),
+    );
+
+    const exact = await manager.runAgent(
+      agentInput(cwd, { maxOutputBytes: 4 }),
+    );
+    expect(exact).toMatchObject({
+      status: "completed",
+      rawText: "あb",
+      outputBytes: 4,
+      usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
+    });
+
+    const over = await manager.runAgent(agentInput(cwd, { maxOutputBytes: 3 }));
+    expect(over).toMatchObject({
+      status: "failed",
+      rawText: "あ",
+      outputBytes: 4,
+      error: { code: "AGENT_OUTPUT_LIMIT" },
+    });
+    const pid = Number(await readFile(pidPath, "utf8"));
+    await Bun.sleep(1_000);
+    expect(isProcessAlive(pid)).toBe(false);
+  });
+
+  test("counts streamed thought text without retaining it as raw agent output", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("thought_chunked"),
+    );
+
+    const exact = await manager.runAgent(
+      agentInput(cwd, { maxOutputBytes: 4 }),
+    );
+    expect(exact).toMatchObject({
+      status: "completed",
+      rawText: "b",
+      outputBytes: 4,
+    });
+
+    const over = await manager.runAgent(agentInput(cwd, { maxOutputBytes: 3 }));
+    expect(over).toMatchObject({
+      status: "failed",
+      rawText: "",
+      outputBytes: 4,
+      error: { code: "AGENT_OUTPUT_LIMIT" },
+    });
+  });
+
   test("classifies immediate ACP child crashes from stderr", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("crash"));
@@ -263,7 +316,8 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
   });
 });
 
-type FakeAcpMode = "happy" | "garbage" | "crash" | "hang";
+type FakeAcpMode =
+  "happy" | "garbage" | "crash" | "hang" | "chunked" | "thought_chunked";
 
 function fakeAcpConfig(
   mode: FakeAcpMode,

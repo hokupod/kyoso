@@ -373,8 +373,8 @@ Subscription-only setup:
 
 - Codex: local `codex` login を使用
 - Claude: `claude setup-token` を実行し、`CLAUDE_CODE_OAUTH_TOKEN` を設定
-- Judge: API keys を設定しないことで、Kyoso は `deterministic_fallback` を使用([Judge](#judge) を参照)
-- `OPENAI_API_KEY` が存在するときに OpenAI judge calls を避けるには、`judge.provider = "none"` を設定
+- Judge: default の `deterministic_only` mode は API key を必要としません([Judge](#judge) を参照)
+- 明示的な LLM judge opt-in を無効化するには、`judge.mode = "deterministic_only"` または `judge.provider = "none"` を設定
 
 Team admins は organization Usage credits も確認してください。Credits が有効な場合、subscription limits を超える billing behavior は Kyoso の外側で制御されます。
 
@@ -385,6 +385,23 @@ Kyoso は Claude だけ、または Codex だけでも実行できます。利�
 single-agent mode では、残った backend が `combined_reviewer` として 1 回だけ実行され、implementation と architecture/security の両方を確認します。JSON output には `reviewMode: "single_agent"` と `agentsUsed` が入り、Markdown output には cross-model verification が行われていないことと disagreements が N/A であることを表示します。
 
 この mode では独立した cross-model validation はなく、自己レビュー bias が残ります。一方で、別プロセスの read-only review、temporary snapshots、adversarial review prompts、secret scanning、deterministic gates は利用できます。
+
+### Execution budget and review stopping
+
+各 review には、model call数、総 wall time、streaming中のagent text（message / thought chunk）、agentあたりのfinding数に user-global の hard ceiling があります。
+
+```toml
+[reviewBudget]
+maxModelCalls = 4
+maxTotalWallTimeMs = 480000
+maxAgentOutputBytes = 65536
+maxFindingsPerAgent = 10
+skipOptionalPhasesWhenTokenUsageUnknown = true
+```
+
+`reviewBudget` は user-global 専用です。project `kyoso.toml` と `--set` では変更できません。MCP / library request は `options.reviewBudget` で ceiling を下げることだけができ、引き上げはできません。Kyoso は primary reviewer を両方予約してから開始し、残りのcallだけを verification に使い、LLM Judge は advisory として扱います。既定のJudge modeは `deterministic_only` です。
+
+結果には `completion`、`executionBudget`、`requestFingerprint` が含まれます。Markdown と Audit は call数、wall time、output bytes、reported / unknown token usage を示します。`completion.status` が `incomplete` の場合、Kyoso は `retryable: false` の通常の `block` 結果を返します。これは code defect の断定ではなく、review coverage が未完了であることを意味します。同じ fingerprint を自動 retry しないでください。同一review checkpointでは、bundled Skill は初回1 passと material fix後の確認1 passだけを許可し、3回目には明示的な user approval が必要です。
 
 ### Verification
 
@@ -399,11 +416,11 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only です。verification は finding confidence と notes を更新できますが、severity や final decision は変更しません。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
+Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only で、verification は finding confidence と notes を更新できますが、severity は変更しません。verification が skip / fail / budget不足 / overflow の場合は finding を `not_verified` にし、coverage incomplete を返します。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
 
 ### Judge
 
-Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs は optional です。OpenAI judge を使うには `OPENAI_API_KEY` または `CODEX_API_KEY` を設定し、Anthropic judge を使うには `ANTHROPIC_API_KEY` を設定します。Optional overrides:
+Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs は optional で、default は `mode = "deterministic_only"` です。credential だけでは judge call を開始しません。OpenAI judge は `mode = "deterministic_plus_llm"` と `OPENAI_API_KEY` または `CODEX_API_KEY`、Anthropic judge は同modeと `ANTHROPIC_API_KEY` を設定します。Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`
@@ -413,7 +430,7 @@ Judge defaults は意図的に lightweight models を使用します。より強
 
 ### Timeouts
 
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。MCP clients は tool calls に少なくとも 360 秒を許可してください。`verification.enabled` が true の場合、Kyoso は追加の cross-agent verification round を実行することがあるため、少なくとも 480 秒を許可してください。
+Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒で、各phaseはdeadlineを延長せず残り時間を使います。MCP clients は tool calls に少なくとも480秒を許可してください。
 
 ### Audit
 

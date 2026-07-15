@@ -45,6 +45,16 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - The CLI also accepts `--repo-summary`, repeatable `--constraint`, and repeatable `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
    - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
-5. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
-6. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
-7. Do not claim Kyoso modified files. Kyoso only reviews.
+5. Apply the [review-pass stop contract](#review-pass-stop-contract) before deciding whether to run another review.
+6. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
+7. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
+8. Do not claim Kyoso modified files. Kyoso only reviews.
+
+## Review-pass stop contract
+
+- At one explicit review checkpoint, run one automatic review pass only.
+- Record the returned `requestFingerprint`. Do not run the same fingerprint again in the same task.
+- If `completion.status !== "complete"`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
+- A single confirmation pass is allowed only after fixing actionable, material findings from the first complete pass.
+- After the confirmation pass, stop even when findings remain. Do not start a third pass without the user's explicit approval.
+- Do not interpret `approve_with_changes` as permission to repeat until `approve`.

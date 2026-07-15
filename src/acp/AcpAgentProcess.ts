@@ -14,7 +14,9 @@ import type {
   AgentName,
   AgentRunInput,
   AgentRunResult,
+  ModelTokenUsage,
 } from "../core/types.js";
+import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import { ChildEnvPreflightError, buildChildEnv } from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
@@ -94,6 +96,20 @@ async function runSubprocessAgent(
   env: NodeJS.ProcessEnv,
 ): Promise<AgentRunResult> {
   const startedAt = new Date().toISOString();
+  const effectiveTimeoutMs = resolveEffectiveTimeoutMs(input);
+  if (effectiveTimeoutMs <= 0) {
+    return {
+      agent,
+      role: input.role,
+      status: "timeout",
+      startedAt,
+      completedAt: startedAt,
+      error: {
+        code: "REVIEW_DEADLINE_EXCEEDED",
+        message: "Review deadline was reached before the agent could start.",
+      },
+    };
+  }
 
   return new Promise((resolveResult) => {
     const child = spawn(agentConfig.command, agentConfig.args, {
@@ -127,6 +143,9 @@ async function runSubprocessAgent(
     const timeout = setTimeout(() => {
       abortController.abort(new Error("Kyoso agent timeout"));
       terminateChild(child);
+      const deadlineReached =
+        input.deadlineAtEpochMs !== undefined &&
+        Date.now() >= input.deadlineAtEpochMs;
       resolveOnce({
         agent,
         role: input.role,
@@ -134,11 +153,13 @@ async function runSubprocessAgent(
         startedAt,
         completedAt: new Date().toISOString(),
         error: {
-          code: "AGENT_TIMEOUT",
-          message: `Agent timed out after ${input.timeoutMs}ms`,
+          code: deadlineReached ? "REVIEW_DEADLINE_EXCEEDED" : "AGENT_TIMEOUT",
+          message: deadlineReached
+            ? "Review deadline reached before the agent completed."
+            : `Agent timed out after ${effectiveTimeoutMs}ms`,
         },
       });
-    }, input.timeoutMs);
+    }, effectiveTimeoutMs);
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -162,10 +183,10 @@ async function runSubprocessAgent(
     runAcpClientWorkflow(
       child,
       input,
-      abortController.signal,
+      abortController,
       resolveEffortConfigOption(agent, agentConfig.effort),
     )
-      .then(({ rawText, warnings }) => {
+      .then(({ rawText, warnings, usage, outputBytes, stopReason }) => {
         stdout = rawText;
         resolveOnce({
           agent,
@@ -175,10 +196,32 @@ async function runSubprocessAgent(
           normalized: normalizeAgentOutput(agent, input.role, rawText),
           startedAt,
           completedAt: new Date().toISOString(),
+          outputBytes,
+          stopReason,
+          ...(usage ? { usage } : {}),
           ...(warnings.length > 0 ? { warnings } : {}),
         });
       })
       .catch((error) => {
+        const outputLimitError = findOutputLimitError(error, abortController);
+        if (outputLimitError) {
+          stdout = outputLimitError.rawText;
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: "failed",
+            rawText: stdout,
+            outputBytes: outputLimitError.outputBytes,
+            stopReason: "cancelled",
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: {
+              code: "AGENT_OUTPUT_LIMIT",
+              message: `Agent output exceeded ${outputLimitError.maxOutputBytes} bytes and was cancelled.`,
+            },
+          });
+          return;
+        }
         if (abortController.signal.aborted) return;
         const failureText = [stderr, formatAgentErrorDetail(error)]
           .filter((part) => part.trim().length > 0)
@@ -216,9 +259,15 @@ async function runSubprocessAgent(
 async function runAcpClientWorkflow(
   child: ReturnType<typeof spawn>,
   input: AgentRunInput,
-  signal: AbortSignal,
+  abortController: AbortController,
   configOption: { configId: string; value: string } | undefined,
-): Promise<{ rawText: string; warnings: string[] }> {
+): Promise<{
+  rawText: string;
+  warnings: string[];
+  usage?: ModelTokenUsage;
+  outputBytes: number;
+  stopReason: string;
+}> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
   }
@@ -299,10 +348,10 @@ async function runAcpClientWorkflow(
             .request(
               methods.agent.session.setConfigOption,
               { sessionId: session.sessionId, ...configOption },
-              { cancellationSignal: signal },
+              { cancellationSignal: abortController.signal },
             )
             .catch((error) => {
-              if (signal.aborted) return;
+              if (abortController.signal.aborted) return;
               const sanitizedValue = sanitizeTextForDisplay(configOption.value);
               const detail = sanitizeTextForDisplay(
                 formatAgentErrorDetail(error),
@@ -313,13 +362,90 @@ async function runAcpClientWorkflow(
             });
         }
         const promptResponse = session.prompt(input.prompt, {
-          cancellationSignal: signal,
+          cancellationSignal: abortController.signal,
         });
-        const text = await session.readText();
-        await promptResponse;
-        return { rawText: text, warnings };
+        void promptResponse.catch(() => undefined);
+        let rawText = "";
+        let outputBytes = 0;
+        for (;;) {
+          const message = await session.nextUpdate();
+          if (message.kind === "stop") {
+            const usage = normalizeUsage(message.response.usage);
+            return {
+              rawText,
+              warnings,
+              ...(usage ? { usage } : {}),
+              outputBytes,
+              stopReason: message.stopReason,
+            };
+          }
+
+          const update = message.update;
+          if (
+            (update.sessionUpdate !== "agent_message_chunk" &&
+              update.sessionUpdate !== "agent_thought_chunk") ||
+            update.content.type !== "text"
+          ) {
+            continue;
+          }
+          const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
+          const nextOutputBytes = outputBytes + chunkBytes;
+          if (
+            input.maxOutputBytes !== undefined &&
+            nextOutputBytes > input.maxOutputBytes
+          ) {
+            await ctx
+              .notify(methods.agent.session.cancel, {
+                sessionId: session.sessionId,
+              })
+              .catch(() => undefined);
+            const error = new AgentOutputLimitError(
+              rawText,
+              nextOutputBytes,
+              input.maxOutputBytes,
+            );
+            abortController.abort(error);
+            throw error;
+          }
+          if (update.sessionUpdate === "agent_message_chunk") {
+            rawText += update.content.text;
+          }
+          outputBytes = nextOutputBytes;
+        }
       });
   });
+}
+
+class AgentOutputLimitError extends Error {
+  constructor(
+    readonly rawText: string,
+    readonly outputBytes: number,
+    readonly maxOutputBytes: number,
+  ) {
+    super(`Agent output exceeded ${maxOutputBytes} bytes.`);
+    this.name = "AgentOutputLimitError";
+  }
+}
+
+function findOutputLimitError(
+  error: unknown,
+  abortController: AbortController,
+): AgentOutputLimitError | undefined {
+  if (error instanceof AgentOutputLimitError) return error;
+  const reason = abortController.signal.reason;
+  return reason instanceof AgentOutputLimitError ? reason : undefined;
+}
+
+function resolveEffectiveTimeoutMs(input: AgentRunInput): number {
+  const deadlineRemaining =
+    input.deadlineAtEpochMs === undefined
+      ? Number.POSITIVE_INFINITY
+      : input.deadlineAtEpochMs - Date.now();
+  return Math.max(0, Math.min(input.timeoutMs, deadlineRemaining));
+}
+
+function normalizeUsage(usage: unknown): ModelTokenUsage | undefined {
+  return normalizeModelTokenUsage(usage);
 }
 
 function resolveEffortConfigOption(

@@ -188,10 +188,11 @@ async function runSubprocessAgent(
     )
       .then(({ rawText, warnings, usage, outputBytes, stopReason }) => {
         stdout = rawText;
+        const completed = stopReason === "end_turn";
         resolveOnce({
           agent,
           role: input.role,
-          status: "completed",
+          status: completed ? "completed" : "failed",
           rawText,
           normalized: normalizeAgentOutput(agent, input.role, rawText),
           startedAt,
@@ -200,6 +201,14 @@ async function runSubprocessAgent(
           stopReason,
           ...(usage ? { usage } : {}),
           ...(warnings.length > 0 ? { warnings } : {}),
+          ...(completed
+            ? {}
+            : {
+                error: {
+                  code: "AGENT_STOPPED_EARLY",
+                  message: `Agent stopped before completing the review: ${stopReason}.`,
+                },
+              }),
         });
       })
       .catch((error) => {

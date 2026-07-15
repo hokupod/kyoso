@@ -18,6 +18,7 @@ import { runReview } from "../../src/core/runReview.js";
 import type {
   AgentRunInput,
   AgentRunResult,
+  KyosoReviewRequest,
   NormalizedAgentOpinion,
 } from "../../src/core/types.js";
 import { auditTracePath } from "../helpers/auditState.js";
@@ -1870,6 +1871,21 @@ model = "openai/o4-mini"
     expect(result.findings[0]?.title).toContain("Recursive");
   });
 
+  test("recursion guard remains fail-closed for malformed requests", async () => {
+    const manager = new FakeAgentManager();
+    const result = await runReview("plan_review", {} as KyosoReviewRequest, {
+      cwd: await tempCwd(),
+      config: kyosoConfigSchema.parse(defaultConfig),
+      agentManager: manager,
+      env: { KYOSO_CHILD_AGENT: "1" },
+    });
+
+    expect(result.decision).toBe("block");
+    expect(result.findings[0]?.title).toContain("Recursive");
+    expect(result.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(manager.calls).toHaveLength(0);
+  });
+
   test("security policy blocks include tests and residual risks", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
@@ -1952,6 +1968,55 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("marks non-end ACP stop reasons as incomplete", async () => {
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", join(process.cwd(), "test/fixtures/fake-acp-agent.ts")],
+          env: { FAKE_ACP_MODE: "max_tokens" },
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          enabled: false,
+        },
+      },
+    };
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd: process.cwd(),
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result.completion).toEqual({
+      status: "incomplete",
+      reasons: ["coverage_incomplete"],
+      retryable: false,
+    });
+    expect(result.agentOpinions[0]).toMatchObject({
+      status: "failed",
+      errorCode: "AGENT_STOPPED_EARLY",
+    });
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      status: "completed",
+      stopReason: "max_tokens",
+    });
   });
 
   test("passes options.env to the default OpenRouter ACP manager", async () => {
@@ -2558,6 +2623,8 @@ function stableResult(
   result: Awaited<ReturnType<typeof runReview>>,
 ): Omit<typeof result, "audit"> {
   const { audit: _audit, ...stable } = result;
+  const wallTime = stable.executionBudget.wallTime;
+  const exhausted = wallTime.remainingMs === 0;
   return {
     ...stable,
     summaryMarkdown: stable.summaryMarkdown.replace(
@@ -2567,9 +2634,9 @@ function stableResult(
     executionBudget: {
       ...stable.executionBudget,
       wallTime: {
-        ...stable.executionBudget.wallTime,
-        consumedMs: 0,
-        remainingMs: 0,
+        ...wallTime,
+        consumedMs: exhausted ? wallTime.limitMs : 0,
+        remainingMs: exhausted ? 0 : wallTime.limitMs,
       },
     },
   };

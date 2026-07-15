@@ -185,7 +185,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         },
       },
     });
-    return { stopReason: "end_turn", usage: fakeUsage() };
+    return { stopReason: terminalStopReason(mode), usage: fakeUsage() };
   });
 
 const stream = ndJsonStream(
@@ -220,6 +220,14 @@ function hasEnv(key: string): boolean {
 
 function fakeUsage() {
   return { totalTokens: 20, inputTokens: 12, outputTokens: 8 };
+}
+
+function terminalStopReason(value: string) {
+  if (value === "max_tokens") return "max_tokens" as const;
+  if (value === "max_turn_requests") return "max_turn_requests" as const;
+  if (value === "refusal") return "refusal" as const;
+  if (value === "cancelled") return "cancelled" as const;
+  return "end_turn" as const;
 }
 
 function readCodexConfigMetadata(): {

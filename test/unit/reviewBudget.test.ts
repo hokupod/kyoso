@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
 import { kyosoConfigSchema } from "../../src/config/schema.js";
 import {
+  canonicalJson,
   createRequestFingerprint,
   REVIEW_CONTRACT_VERSION,
 } from "../../src/core/requestFingerprint.js";
@@ -123,5 +124,11 @@ describe("review budget", () => {
       createRequestFingerprint({ ...input, request: second }),
     );
     expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-15-v1");
+  });
+
+  test("canonicalizes object keys with locale-independent ordering", () => {
+    expect(canonicalJson({ ä: 1, z: 2, a: 3, A: 4 })).toBe(
+      '{"A":4,"a":3,"z":2,"ä":1}',
+    );
   });
 });

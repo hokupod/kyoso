@@ -88,6 +88,16 @@ export type RunReviewOptions = LoadConfigOptions & {
   traceWriterFactory?: (options: TraceWriterOptions) => TraceWriter;
 };
 
+function requestForRecursionFingerprint(
+  request: KyosoReviewRequest,
+): KyosoReviewRequest {
+  try {
+    return scanAndRedactSecrets(request).redactedRequest;
+  } catch {
+    return { goal: "" };
+  }
+}
+
 export async function runReview(
   tool: ReviewTool,
   request: KyosoReviewRequest,
@@ -112,7 +122,7 @@ export async function runReview(
       );
       const requestFingerprint = createRequestFingerprint({
         tool,
-        request: scanAndRedactSecrets(request).redactedRequest,
+        request: requestForRecursionFingerprint(request),
         config,
         roles: resolveAgentRoles(config),
         budget: config.reviewBudget,

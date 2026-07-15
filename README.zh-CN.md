@@ -401,7 +401,7 @@ skipOptionalPhasesWhenTokenUsageUnknown = true
 
 `reviewBudget` 只能在 user-global 配置中设置；project `kyoso.toml` 和 `--set` 都不能修改它。MCP / library request 只能通过 `options.reviewBudget` 降低 ceiling，不能提高。Kyoso 会先同时预留两个 primary reviewer，再将剩余 call 用于 verification，并把 LLM Judge 作为 advisory。默认 Judge mode 是 `deterministic_only`。
 
-结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、output bytes，以及 reported 或 unknown token usage。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次1次和 material fix 后的确认1次；第三次需要用户明确批准。
+结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、output bytes，以及 reported 或 unknown token usage。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次评审与 material fix 后的确认评审各1次；第三次需要用户明确批准。
 
 ### Verification
 

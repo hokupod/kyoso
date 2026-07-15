@@ -48,7 +48,7 @@ When in doubt, pick the Marketplace Plugin: two commands install the Skill and t
 
 The Plugin bundles the Skill and an MCP definition pinned to an exact published Kyoso CLI version; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
 
-The `kyoso setup ... --with-openrouter` output and manual setup examples remain user-managed client-registration templates. Marketplace Plugin `0.4.0` is pinned to `@kyo-so/cli@0.10.0`.
+The `kyoso setup ... --with-openrouter` output and manual setup examples remain user-managed client-registration templates. Marketplace Plugin `0.5.0` is pinned to `@kyo-so/cli@0.11.0`.
 
 The Plugin Skill declares the bundled `kyoso` MCP server as a dependency, so explicit Kyoso reviews are directed through MCP rather than a CLI fallback. If you disable the bundled Plugin MCP, treat the Plugin Skill as unavailable: re-enable it, or remove the Plugin and install CLI plus Skill-only instead. The Plugin is not a CLI-fallback mode.
 

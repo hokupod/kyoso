@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Promote the Marketplace Plugin to `0.5.0` and pin its Codex and Claude Code
+  MCP definitions to `@kyo-so/cli@0.11.0`, delivering the review execution
+  budget and two-pass stop contract through the Plugin runtime.
+
 ## [0.11.0] - 2026-07-15
 
 ### Added

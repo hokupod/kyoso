@@ -13,8 +13,10 @@ import { runReview } from "../core/runReview.js";
 import type {
   KyosoReviewRequest,
   NetworkMode,
+  ReviewLens,
   ReviewTool,
 } from "../core/types.js";
+import { isReviewLens } from "../core/reviewPolicy.js";
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
       trustConfig,
       allowUnknownConfig,
       configOverrides: configOverrideFlags(parsed.flags),
+      entrypoint: "cli",
       promptForTrust: canPromptForConfigTrust(),
     });
     console.log(
@@ -117,6 +120,7 @@ async function buildReviewRequest(
   const currentPlan = await readPathOrText(stringFlag(flags, "plan"));
   const selectedFiles = await readSelectedFiles(stringArrayFlag(flags, "file"));
   const diffInput = await buildDiff(tool, flags);
+  const focus = focusFlags(flags);
   const network = networkFlag(flags);
   const options: NonNullable<KyosoReviewRequest["options"]> = {
     allowSecretRedaction: booleanFlag(flags, "allow-secret-redaction"),
@@ -126,6 +130,7 @@ async function buildReviewRequest(
   }
   return {
     goal,
+    reviewContract: focus.length > 0 ? { focus } : undefined,
     repoSummary,
     currentPlan,
     selectedFiles: selectedFiles.length > 0 ? selectedFiles : undefined,
@@ -133,6 +138,21 @@ async function buildReviewRequest(
     constraints: stringArrayFlag(flags, "constraint"),
     options,
   };
+}
+
+function focusFlags(
+  flags: Record<string, string | boolean | string[]>,
+): ReviewLens[] {
+  if (flags.focus === true) {
+    throw new Error("Missing value for --focus. Expected a review lens.");
+  }
+  const focus = stringArrayFlag(flags, "focus");
+  for (const value of focus) {
+    if (!isReviewLens(value)) {
+      throw new Error(`Invalid --focus value "${value}".`);
+    }
+  }
+  return Array.from(new Set(focus)) as ReviewLens[];
 }
 
 async function buildDiff(
@@ -210,9 +230,9 @@ Usage:
   kyoso setup [codex|claude-code] [--write] [--with-openrouter] [--runner npx|bunx] [--command <command>] [--global] [--force]
   kyoso setup codex|claude-code --skill-only [--write] [--global] [--force]
   kyoso openrouter-acp-smoke
-  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--set <key>=<value>]... [--json] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
-  kyoso diff --base main --head HEAD [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
+  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
+  kyoso diff --base main --head HEAD [--focus <lens>]... [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
   kyoso doctor [--trust-config] [--allow-unknown-config]
   kyoso init [--force]
 `;

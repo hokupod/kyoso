@@ -55,6 +55,22 @@ export function scanAndRedactSecrets(
   };
 
   cloned.goal = redactText(cloned.goal, "goal");
+  if (cloned.reviewContract?.nonGoals) {
+    cloned.reviewContract.nonGoals = cloned.reviewContract.nonGoals.map(
+      (nonGoal, index) =>
+        redactText(nonGoal, `reviewContract.nonGoals[${index}]`),
+    );
+  }
+  if (cloned.reviewContract?.acceptedRisks) {
+    cloned.reviewContract.acceptedRisks =
+      cloned.reviewContract.acceptedRisks.map((risk, index) => ({
+        ...risk,
+        rationale: redactText(
+          risk.rationale,
+          `reviewContract.acceptedRisks[${index}].rationale`,
+        ),
+      }));
+  }
   if (cloned.repoSummary)
     cloned.repoSummary = redactText(cloned.repoSummary, "repoSummary");
   if (cloned.currentPlan)

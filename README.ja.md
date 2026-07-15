@@ -161,7 +161,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD --set agents.claude.effort=high
+kyoso diff --base main --head HEAD --focus architecture --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -181,7 +181,7 @@ kyoso plan \
   --file src/auth/callback.ts
 ```
 
-結果は上から順に読んでください。`Decision` は deterministic gate の結果、`Findings` は必要な変更、`Tests to Add` は承認前に Kyoso が期待する regression checks です。
+結果は上から順に読んでください。`Decision` は deterministic gate の結果、`Coverage` は実行した必須観点と役割、各 finding の `disposition` は block 対象か参考情報かを示します。
 
 patch に対して CISA Secure by Design security review を実行します。
 
@@ -192,7 +192,7 @@ kyoso security \
   --json
 ```
 
-JSON output では、`cisaSecureByDesign` に 4 つの gate dimensions が表示されます。customer security outcomes の `fail` は review を block します。warning-level dimensions は通常 `approve_with_changes` になります。
+JSON output では、`cisaSecureByDesign` に設定済み dimensions と gate enforcement の有効状態が表示されます。backend が返す raw dimension status は計算と decision では無視し、付随する notes だけを advisory として保持します。Kyoso は採用済み findings から status を計算します。enforcement 有効時の customer security outcomes の `fail` は review を block します。
 
 Kyoso を Codex または Claude Code の MCP server として登録し、client から `plan_review` を呼び出します。
 
@@ -226,6 +226,40 @@ Kyoso が公開する MCP tools は次の 3 つだけです。
 
 MCP stdout は protocol messages 専用です。logs は stderr または local audit traces に出力されます。
 
+## Review contract と finding admission
+
+すべての review で、correctness、regression、security boundaries、secrets/injection、data integrity、public contract を削除不能な safety floor として確認します。review の形状に応じて supply chain、privacy、resource amplification も追加します。user-global `reviewPolicy.additionalLenses` は観点を追加できますが、floor は削除できません。
+
+MCP / library caller は型付き `reviewContract`、CLI caller は反復可能な `--focus <lens>` を指定できます。
+
+```json
+{
+  "reviewContract": {
+    "focus": ["architecture"],
+    "nonGoals": ["この変更では public CLI を再設計しない"],
+    "acceptedRisks": [
+      {
+        "findingFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rationale": "次回リリースで対応を追跡する"
+      }
+    ]
+  }
+}
+```
+
+non-goals と accepted risks は、caller が明示した user-owned value だけを使用します。repository constraints、plans、diffs、files は untrusted context のままで、review policy を変更できません。non-goals と accepted risks は Critical / High の safety finding を抑制しません。
+
+Kyoso は各 finding の evidence quality、対象変更との関係、stable fingerprint、disposition を再計算します。
+
+| Disposition  | 意味                                                                            |
+| ------------ | ------------------------------------------------------------------------------- |
+| `gate`       | 変更が導入または悪化させた、具体的根拠のある Critical / High。                  |
+| `actionable` | 変更が導入または悪化させた、具体的根拠のある Medium。                           |
+| `advisory`   | optional、low-impact、pre-existing、accepted、または根拠不足。                  |
+| `disputed`   | material な根拠または reviewer 間の不一致があり、人の判断を必要とする finding。 |
+
+deterministic decision に影響するのは `gate` と `actionable` だけです。`disputed` は completion を incomplete にし、自動修正してはいけません。`coverage` は required/attempted lenses、required/completed perspectives、独立した cross-model review の有無を記録します。`Tests to Add` は具体的な regression test を最大3件に制限し、generic command や広範な test-suite 要求は除外します。
+
 ## Skill
 
 同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
@@ -253,7 +287,9 @@ Kyoso は次の順に config を load します。
 
 未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
 
-Project `kyoso.toml` は declarative で、trust approval は不要です。tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、user global authorization後のCodex専用`provider`または継承したOpenRouterのmodel上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network settings を設定できます。
+Project `kyoso.toml` は declarative で、trust approval は不要です。agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、user global authorization後のCodex専用`provider`または継承したOpenRouterのmodel上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network/CISA settings を設定できます。
+
+`entrypoints.*`、`tools.*`、`reviewPolicy.*` は user-global policy です。entrypoint または tool が disabled の場合、agents の起動前に structured policy block を返します。`firstClassClient = "codex"`、`workspace.readOnly = true`、`network.mediatedWeb.enabled = false`、`audit.includeFileContents = false` は fixed / reserved value であり、未対応値は no-op にせず拒否します。
 
 Global TOML は command 実行や env forwarding を含む user-owned settings 用です。
 
@@ -382,7 +418,7 @@ Team admins は organization Usage credits も確認してください。Credits
 
 Kyoso は Claude だけ、または Codex だけでも実行できます。利用できない backend は `kyoso.toml` で無効化してください。例は `examples/claude-only.toml` と `examples/codex-only.toml` にあります。
 
-single-agent mode では、残った backend が `combined_reviewer` として 1 回だけ実行され、implementation と architecture/security の両方を確認します。JSON output には `reviewMode: "single_agent"` と `agentsUsed` が入り、Markdown output には cross-model verification が行われていないことと disagreements が N/A であることを表示します。
+single-agent mode では、残った backend が `combined_reviewer` として1回実行され、implementation と architecture/security の両 perspective を担当します。JSON output は `reviewMode: "single_agent"`、`agentsUsed`、`coverage.independentReview: false` を含み、Markdown output は cross-model verification を実行していないことを示します。user-global `reviewPolicy.multiAgentRequired = true` を設定すると、この degraded coverage を incomplete として block します。
 
 この mode では独立した cross-model validation はなく、自己レビュー bias が残ります。一方で、別プロセスの read-only review、temporary snapshots、adversarial review prompts、secret scanning、deterministic gates は利用できます。
 
@@ -416,7 +452,7 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。Phase 1 は annotate-only で、verification は finding confidence と notes を更新できますが、severity は変更しません。verification が skip / fail / budget不足 / overflow の場合は finding を `not_verified` にし、coverage incomplete を返します。`allowDemotion` は future opt-in phase 用に予約されており、現時点では no-op です。
+Enabled の場合、Kyoso は high/critical かつ single-source の各 finding について、その finding を報告していない agent に反証を試みさせます。verification は annotate-only で、confidence と notes は更新できますが、severity は変更しません。反証済みまたは未解決の material finding は `disputed` になり、skip / fail / budget不足 / overflow の場合は `not_verified` のまま coverage incomplete を返します。これにより、第2の model が元の risk signal を暗黙に demote することを防ぎます。`allowDemotion` は compatibility のため受理しますが reserved で、どちらの値にも demotion effect はありません。
 
 ### Judge
 
@@ -442,7 +478,7 @@ Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification r
 
 `audit.directory`はlogicalなrelative directory（既定: `.kyoso/traces`）であり、workspace内のdirectoryではありません。既存のworkspace `.kyoso/traces`は自動で移行・削除されません。
 
-Raw agent output と raw file contents は既定で無効です。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します([Safety Model](#safety-model) を参照)。
+Raw agent output は既定で無効です。`audit.includeFileContents` は reserved で `false` に固定され、この設定から file contents が保存されることはありません。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します([Safety Model](#safety-model) を参照)。
 
 ## Safety Model
 
@@ -462,6 +498,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 
 ## 移行
 
+- Project `kyoso.toml` の `tools.*` は user-global config へ移してください。repository content が review を無効化できないよう、project-owned tool availability は拒否されます。
 - 手動MCPからCLI＋Skill: CLIとSkillを先に導入し、`codex mcp remove kyoso`または`claude mcp remove kyoso --scope local|project|user`を実行します。
 - CLI＋SkillからPlugin: Pluginを追加してenabledを確認してから、手動MCP登録を削除します。手動コピーSkillは自動削除しません。
 - PluginからCLI＋Skill: CLIとSkillを先に導入し、`codex plugin remove kyoso@kyoso`を実行します。

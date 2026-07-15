@@ -7,7 +7,7 @@ import type {
   ReviewTool,
 } from "./types.js";
 
-export const REVIEW_CONTRACT_VERSION = "2026-07-15-v1";
+export const REVIEW_CONTRACT_VERSION = "2026-07-15-v2";
 
 export function createRequestFingerprint(input: {
   tool: ReviewTool;
@@ -35,6 +35,15 @@ export function createRequestFingerprint(input: {
     tool: input.tool,
     request,
     reviewers,
+    reviewPolicy: input.config.reviewPolicy,
+    entrypoints: input.config.entrypoints,
+    toolEnabled:
+      input.tool === "plan_review"
+        ? input.config.tools.planReview
+        : input.tool === "security_review"
+          ? input.config.tools.securityReview
+          : input.config.tools.diffReview,
+    cisaSecureByDesign: input.config.securityReview.cisaSecureByDesign,
     verification: input.config.verification,
     judge: {
       ...input.config.judge,

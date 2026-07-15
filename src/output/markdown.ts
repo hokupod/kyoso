@@ -31,11 +31,14 @@ export function renderMarkdownResult(
   ];
 
   lines.push(...formatExecutionBudget(result));
+  lines.push(...formatCoverage(result));
 
   if (result.cisaSecureByDesign) {
     lines.push(
       "",
       "## CISA Secure by Design Gate",
+      "",
+      `Enforcement: ${result.cisaSecureByDesign.gateEnabled ? "decision gate" : "display only"}`,
       "",
       "| Dimension | Status | Notes |",
       "|---|---|---|",
@@ -54,11 +57,23 @@ export function renderMarkdownResult(
       lines.push(
         `### ${finding.severity.toUpperCase()}: ${finding.title}`,
         "",
+        `Disposition: ${finding.disposition}`,
+        "",
+        `Change relation: ${finding.changeRelation}`,
+        "",
+        `Evidence quality: ${finding.evidenceQuality}`,
+        "",
         `Evidence: ${finding.evidence}`,
         "",
         `Recommendation: ${finding.recommendation}`,
         "",
         `Files: ${formatFiles(finding.files)}`,
+        "",
+        `Evidence refs: ${formatEvidenceRefs(finding.evidenceRefs)}`,
+        "",
+        `Policy reasons: ${finding.policyReasons.join("; ") || "none"}`,
+        "",
+        `Fingerprint: ${finding.fingerprint}`,
       );
       if (result.reviewMode !== "single_agent" && finding.crossValidation) {
         lines.push(
@@ -77,6 +92,13 @@ export function renderMarkdownResult(
   lines.push(
     ...(result.testsToAdd.length > 0
       ? result.testsToAdd.map((test) => `- ${test}`)
+      : ["- None."]),
+  );
+
+  lines.push("", "## Open Questions", "");
+  lines.push(
+    ...(result.openQuestions.length > 0
+      ? result.openQuestions.map((question) => `- ${question}`)
       : ["- None."]),
   );
 
@@ -104,7 +126,7 @@ export function renderMarkdownResult(
       lines.push(
         `Provider: ${result.crossModelAnalysis.provider}`,
         "",
-        "Blind spots (advisory; does not affect the decision):",
+        "Potential coverage gaps (advisory; based only on reviewer output):",
         ...formatList(result.crossModelAnalysis.blindSpots),
         "",
         "Contradictions:",
@@ -169,11 +191,18 @@ export function defaultSummaryText(
       result.completion.reasons.length > 0
         ? result.completion.reasons.join(", ")
         : "unspecified coverage gap";
+    if (result.completion.reasons.includes("disputed_finding")) {
+      return `Review incomplete (${reasons}). A disputed finding requires human judgment; do not auto-fix or auto-approve it.`;
+    }
     return `Review incomplete (${reasons}). Decision is block because review coverage is incomplete, not because a code finding was established.`;
   }
+  const decisionFindings = result.findings.filter(
+    (finding) =>
+      finding.disposition === "gate" || finding.disposition === "actionable",
+  );
   return result.findings.length === 0
     ? "No blocking findings were detected from the supplied context."
-    : `${result.findings.length} finding(s) require attention.`;
+    : `${decisionFindings.length} decision-active finding(s); ${result.findings.length - decisionFindings.length} advisory finding(s).`;
 }
 
 function formatExecutionBudget(
@@ -208,6 +237,23 @@ function formatCompletion(
   return `incomplete (${reasons}; retryable=${String(result.completion.retryable)})`;
 }
 
+function formatCoverage(
+  result: Omit<KyosoResult, "summaryMarkdown">,
+): string[] {
+  const coverage = result.coverage;
+  return [
+    "",
+    "## Review Coverage",
+    "",
+    `- Required lenses: ${coverage.requiredLenses.join(", ") || "none"}`,
+    `- Attempted lenses: ${coverage.attemptedLenses.join(", ") || "none"}`,
+    `- Missing lenses: ${coverage.missingLenses.map((item) => `${item.lens} (${item.reason})`).join(", ") || "none"}`,
+    `- Required perspectives: ${coverage.requiredPerspectives.join(", ") || "none"}`,
+    `- Completed perspectives: ${coverage.completedPerspectives.join(", ") || "none"}`,
+    `- Independent review: ${String(coverage.independentReview)}`,
+  ];
+}
+
 function shortFingerprint(value: string): string {
   return value.length <= 20 ? value : `${value.slice(0, 20)}…`;
 }
@@ -237,6 +283,19 @@ function formatFiles(files: KyosoResult["findings"][number]["files"]): string {
     .map(
       (file) => `\`${file.path}${file.lineStart ? `:${file.lineStart}` : ""}\``,
     )
+    .join(", ");
+}
+
+function formatEvidenceRefs(
+  references: KyosoResult["findings"][number]["evidenceRefs"],
+): string {
+  if (references.length === 0) return "none";
+  return references
+    .map((reference) => {
+      const location = reference.path ?? reference.label ?? "n/a";
+      const line = reference.lineStart ? `:${reference.lineStart}` : "";
+      return `${reference.kind}=\`${location}${line}\``;
+    })
     .join(", ");
 }
 

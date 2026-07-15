@@ -123,7 +123,7 @@ describe("review budget", () => {
     expect(createRequestFingerprint({ ...input, request: first })).toBe(
       createRequestFingerprint({ ...input, request: second }),
     );
-    expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-15-v1");
+    expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-15-v2");
   });
 
   test("canonicalizes object keys with locale-independent ordering", () => {

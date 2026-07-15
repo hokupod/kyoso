@@ -9,6 +9,7 @@ import type {
   Severity,
 } from "../core/types.js";
 import { compareSeverity, maxSeverity } from "./severity.js";
+import { selectRegressionTests } from "../core/findingAdmission.js";
 
 const CISA_DIMENSIONS: CisaDimension[] = [
   "customer_security_outcomes",
@@ -61,6 +62,7 @@ export type AggregatedReview = {
   findings: KyosoFinding[];
   testsToAdd: string[];
   residualRisks: string[];
+  openQuestions: string[];
   disagreements: Array<{
     topic: string;
     positions: Array<{ agent: "codex" | "claude"; opinion: string }>;
@@ -75,6 +77,7 @@ export function aggregateAgentResults(
   const findings: KyosoFinding[] = [];
   const tests = new Set<string>();
   const residualRisks = new Set<string>();
+  const openQuestions = new Set<string>();
   const opinions: NormalizedAgentOpinion[] = [];
   const reviewMode =
     options.reviewMode ??
@@ -87,6 +90,8 @@ export function aggregateAgentResults(
     for (const test of result.normalized?.testsToAdd ?? []) tests.add(test);
     for (const risk of result.normalized?.residualRisks ?? [])
       residualRisks.add(risk);
+    for (const question of result.normalized?.openQuestions ?? [])
+      openQuestions.add(question);
 
     for (const finding of result.normalized?.findings ?? []) {
       const category = normalizeCategory(finding.category);
@@ -97,6 +102,12 @@ export function aggregateAgentResults(
         title: finding.title,
         evidence: finding.evidence,
         recommendation: finding.recommendation,
+        disposition: "advisory",
+        changeRelation: finding.changeRelation ?? "unknown",
+        evidenceQuality: "insufficient",
+        evidenceRefs: finding.evidenceRefs ?? [],
+        policyReasons: finding.policyReasons ?? [],
+        fingerprint: "",
         files: normalizeFiles(finding.files),
         sourceAgents: [result.agent],
         confidence: finding.confidence,
@@ -120,8 +131,9 @@ export function aggregateAgentResults(
 
   return {
     findings: sortedFindings,
-    testsToAdd: Array.from(tests),
+    testsToAdd: selectRegressionTests(Array.from(tests)),
     residualRisks: Array.from(residualRisks),
+    openQuestions: Array.from(openQuestions),
     disagreements: extractDisagreements(opinions),
   };
 }
@@ -328,6 +340,20 @@ function mergeFinding(existing: KyosoFinding, candidate: KyosoFinding): void {
       new Set([...(existing.cisaMapping ?? []), ...candidate.cisaMapping]),
     );
   }
+  if (existing.changeRelation === "unknown") {
+    existing.changeRelation = candidate.changeRelation;
+  }
+  existing.evidenceRefs = Array.from(
+    new Map(
+      [...existing.evidenceRefs, ...candidate.evidenceRefs].map((reference) => [
+        JSON.stringify(reference),
+        reference,
+      ]),
+    ).values(),
+  );
+  existing.policyReasons = Array.from(
+    new Set([...existing.policyReasons, ...candidate.policyReasons]),
+  );
 }
 
 type ComparableFinding = {

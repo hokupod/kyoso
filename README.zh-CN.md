@@ -161,7 +161,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD --set agents.claude.effort=high
+kyoso diff --base main --head HEAD --focus architecture --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -181,7 +181,7 @@ kyoso plan \
   --file src/auth/callback.ts
 ```
 
-按从上到下的顺序阅读结果：`Decision` 是 deterministic gate outcome，`Findings` 是 required changes，`Tests to Add` 是 Kyoso 在 approval 前期望的 regression checks。
+按从上到下的顺序阅读结果：`Decision` 是 deterministic gate outcome，`Coverage` 显示已执行的必需 lenses 和 perspectives，每个 finding 的 `disposition` 说明它会 block 还是仅供参考。
 
 对 patch 运行 CISA Secure by Design security review：
 
@@ -192,7 +192,7 @@ kyoso security \
   --json
 ```
 
-在 JSON output 中，`cisaSecureByDesign` 会显示四个 gate dimensions。customer security outcomes 中的 `fail` 会 block review；warning-level dimensions 通常会产生 `approve_with_changes`。
+在 JSON output 中，`cisaSecureByDesign` 会显示已配置 dimensions 以及 gate enforcement 是否启用。backend 返回的 raw dimension status 不参与计算或 decision；附带的 notes 仅作为 advisory 保留。Kyoso 根据 admitted findings 计算 status。enforcement 启用时，customer security outcomes 的 `fail` 会 block review。
 
 将 Kyoso 注册为 Codex 或 Claude Code 的 MCP server，然后从 client 调用 `plan_review`：
 
@@ -226,6 +226,40 @@ Kyoso 只暴露以下 MCP tools：
 
 MCP stdout 专用于 protocol messages。Logs 会写到 stderr 或 local audit traces。
 
+## Review contract 与 finding admission
+
+每次 review 都包含不可移除的 safety floor：correctness、regression、security boundaries、secrets/injection、data integrity 和 public contract。Kyoso 还会根据 review 形状添加 supply chain、privacy 和 resource amplification lenses。user-global `reviewPolicy.additionalLenses` 可以添加观点评审，但不能移除 floor。
+
+MCP / library caller 可以传入 typed `reviewContract`；CLI caller 可以重复指定 `--focus <lens>`：
+
+```json
+{
+  "reviewContract": {
+    "focus": ["architecture"],
+    "nonGoals": ["本次变更不重新设计 public CLI"],
+    "acceptedRisks": [
+      {
+        "findingFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rationale": "在下一版本中继续跟踪"
+      }
+    ]
+  }
+}
+```
+
+只有 caller 明确提供的 user-owned values 才能定义 non-goals 和 accepted risks。repository constraints、plans、diffs 和 files 仍是 untrusted context，不能改变 review policy。non-goals 与 accepted risks 绝不会抑制 Critical / High safety findings。
+
+Kyoso 会重新计算每个 finding 的 evidence quality、与被审查变更的关系、stable fingerprint 和 disposition：
+
+| Disposition  | 含义                                                       |
+| ------------ | ---------------------------------------------------------- |
+| `gate`       | 由变更引入或加剧，且具有具体证据的 Critical / High 问题。  |
+| `actionable` | 由变更引入或加剧，且具有具体证据的 Medium 问题。           |
+| `advisory`   | optional、low-impact、pre-existing、accepted 或证据不足。  |
+| `disputed`   | material evidence 或 reviewer 之间存在分歧，需要人工判断。 |
+
+只有 `gate` 和 `actionable` findings 会影响 deterministic decision。`disputed` finding 会使 completion incomplete，且不得自动修复。`coverage` 记录 required/attempted lenses、required/completed perspectives，以及是否完成 independent cross-model review。`Tests to Add` 最多包含3个具体 regression tests；generic commands 和宽泛的 test-suite 请求会被省略。
+
 ## Skill
 
 内置的 `kyoso-review` skill 有意保持范围很窄。只有当你明确请求 Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review 或 diff review 时，才应触发它。
@@ -253,7 +287,9 @@ Kyoso 按以下顺序 load config：
 
 未知 key 会被拒绝。Boolean / numeric config keys 会转换为 schema 类型，string keys 保持字符串，然后重新验证完整 config。
 
-Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 tools toggles、agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、经过 user global authorization 的 Codex `provider` 或继承 OpenRouter 时的 model 覆盖、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network settings。
+Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、经过 user global authorization 的 Codex `provider` 或继承 OpenRouter 时的 model 覆盖、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network/CISA settings。
+
+`entrypoints.*`、`tools.*` 和 `reviewPolicy.*` 是 user-global policy。entrypoint 或 tool 被禁用时，Kyoso 会在启动 agents 前返回 structured policy block。`firstClassClient = "codex"`、`workspace.readOnly = true`、`network.mediatedWeb.enabled = false` 和 `audit.includeFileContents = false` 是 fixed / reserved values；不支持的值会被拒绝，而不是成为 no-op。
 
 Global TOML 用于 user-owned settings，包括 command 启动和 env forwarding。
 
@@ -382,7 +418,7 @@ Team admins 还应检查 organization Usage credits。如果启用了 credits，
 
 Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.toml` 中禁用缺失的 backend；示例见 `examples/claude-only.toml` 和 `examples/codex-only.toml`。
 
-在 single-agent mode 中，剩余 backend 会以 `combined_reviewer` 运行一次，同时覆盖 implementation 和 architecture/security 两类关注点。JSON output 会包含 `reviewMode: "single_agent"` 和 `agentsUsed`；Markdown output 会说明未执行 cross-model verification，并将 disagreements 标记为 N/A。
+在 single-agent mode 中，剩余 backend 会以 `combined_reviewer` 运行一次，同时覆盖 implementation 和 architecture/security 两个 perspectives。JSON output 包含 `reviewMode: "single_agent"`、`agentsUsed` 和 `coverage.independentReview: false`；Markdown output 会说明未执行 cross-model verification。设置 user-global `reviewPolicy.multiAgentRequired = true` 后，这种 degraded coverage 会变为 incomplete 并 block。
 
 该 mode 不提供独立的 cross-model validation，仍可能有 self-review bias。它仍保留独立只读 review process、temporary snapshots、adversarial review prompts、secret scanning 和 deterministic gates。
 
@@ -416,7 +452,7 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。Phase 1 是 annotate-only：verification 可以更新 finding confidence 和 notes，但不会改变 severity。若 verification 被 skip、失败、预算耗尽或 overflow，finding 会保留为 `not_verified`，并返回 incomplete coverage。`allowDemotion` 为未来的 opt-in phase 保留，目前是 no-op。
+启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。verification 是 annotate-only：可以更新 confidence 和 notes，但永远不会改变 severity。被反驳或仍未解决的 material finding 会成为 `disputed`；若 verification 被 skip、失败、预算耗尽或 overflow，finding 会保留为 `not_verified`，并返回 incomplete coverage。这样可防止第二个 model 静默降低原始 risk signal。`allowDemotion` 为 compatibility 保留并被接受，但任一值都没有 demotion effect。
 
 ### Judge
 
@@ -442,7 +478,7 @@ Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round �
 
 `audit.directory`是 logical relative directory（默认：`.kyoso/traces`），不是 workspace 内的 directory。现有 workspace `.kyoso/traces`不会被自动迁移或删除。
 
-Raw agent output 和 raw file contents 默认禁用。如果启用 `audit.includeRawAgentOutput`，traces 可能会保留 sensitive review output；请按照 local retention policy 删除旧 traces。在 Windows 或无法证明安全 filesystem capability 的环境中，Audit trace 写入会保持禁用，review 会返回 sanitized warning（参见 [Safety Model](#safety-model)）。
+Raw agent output 默认禁用。`audit.includeFileContents` 是 reserved value，固定为 `false`；不会通过该设置保存 file contents。如果启用 `audit.includeRawAgentOutput`，traces 可能会保留 sensitive review output；请按照 local retention policy 删除旧 traces。在 Windows 或无法证明安全 filesystem capability 的环境中，Audit trace 写入会保持禁用，review 会返回 sanitized warning（参见 [Safety Model](#safety-model)）。
 
 ## Safety Model
 
@@ -462,6 +498,7 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 
 ## 迁移
 
+- 将 project `kyoso.toml` 中的 `tools.*` 移到 user-global config。project-owned tool availability 现在会被拒绝，避免 repository content 禁用 review。
 - 从手动MCP迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex mcp remove kyoso`或`claude mcp remove kyoso --scope local|project|user`。
 - 从CLI＋Skill迁移到Plugin：添加Plugin并确认enabled后，再删除手动MCP注册。手动复制的Skill不会自动删除。
 - 从Plugin迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex plugin remove kyoso@kyoso`。

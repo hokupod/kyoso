@@ -8,6 +8,10 @@ export const defaultConfig: KyosoConfigInput = {
     securityReview: true,
     diffReview: true,
   },
+  reviewPolicy: {
+    additionalLenses: [],
+    multiAgentRequired: false,
+  },
   agents: {
     codex: {
       enabled: true,

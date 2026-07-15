@@ -159,7 +159,7 @@ Manual setup examples are kept in `examples/codex-config.toml` and `examples/cla
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
 kyoso security --goal "Review this auth diff" --diff changes.patch
-kyoso diff --base main --head HEAD --set agents.claude.effort=high
+kyoso diff --base main --head HEAD --focus architecture --set agents.claude.effort=high
 kyoso doctor
 kyoso init
 kyoso setup codex
@@ -179,7 +179,7 @@ kyoso plan \
   --file src/auth/callback.ts
 ```
 
-Read the result from the top down: `Decision` is the deterministic gate outcome, `Findings` are the required changes, and `Tests to Add` are the regression checks Kyoso expects before approval.
+Read the result from the top down: `Decision` is the deterministic gate outcome, `Coverage` shows which required lenses and perspectives ran, and each finding's `disposition` says whether it blocks or only informs the review.
 
 Run a CISA Secure by Design security review against a patch:
 
@@ -190,7 +190,7 @@ kyoso security \
   --json
 ```
 
-In JSON output, `cisaSecureByDesign` shows the four gate dimensions. A `fail` in customer security outcomes blocks the review; warning-level dimensions usually produce `approve_with_changes`.
+In JSON output, `cisaSecureByDesign` shows the configured dimensions and whether gate enforcement is enabled. Raw backend dimension statuses are ignored for computation and decision; accompanying notes remain advisory. Kyoso computes statuses from admitted findings. An enforced `fail` in customer security outcomes blocks the review.
 
 Register Kyoso with Codex or Claude Code as an MCP server, then call `plan_review` from the client:
 
@@ -224,6 +224,40 @@ Kyoso exposes exactly these MCP tools:
 
 MCP stdout is reserved for protocol messages. Logs go to stderr or local audit traces.
 
+## Review contract and finding admission
+
+Every review includes a non-removable safety floor: correctness, regression, security boundaries, secrets/injection, data integrity, and public contract. Kyoso also adds supply-chain, privacy, and resource-amplification lenses when the review shape calls for them. User-global `reviewPolicy.additionalLenses` can add more lenses; it cannot remove the floor.
+
+MCP and library callers can pass a typed `reviewContract`; CLI callers can add repeatable `--focus <lens>` values:
+
+```json
+{
+  "reviewContract": {
+    "focus": ["architecture"],
+    "nonGoals": ["Do not redesign the public CLI in this change"],
+    "acceptedRisks": [
+      {
+        "findingFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rationale": "Tracked for the next release"
+      }
+    ]
+  }
+}
+```
+
+Only explicit caller-owned values may define non-goals and accepted risks. Repository constraints, plans, diffs, and files remain untrusted context and cannot change review policy. Non-goals and accepted risks never suppress Critical or High safety findings.
+
+Kyoso recalculates every finding's evidence quality, relation to the reviewed change, stable fingerprint, and disposition:
+
+| Disposition  | Meaning                                                                 |
+| ------------ | ----------------------------------------------------------------------- |
+| `gate`       | Concrete Critical/High issue introduced or worsened by the change.      |
+| `actionable` | Concrete Medium issue introduced or worsened by the change.             |
+| `advisory`   | Optional, low-impact, pre-existing, accepted, or insufficiently proven. |
+| `disputed`   | Material evidence or reviewer disagreement requiring human judgment.    |
+
+Only `gate` and `actionable` findings affect the deterministic decision. A `disputed` finding makes completion incomplete and must not be auto-fixed. `coverage` records required/attempted lenses, required/completed perspectives, and whether independent cross-model review occurred. `Tests to Add` contains at most three concrete regression tests; generic commands and broad test-suite requests are omitted.
+
 ## Skill
 
 The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
@@ -251,7 +285,9 @@ Kyoso loads config in this order:
 
 Unknown keys are rejected. Boolean and numeric config keys are converted to their schema types; string keys remain strings. The complete config is then validated.
 
-Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as tool toggles, agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, and the Codex-only `provider` or a model override while OpenRouter is inherited after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network settings.
+Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, the Codex-only `provider` or a model override while OpenRouter is inherited after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network/CISA settings.
+
+`entrypoints.*`, `tools.*`, and `reviewPolicy.*` are user-global policy. A disabled entrypoint or tool returns a structured policy block before agents start. `firstClassClient = "codex"`, `workspace.readOnly = true`, `network.mediatedWeb.enabled = false`, and `audit.includeFileContents = false` are fixed or reserved values; unsupported values are rejected instead of acting as no-ops.
 
 Global TOML is for user-owned settings that can launch commands or forward environment variables:
 
@@ -380,7 +416,7 @@ Team admins should also check organization Usage credits. If credits are enabled
 
 Kyoso can run when only Claude or only Codex is available. Disable the missing backend in `kyoso.toml` using `examples/claude-only.toml` or `examples/codex-only.toml`.
 
-In single-agent mode, the remaining backend runs once as `combined_reviewer` and covers both implementation and architecture/security focus areas. JSON output includes `reviewMode: "single_agent"` and `agentsUsed`; Markdown output states that cross-model verification was not performed and marks disagreements as N/A.
+In single-agent mode, the remaining backend runs once as `combined_reviewer` and covers both implementation and architecture/security perspectives. JSON output includes `reviewMode: "single_agent"`, `agentsUsed`, and `coverage.independentReview: false`; Markdown output states that cross-model verification was not performed. Set user-global `reviewPolicy.multiAgentRequired = true` to make this degraded coverage incomplete and block.
 
 This mode does not provide independent cross-model validation and may retain self-review bias. It still provides a separate read-only review process, temporary snapshots, adversarial review prompts, secret scanning, and deterministic gates.
 
@@ -414,7 +450,7 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Phase 1 is annotate-only: verification can update finding confidence and notes, but it does not change severity. A skipped, failed, budget-exhausted, or overflowed verification leaves the finding marked `not_verified` and returns incomplete coverage. `allowDemotion` is reserved for a future opt-in phase and is currently a no-op.
+When enabled, Kyoso asks the agent that did not report each high/critical single-source finding to try to refute it. Verification is annotate-only: it can update confidence and notes, but never changes severity. A refuted or otherwise unresolved material finding becomes `disputed`; skipped, failed, budget-exhausted, or overflowed verification leaves it `not_verified` and returns incomplete coverage. This preserves the original risk signal instead of letting a second model silently demote it. `allowDemotion` is accepted for compatibility but reserved; either value has no demotion effect.
 
 ### Judge
 
@@ -440,7 +476,7 @@ On supported POSIX runtimes, Audit traces are written below the user state base 
 
 `audit.directory` is a logical relative directory (default: `.kyoso/traces`), not a directory in the workspace. Existing workspace `.kyoso/traces` files are not migrated or deleted automatically.
 
-Raw agent output and raw file contents are disabled by default. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces according to your local retention policy. On Windows or an environment without proven safe filesystem capabilities, Audit trace writing stays disabled and the review returns a sanitized warning (see [Safety Model](#safety-model)).
+Raw agent output is disabled by default. `audit.includeFileContents` is reserved and fixed to `false`; file contents are never persisted through that setting. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces according to your local retention policy. On Windows or an environment without proven safe filesystem capabilities, Audit trace writing stays disabled and the review returns a sanitized warning (see [Safety Model](#safety-model)).
 
 ## Safety Model
 
@@ -460,6 +496,7 @@ Windows, and environments where the required filesystem capabilities cannot be p
 
 ## Migration
 
+- Move any project `tools.*` settings from `kyoso.toml` to user-global config. Project-owned tool availability is now rejected so repository content cannot disable reviews.
 - Manual MCP to CLI plus Skill: install the CLI and Skill first, then run `codex mcp remove kyoso` or `claude mcp remove kyoso --scope local|project|user`.
 - CLI plus Skill to Plugin: add the Plugin, confirm it is enabled, then remove the manual MCP registration. Manually copied Skills are not removed automatically.
 - Plugin to CLI plus Skill: install the CLI and Skill first, then run `codex plugin remove kyoso@kyoso`.

@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
+import { MAX_AGENT_OUTPUT_BYTES } from "../core/constants.js";
 
 export const CODEX_OPENROUTER_PROVIDER = "openrouter" as const;
 export const CODEX_DEFAULT_PROVIDER = "default" as const;
@@ -69,71 +70,93 @@ const codexAgentSchema = baseAgentSchema
     });
   });
 
-export const kyosoConfigSchema = z.object({
-  entrypoints: z.object({
-    mcp: z.boolean(),
-    cli: z.boolean(),
-  }),
-  firstClassClient: z.string(),
-  tools: z.object({
-    planReview: z.boolean(),
-    securityReview: z.boolean(),
-    diffReview: z.boolean(),
-  }),
-  agents: z.object({
-    codex: codexAgentSchema,
-    claude: baseAgentSchema,
-  }),
-  workspace: z.object({
-    mode: z.literal("temp_snapshot"),
-    root: z.string(),
-    readOnly: z.boolean(),
-    maxContextBytes: z.number().int().positive(),
-    maxDiffBytes: z.number().int().positive(),
-    deny: z.array(z.string()),
-  }),
-  secrets: z.object({
-    mode: z.literal("redact_and_block"),
-    blockOnDetectedSecret: z.boolean(),
-    allowOverride: z.boolean(),
-  }),
-  network: z.object({
-    defaultMode: z.enum(["model_only", "unrestricted"]),
-    allowUnrestricted: z.boolean(),
-    warnOnUnrestricted: z.boolean(),
-    mediatedWeb: z.object({ enabled: z.boolean() }),
-  }),
-  securityReview: z.object({
-    cisaSecureByDesign: z.object({
-      enabled: z.boolean(),
-      gate: z.boolean(),
-      dimensions: z.object({
-        customerSecurityOutcomes: z.boolean(),
-        secureByDefault: z.boolean(),
-        transparencyAndAccountability: z.boolean(),
-        governance: z.boolean(),
+const reviewBudgetSchema = z.object({
+  maxModelCalls: z.number().int().positive(),
+  maxTotalWallTimeMs: z.number().int().positive(),
+  maxAgentOutputBytes: z.number().int().positive().max(MAX_AGENT_OUTPUT_BYTES),
+  maxFindingsPerAgent: z.number().int().positive(),
+  skipOptionalPhasesWhenTokenUsageUnknown: z.boolean(),
+});
+
+export const kyosoConfigSchema = z
+  .object({
+    entrypoints: z.object({
+      mcp: z.boolean(),
+      cli: z.boolean(),
+    }),
+    firstClassClient: z.string(),
+    tools: z.object({
+      planReview: z.boolean(),
+      securityReview: z.boolean(),
+      diffReview: z.boolean(),
+    }),
+    agents: z.object({
+      codex: codexAgentSchema,
+      claude: baseAgentSchema,
+    }),
+    workspace: z.object({
+      mode: z.literal("temp_snapshot"),
+      root: z.string(),
+      readOnly: z.boolean(),
+      maxContextBytes: z.number().int().positive(),
+      maxDiffBytes: z.number().int().positive(),
+      deny: z.array(z.string()),
+    }),
+    secrets: z.object({
+      mode: z.literal("redact_and_block"),
+      blockOnDetectedSecret: z.boolean(),
+      allowOverride: z.boolean(),
+    }),
+    network: z.object({
+      defaultMode: z.enum(["model_only", "unrestricted"]),
+      allowUnrestricted: z.boolean(),
+      warnOnUnrestricted: z.boolean(),
+      mediatedWeb: z.object({ enabled: z.boolean() }),
+    }),
+    securityReview: z.object({
+      cisaSecureByDesign: z.object({
+        enabled: z.boolean(),
+        gate: z.boolean(),
+        dimensions: z.object({
+          customerSecurityOutcomes: z.boolean(),
+          secureByDefault: z.boolean(),
+          transparencyAndAccountability: z.boolean(),
+          governance: z.boolean(),
+        }),
       }),
     }),
-  }),
-  judge: z.object({
-    mode: z.enum(["deterministic_plus_llm", "deterministic_only"]),
-    provider: z.enum(["auto", "openai", "anthropic", "none"]),
-    timeoutMs: z.number().int().positive(),
-  }),
-  verification: z.object({
-    enabled: z.boolean().default(false),
-    maxFindings: z.number().int().nonnegative().default(5),
-    timeoutMs: z.number().int().positive().default(90_000),
-    allowDemotion: z.boolean().default(false),
-  }),
-  audit: z.object({
-    enabled: z.boolean(),
-    format: z.literal("jsonl"),
-    directory: z.string(),
-    includeRawAgentOutput: z.boolean(),
-    includeFileContents: z.boolean(),
-  }),
-});
+    judge: z.object({
+      mode: z.enum(["deterministic_plus_llm", "deterministic_only"]),
+      provider: z.enum(["auto", "openai", "anthropic", "none"]),
+      timeoutMs: z.number().int().positive(),
+    }),
+    verification: z.object({
+      enabled: z.boolean().default(false),
+      maxFindings: z.number().int().nonnegative().default(5),
+      timeoutMs: z.number().int().positive().default(90_000),
+      allowDemotion: z.boolean().default(false),
+    }),
+    reviewBudget: reviewBudgetSchema,
+    audit: z.object({
+      enabled: z.boolean(),
+      format: z.literal("jsonl"),
+      directory: z.string(),
+      includeRawAgentOutput: z.boolean(),
+      includeFileContents: z.boolean(),
+    }),
+  })
+  .superRefine((config, context) => {
+    const enabledPrimaryReviewers = Object.values(config.agents).filter(
+      (agent) => agent.enabled,
+    ).length;
+    if (config.reviewBudget.maxModelCalls >= enabledPrimaryReviewers) return;
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["reviewBudget", "maxModelCalls"],
+      message:
+        "must be greater than or equal to the number of enabled primary reviewers.",
+    });
+  });
 
 function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
   const paths = [
@@ -193,6 +216,11 @@ export const kyosoConfigKnownLeafPaths = [
   "verification.maxFindings",
   "verification.timeoutMs",
   "verification.allowDemotion",
+  "reviewBudget.maxModelCalls",
+  "reviewBudget.maxTotalWallTimeMs",
+  "reviewBudget.maxAgentOutputBytes",
+  "reviewBudget.maxFindingsPerAgent",
+  "reviewBudget.skipOptionalPhasesWhenTokenUsageUnknown",
   "audit.enabled",
   "audit.format",
   "audit.directory",
@@ -214,6 +242,7 @@ export const kyosoConfigSecuritySensitivePrefixes = [
   "secrets",
   "securityReview",
   "verification",
+  "reviewBudget",
   "workspace",
 ];
 

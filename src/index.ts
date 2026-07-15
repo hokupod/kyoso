@@ -7,6 +7,12 @@ export type {
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
+  ModelTokenUsage,
   NetworkMode,
+  ReviewBudget,
+  ReviewBudgetRequest,
+  ReviewCompletion,
+  ReviewExecutionBudget,
+  ReviewModelCallAudit,
   ReviewTool,
 } from "./core/types.js";

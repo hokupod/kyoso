@@ -373,8 +373,8 @@ Subscription-only setup:
 
 - Codex: 使用 local `codex` login
 - Claude: 运行 `claude setup-token`，然后设置 `CLAUDE_CODE_OAUTH_TOKEN`
-- Judge: 不设置 API keys，因此 Kyoso 使用 `deterministic_fallback`（参见 [Judge](#judge)）
-- 当存在 `OPENAI_API_KEY` 时，如需避免 OpenAI judge calls，请设置 `judge.provider = "none"`
+- Judge: 默认的 `deterministic_only` mode 不需要 API key（参见 [Judge](#judge)）
+- 如需禁用显式 LLM judge opt-in，请设置 `judge.mode = "deterministic_only"` 或 `judge.provider = "none"`
 
 Team admins 还应检查 organization Usage credits。如果启用了 credits，超出 subscription limits 的 billing behavior 由 Kyoso 外部控制。
 
@@ -385,6 +385,23 @@ Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.tom
 在 single-agent mode 中，剩余 backend 会以 `combined_reviewer` 运行一次，同时覆盖 implementation 和 architecture/security 两类关注点。JSON output 会包含 `reviewMode: "single_agent"` 和 `agentsUsed`；Markdown output 会说明未执行 cross-model verification，并将 disagreements 标记为 N/A。
 
 该 mode 不提供独立的 cross-model validation，仍可能有 self-review bias。它仍保留独立只读 review process、temporary snapshots、adversarial review prompts、secret scanning 和 deterministic gates。
+
+### Execution budget and review stopping
+
+每次 review 都有 user-global hard ceiling，用于限制 model call 数、总 wall time、streaming agent text（message 和 thought chunk）以及每个 agent 的 finding 数量。
+
+```toml
+[reviewBudget]
+maxModelCalls = 4
+maxTotalWallTimeMs = 480000
+maxAgentOutputBytes = 65536
+maxFindingsPerAgent = 10
+skipOptionalPhasesWhenTokenUsageUnknown = true
+```
+
+`reviewBudget` 只能在 user-global 配置中设置；project `kyoso.toml` 和 `--set` 都不能修改它。MCP / library request 只能通过 `options.reviewBudget` 降低 ceiling，不能提高。Kyoso 会先同时预留两个 primary reviewer，再将剩余 call 用于 verification，并把 LLM Judge 作为 advisory。默认 Judge mode 是 `deterministic_only`。
+
+结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、output bytes，以及 reported 或 unknown token usage。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次评审与 material fix 后的确认评审各1次；第三次需要用户明确批准。
 
 ### Verification
 
@@ -399,11 +416,11 @@ timeoutMs = 90000
 allowDemotion = false
 ```
 
-启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。Phase 1 是 annotate-only：verification 可以更新 finding confidence 和 notes，但不会改变 severity 或 final decision。`allowDemotion` 为未来的 opt-in phase 保留，目前是 no-op。
+启用后，Kyoso 会让没有报告该 finding 的 agent 对 high/critical 且 single-source 的 finding 尝试反驳。Phase 1 是 annotate-only：verification 可以更新 finding confidence 和 notes，但不会改变 severity。若 verification 被 skip、失败、预算耗尽或 overflow，finding 会保留为 `not_verified`，并返回 incomplete coverage。`allowDemotion` 为未来的 opt-in phase 保留，目前是 no-op。
 
 ### Judge
 
-Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs 是 optional。设置 `OPENAI_API_KEY` 或 `CODEX_API_KEY` 可使用 OpenAI judge，设置 `ANTHROPIC_API_KEY` 可使用 Anthropic judge。Optional overrides:
+Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs 是 optional，默认 `mode = "deterministic_only"`；仅设置 credential 不会启动 judge call。OpenAI judge 需要 `mode = "deterministic_plus_llm"` 与 `OPENAI_API_KEY` 或 `CODEX_API_KEY`；Anthropic judge 需要同一 mode 与 `ANTHROPIC_API_KEY`。Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`
@@ -413,7 +430,7 @@ Judge defaults 有意使用 lightweight models。若需要更强的 judge，请�
 
 ### Timeouts
 
-Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。MCP clients 应允许 tool calls 至少运行 360 秒。如果 `verification.enabled` 为 true，Kyoso 可能会运行额外的 cross-agent verification round，因此请至少允许 480 秒。
+Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒，各 phase 使用剩余 deadline 而不会延长它。MCP clients 应允许 tool calls 至少运行480秒。
 
 ### Audit
 

@@ -16,6 +16,7 @@ import {
 } from "../acp/prompts.js";
 import { normalizeAgentOutput } from "../acp/normalize.js";
 import { aggregateAgentResults } from "../aggregate/aggregateFindings.js";
+import { compareSeverity } from "../aggregate/severity.js";
 import {
   createTraceWriter,
   type TraceWriter,
@@ -43,7 +44,12 @@ import {
   defaultSummaryText,
   renderMarkdownResult,
 } from "../output/markdown.js";
-import { runJudge, type JudgeRunResult } from "../judge/provider.js";
+import {
+  resolveJudgeProvider,
+  runJudge,
+  type JudgeRunInput,
+  type JudgeRunResult,
+} from "../judge/provider.js";
 import { assertNotChildAgent } from "../security/recursionGuard.js";
 import {
   sanitizeText,
@@ -56,6 +62,13 @@ import { decide } from "../security/decision.js";
 import { createSnapshot, type Snapshot } from "../workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../workspace/cleanup.js";
 import { newTraceId } from "../utils/ids.js";
+import { createRequestFingerprint } from "./requestFingerprint.js";
+import { normalizeModelTokenUsage } from "./tokenUsage.js";
+import {
+  ReviewBudgetTracker,
+  resolveReviewBudget,
+  type ModelCallReservation,
+} from "./reviewBudget.js";
 import {
   applyVerificationVerdicts,
   countVerificationStatuses,
@@ -75,6 +88,16 @@ export type RunReviewOptions = LoadConfigOptions & {
   traceWriterFactory?: (options: TraceWriterOptions) => TraceWriter;
 };
 
+function requestForRecursionFingerprint(
+  request: KyosoReviewRequest,
+): KyosoReviewRequest {
+  try {
+    return scanAndRedactSecrets(request).redactedRequest;
+  } catch {
+    return { goal: "" };
+  }
+}
+
 export async function runReview(
   tool: ReviewTool,
   request: KyosoReviewRequest,
@@ -82,7 +105,8 @@ export async function runReview(
 ): Promise<KyosoResult> {
   const cwd = options.cwd ?? process.cwd();
   const traceId = newTraceId();
-  const startedAt = new Date().toISOString();
+  const startedAtEpochMs = Date.now();
+  const startedAt = new Date(startedAtEpochMs).toISOString();
   const auditEnv = { ...process.env, ...options.env };
   const traceWriterFactory = options.traceWriterFactory ?? createTraceWriter;
   let snapshot: Snapshot | undefined;
@@ -92,6 +116,17 @@ export async function runReview(
   } catch (error) {
     if (error instanceof KyosoRequestError) {
       const config = kyosoConfigSchema.parse(defaultConfig);
+      const budgetTracker = new ReviewBudgetTracker(
+        config.reviewBudget,
+        startedAtEpochMs,
+      );
+      const requestFingerprint = createRequestFingerprint({
+        tool,
+        request: requestForRecursionFingerprint(request),
+        config,
+        roles: resolveAgentRoles(config),
+        budget: config.reviewBudget,
+      });
       const trace = traceWriterFactory({
         enabled: config.audit.enabled,
         directory: config.audit.directory,
@@ -106,6 +141,12 @@ export async function runReview(
           tool,
           timestamp: new Date().toISOString(),
         });
+        await writeReviewBudgetPlanned({
+          trace,
+          traceId,
+          budgetTracker,
+          requestFingerprint,
+        });
         return await buildPolicyBlockResult({
           tool,
           trace,
@@ -113,6 +154,8 @@ export async function runReview(
           startedAt,
           networkMode: config.network.defaultMode,
           warning: error.message,
+          budgetTracker,
+          requestFingerprint,
           finding: {
             id: "KYOSO-1",
             severity: "critical",
@@ -193,6 +236,14 @@ export async function runReview(
     });
 
     validateReviewRequest(tool, request);
+    const reviewBudget = resolveReviewBudget(
+      loaded.config.reviewBudget,
+      request.options?.reviewBudget,
+    );
+    const budgetTracker = new ReviewBudgetTracker(
+      reviewBudget,
+      startedAtEpochMs,
+    );
     assertTrustedWorkspaceRoot(
       request.workspace?.root,
       loaded.config.workspace.root,
@@ -238,6 +289,19 @@ export async function runReview(
       loaded.config.secrets.blockOnDetectedSecret &&
       !allowSecretOverride
     ) {
+      const requestFingerprint = createRequestFingerprint({
+        tool,
+        request: secretScan.redactedRequest,
+        config: loaded.config,
+        roles: resolveAgentRoles(loaded.config),
+        budget: reviewBudget,
+      });
+      await writeReviewBudgetPlanned({
+        trace,
+        traceId,
+        budgetTracker,
+        requestFingerprint,
+      });
       return await buildSecretBlockResult({
         tool,
         trace,
@@ -247,6 +311,8 @@ export async function runReview(
         networkMode,
         secretScan,
         warnings,
+        budgetTracker,
+        requestFingerprint,
       });
     }
 
@@ -264,6 +330,19 @@ export async function runReview(
     warnings.push(...built.warnings);
 
     const agentRoles = resolveAgentRoles(loaded.config);
+    const requestFingerprint = createRequestFingerprint({
+      tool,
+      request: built.request,
+      config: loaded.config,
+      roles: agentRoles,
+      budget: reviewBudget,
+    });
+    await writeReviewBudgetPlanned({
+      trace,
+      traceId,
+      budgetTracker,
+      requestFingerprint,
+    });
     snapshot = await createSnapshot(traceId, tool, built.request, {
       denyPatterns,
       allowPatterns,
@@ -290,6 +369,7 @@ export async function runReview(
       manager,
       trace,
       warnings,
+      budgetTracker,
     });
 
     warnings.push(
@@ -300,13 +380,32 @@ export async function runReview(
       ),
     );
 
-    const normalizedAgentResults = agentResults.map(normalizeAgentRunResult);
-    const agentsUsed = normalizedAgentResults.map((result) => result.agent);
-    const reviewMode = agentsUsed.length === 1 ? "single_agent" : "multi_agent";
+    const normalized = agentResults.map((result) =>
+      normalizeAgentRunResult(result, reviewBudget.maxFindingsPerAgent),
+    );
+    const normalizedAgentResults = normalized.map((item) => item.result);
+    for (const item of normalized.filter((item) => item.findingsCapped)) {
+      budgetTracker.markIncomplete("coverage_incomplete");
+      warnings.push(
+        `Agent ${item.result.agent} findings were capped at ${reviewBudget.maxFindingsPerAgent}; review coverage is incomplete.`,
+      );
+    }
+    const enabledAgents = (["codex", "claude"] as const).filter(
+      (agent) => loaded.config.agents[agent].enabled,
+    );
+    const agentsUsed = normalizedAgentResults
+      .filter((result) => result.status !== "skipped")
+      .map((result) => result.agent);
+    const reviewMode =
+      enabledAgents.length === 1 ? "single_agent" : "multi_agent";
     const completed = normalizedAgentResults.filter(
       (result) => result.status === "completed",
     );
-    const degraded = completed.length !== agentResults.length;
+    const attempted = normalizedAgentResults.filter(
+      (result) => result.status !== "skipped",
+    );
+    const degraded =
+      completed.length !== attempted.length || enabledAgents.length === 0;
     let aggregate = aggregateAgentResults(normalizedAgentResults, {
       reviewMode,
     });
@@ -324,7 +423,17 @@ export async function runReview(
       };
     }
 
-    if (completed.length === 0) {
+    if (
+      completed.length === 0 &&
+      (attempted.length > 0 || enabledAgents.length === 0)
+    ) {
+      const noPrimaryAgents = enabledAgents.length === 0;
+      if (noPrimaryAgents) {
+        budgetTracker.markIncomplete("coverage_incomplete");
+        warnings.push(
+          "No primary review agents are enabled; review coverage is incomplete.",
+        );
+      }
       aggregate = {
         ...aggregate,
         findings: [
@@ -333,15 +442,20 @@ export async function runReview(
             id: `KYOSO-${aggregate.findings.length + 1}`,
             severity: "critical",
             category: "other",
-            title: "All backend agents failed",
-            evidence: normalizedAgentResults
-              .map(
-                (result) =>
-                  `${result.agent}: ${result.error?.code ?? result.status}`,
-              )
-              .join("; "),
-            recommendation:
-              "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
+            title: noPrimaryAgents
+              ? "No primary review agents enabled"
+              : "All backend agents failed",
+            evidence: noPrimaryAgents
+              ? "Both configured primary reviewers are disabled."
+              : normalizedAgentResults
+                  .map(
+                    (result) =>
+                      `${result.agent}: ${result.error?.code ?? result.status}`,
+                  )
+                  .join("; "),
+            recommendation: noPrimaryAgents
+              ? "Enable at least one primary reviewer before running Kyoso."
+              : "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
             sourceAgents: ["kyoso_policy"],
             confidence: "high",
           },
@@ -359,7 +473,7 @@ export async function runReview(
     const verificationMode =
       loaded.config.verification.enabled && reviewMode === "single_agent"
         ? "skipped_single_agent"
-        : loaded.config.verification.enabled
+        : loaded.config.verification.enabled && enabledAgents.length > 1
           ? "cross_agent"
           : undefined;
     if (verificationMode === "cross_agent") {
@@ -374,25 +488,41 @@ export async function runReview(
           manager,
           trace,
           findings: aggregate.findings,
+          budgetTracker,
         })),
       );
+    }
+
+    if (
+      aggregate.findings.some(
+        (finding) => finding.verification?.status === "refuted",
+      )
+    ) {
+      budgetTracker.markIncomplete("disputed_finding");
     }
 
     const cisa =
       tool === "security_review"
         ? computeCisaGate(aggregate.findings, normalizedAgentResults)
         : undefined;
-    const decision = decide({
-      tool,
-      findings: aggregate.findings,
-      cisa,
-      degraded,
-      secretScan: { detected: secretScan.detected, blocked: false },
-    });
+    const budgetBeforeJudge = budgetTracker.snapshot();
+    const decision =
+      budgetBeforeJudge.completion.status === "incomplete"
+        ? "block"
+        : decide({
+            tool,
+            findings: aggregate.findings,
+            cisa,
+            degraded,
+            secretScan: { detected: secretScan.detected, blocked: false },
+          });
 
     const completedAt = new Date().toISOString();
     const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
       decision,
+      completion: budgetBeforeJudge.completion,
+      executionBudget: budgetBeforeJudge.executionBudget,
+      requestFingerprint,
       degraded,
       agentsUsed,
       reviewMode,
@@ -426,10 +556,11 @@ export async function runReview(
         workspaceMode: "temp_snapshot",
         configHash: loaded.configHash,
         warnings: Array.from(new Set([...warnings, ...trace.warnings])),
+        modelCalls: budgetBeforeJudge.modelCalls,
       },
     };
     const summaryText = defaultSummaryText(resultWithoutMarkdown);
-    const judge = await runJudge({
+    const judge = await runBudgetedJudge({
       tool,
       result: resultWithoutMarkdown,
       summaryText,
@@ -437,6 +568,9 @@ export async function runReview(
       config: loaded.config.judge,
       requestedProvider: request.options?.judgeProvider,
       env: options.env ?? process.env,
+      budgetTracker,
+      trace,
+      traceId,
     });
     const judgeComments = new Map(
       judge.output.disagreementComments.map((comment) => [
@@ -452,10 +586,21 @@ export async function runReview(
       }),
     );
     const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
+    const budgetAfterJudge = budgetTracker.snapshot();
+    const finalDecision =
+      budgetAfterJudge.completion.status === "incomplete" ? "block" : decision;
     const resultAfterJudge: Omit<KyosoResult, "summaryMarkdown"> = {
       ...resultWithoutMarkdown,
+      decision: finalDecision,
+      completion: budgetAfterJudge.completion,
+      executionBudget: budgetAfterJudge.executionBudget,
       disagreements,
       ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
+      audit: {
+        ...resultWithoutMarkdown.audit,
+        completedAt: new Date().toISOString(),
+        modelCalls: budgetAfterJudge.modelCalls,
+      },
     };
     const judgeEvent: Record<string, unknown> = {
       type: "judge_completed",
@@ -468,10 +613,17 @@ export async function runReview(
     await trace.write(judgeEvent);
     resultAfterJudge.audit.completedAt = new Date().toISOString();
 
+    await writeReviewBudgetCompleted({
+      trace,
+      traceId,
+      budgetTracker,
+      requestFingerprint,
+    });
+
     await trace.write({
       type: "decision_completed",
       traceId,
-      decision,
+      decision: finalDecision,
       timestamp: new Date().toISOString(),
     });
     await trace.write({
@@ -483,7 +635,10 @@ export async function runReview(
       tool,
       trace,
       result: resultAfterJudge,
-      summaryText: judge.output.summaryText,
+      summaryText:
+        resultAfterJudge.completion.status === "incomplete"
+          ? defaultSummaryText(resultAfterJudge)
+          : judge.output.summaryText,
     });
   } finally {
     await trace.finalize();
@@ -501,6 +656,7 @@ async function runFindingVerification(input: {
   manager: AcpAgentManager;
   trace: { write(event: Record<string, unknown>): Promise<void> };
   findings: KyosoFinding[];
+  budgetTracker: ReviewBudgetTracker;
 }): Promise<string[]> {
   // Phase 1: allowDemotion is intentionally a no-op. Verification may adjust
   // confidence and notes, but it never changes severity or decision.
@@ -509,44 +665,224 @@ async function runFindingVerification(input: {
     input.findings,
     input.config.verification.maxFindings,
   );
-  markVerificationOverflow(selection.overflow);
-  if (selection.selected.length === 0) return [];
-
   const warnings: string[] = [];
-  const groups = groupVerificationTargetsByVerifier(selection.selected);
+  if (selection.overflow.length > 0) {
+    markVerificationOverflow(selection.overflow, "verification_max_findings");
+    input.budgetTracker.markIncomplete("coverage_incomplete");
+  }
+  if (selection.selected.length === 0) return warnings;
+
+  const potentialGroups = groupVerificationTargetsByVerifier(
+    selection.selected,
+  );
   await input.trace.write({
     type: "verification_started",
     traceId: input.traceId,
     targetCount: selection.selected.length,
     notVerifiedCount: selection.overflow.length,
-    verifierCount: groups.length,
+    verifierCount: potentialGroups.length,
     timeoutMs: input.config.verification.timeoutMs,
     allowDemotionRequested,
     timestamp: new Date().toISOString(),
   });
 
-  const agentInputs = groups.map(({ verifier, findings }) => ({
+  if (
+    input.budgetTracker.budget.skipOptionalPhasesWhenTokenUsageUnknown &&
+    input.budgetTracker.isTokenUsageUnknown()
+  ) {
+    markVerificationOverflow(selection.selected, "token_usage_unknown");
+    input.budgetTracker.markIncomplete("token_usage_unknown");
+    input.budgetTracker.markIncomplete("coverage_incomplete");
+    warnings.push(
+      "Finding verification was skipped because primary-agent token usage was not reported.",
+    );
+    for (const group of potentialGroups) {
+      input.budgetTracker.recordSkipped({
+        kind: "verifier",
+        agent: group.verifier,
+        reason: "token_usage_unknown",
+      });
+      await input.trace.write({
+        type: "model_call_skipped",
+        traceId: input.traceId,
+        kind: "verifier",
+        agent: group.verifier,
+        reason: "token_usage_unknown",
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await input.trace.write({
+      type: "verification_completed",
+      traceId: input.traceId,
+      counts: countVerificationStatuses(input.findings),
+      timestamp: new Date().toISOString(),
+    });
+    return warnings;
+  }
+
+  type VerificationGroup = {
+    verifier: AgentName;
+    targets: typeof selection.selected;
+    reservation: ModelCallReservation;
+  };
+  const groups = new Map<AgentName, VerificationGroup>();
+  const unavailableVerifiers = new Map<
+    AgentName,
+    "model_call_budget" | "deadline"
+  >();
+  for (const target of selection.selected) {
+    const existing = groups.get(target.verifier);
+    if (existing) {
+      existing.targets.push(target);
+      continue;
+    }
+    const unavailable = unavailableVerifiers.get(target.verifier);
+    if (unavailable) {
+      markVerificationOverflow(
+        [target],
+        unavailable === "model_call_budget" ? "budget_exhausted" : "deadline",
+      );
+      continue;
+    }
+
+    const reservationResult = input.budgetTracker.reserve({
+      kind: "verifier",
+      agent: target.verifier,
+    });
+    if ("failure" in reservationResult) {
+      unavailableVerifiers.set(
+        target.verifier,
+        reservationResult.failure.reason,
+      );
+      markVerificationOverflow(
+        [target],
+        reservationResult.failure.reason === "model_call_budget"
+          ? "budget_exhausted"
+          : "deadline",
+      );
+      input.budgetTracker.recordSkipped({
+        kind: "verifier",
+        agent: target.verifier,
+        reason: reservationResult.failure.reason,
+      });
+      input.budgetTracker.markIncomplete(reservationResult.failure.reason);
+      input.budgetTracker.markIncomplete("coverage_incomplete");
+      await input.trace.write({
+        type: "review_budget_exhausted",
+        traceId: input.traceId,
+        phase: "verification",
+        kind: "verifier",
+        agent: target.verifier,
+        reason: reservationResult.failure.reason,
+        timestamp: new Date().toISOString(),
+      });
+      await input.trace.write({
+        type: "model_call_skipped",
+        traceId: input.traceId,
+        kind: "verifier",
+        agent: target.verifier,
+        reason: reservationResult.failure.reason,
+        timestamp: new Date().toISOString(),
+      });
+      continue;
+    }
+
+    const group = {
+      verifier: target.verifier,
+      targets: [target],
+      reservation: reservationResult.reservation,
+    };
+    groups.set(target.verifier, group);
+    await input.trace.write({
+      type: "model_call_reserved",
+      traceId: input.traceId,
+      kind: "verifier",
+      agent: target.verifier,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  const scheduledGroups: VerificationGroup[] = [];
+  for (const group of groups.values()) {
+    const timeoutMs = Math.min(
+      input.config.verification.timeoutMs,
+      input.budgetTracker.remainingWallTimeMs(),
+    );
+    if (timeoutMs > 0) {
+      scheduledGroups.push(group);
+      continue;
+    }
+    input.budgetTracker.skip(group.reservation, "deadline");
+    input.budgetTracker.markIncomplete("deadline");
+    input.budgetTracker.markIncomplete("coverage_incomplete");
+    markVerificationOverflow(group.targets, "deadline");
+    await input.trace.write({
+      type: "review_budget_exhausted",
+      traceId: input.traceId,
+      phase: "verification",
+      kind: "verifier",
+      agent: group.verifier,
+      reason: "deadline",
+      timestamp: new Date().toISOString(),
+    });
+    await input.trace.write({
+      type: "model_call_skipped",
+      traceId: input.traceId,
+      kind: "verifier",
+      agent: group.verifier,
+      reason: "deadline",
+      timestamp: new Date().toISOString(),
+    });
+  }
+  if (scheduledGroups.length === 0) {
+    await input.trace.write({
+      type: "verification_completed",
+      traceId: input.traceId,
+      counts: countVerificationStatuses(input.findings),
+      timestamp: new Date().toISOString(),
+    });
+    return warnings;
+  }
+
+  const agentInputs = scheduledGroups.map((group) => ({
     traceId: input.traceId,
-    agent: verifier,
+    agent: group.verifier,
     role: "finding_verifier" as const,
     tool: input.tool,
     prompt: buildFindingVerifierPrompt(
       input.tool,
       input.request,
-      verifier,
-      findings,
+      group.verifier,
+      group.targets.map((target) => target.finding),
     ),
     workspaceDir: input.workspaceDir,
-    timeoutMs: input.config.verification.timeoutMs,
+    timeoutMs: Math.min(
+      input.config.verification.timeoutMs,
+      input.budgetTracker.remainingWallTimeMs(),
+    ),
+    deadlineAtEpochMs: input.budgetTracker.deadlineAtEpochMs,
+    maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
     networkMode: input.networkMode,
+    onStarted: () => {
+      input.budgetTracker.markStarted(group.reservation);
+      return Promise.resolve();
+    },
   }));
 
   let results: AgentRunResult[];
   try {
     results = await input.manager.runAll(agentInputs);
   } catch (error) {
-    for (const group of groups) {
-      applyVerificationVerdicts(selection.selected, group.verifier, undefined);
+    for (const group of scheduledGroups) {
+      applyVerificationVerdicts(group.targets, group.verifier, undefined);
+      await finalizeModelCallResult({
+        budgetTracker: input.budgetTracker,
+        reservation: group.reservation,
+        result: failedVerifierResult(group.verifier, "AGENT_MANAGER_FAILED"),
+        trace: input.trace,
+        traceId: input.traceId,
+      });
+      input.budgetTracker.markIncomplete("coverage_incomplete");
     }
     const message = `Finding verification failed: ${sanitizeTextForDisplay(
       error instanceof Error ? error.message : String(error),
@@ -562,9 +898,36 @@ async function runFindingVerification(input: {
     return warnings;
   }
 
-  for (const result of results) {
+  const resultByAgent = new Map(
+    results.map((result) => [result.agent, result]),
+  );
+  for (const group of scheduledGroups) {
+    const result = resultByAgent.get(group.verifier);
+    if (!result) {
+      applyVerificationVerdicts(group.targets, group.verifier, undefined);
+      await finalizeModelCallResult({
+        budgetTracker: input.budgetTracker,
+        reservation: group.reservation,
+        result: failedVerifierResult(group.verifier, "AGENT_RESULT_MISSING"),
+        trace: input.trace,
+        traceId: input.traceId,
+      });
+      input.budgetTracker.markIncomplete("coverage_incomplete");
+      warnings.push(
+        `Finding verification by ${group.verifier} did not return a result.`,
+      );
+      continue;
+    }
+    await finalizeModelCallResult({
+      budgetTracker: input.budgetTracker,
+      reservation: group.reservation,
+      result,
+      trace: input.trace,
+      traceId: input.traceId,
+    });
     if (result.status !== "completed") {
-      applyVerificationVerdicts(selection.selected, result.agent, undefined);
+      applyVerificationVerdicts(group.targets, result.agent, undefined);
+      input.budgetTracker.markIncomplete("coverage_incomplete");
       const message = `Finding verification by ${result.agent} ${result.status}: ${
         result.error?.message ?? result.error?.code ?? "no detail"
       }`;
@@ -581,8 +944,9 @@ async function runFindingVerification(input: {
     }
 
     const verdicts = parseVerificationVerdicts(result.rawText);
-    applyVerificationVerdicts(selection.selected, result.agent, verdicts);
+    applyVerificationVerdicts(group.targets, result.agent, verdicts);
     if (!verdicts) {
+      input.budgetTracker.markIncomplete("coverage_incomplete");
       const message = `Finding verification by ${result.agent} returned malformed verdict JSON.`;
       warnings.push(message);
       await input.trace.write({
@@ -602,6 +966,24 @@ async function runFindingVerification(input: {
     timestamp: new Date().toISOString(),
   });
   return warnings;
+}
+
+function failedVerifierResult(
+  agent: AgentName,
+  code: "AGENT_MANAGER_FAILED" | "AGENT_RESULT_MISSING",
+): AgentRunResult {
+  const timestamp = new Date().toISOString();
+  return {
+    agent,
+    role: "finding_verifier",
+    status: "failed",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    error: {
+      code,
+      message: "The agent manager did not return a verification result.",
+    },
+  };
 }
 
 function buildJudgeAgentFindings(results: AgentRunResult[]): Array<{
@@ -647,6 +1029,123 @@ function buildCrossModelAnalysis(
   };
 }
 
+async function runBudgetedJudge(
+  input: JudgeRunInput & {
+    budgetTracker: ReviewBudgetTracker;
+    trace: { write(event: Record<string, unknown>): Promise<void> };
+    traceId: string;
+  },
+): Promise<JudgeRunResult> {
+  const configuredProvider = input.requestedProvider ?? input.config.provider;
+  const provider = resolveJudgeProvider(configuredProvider, input.env);
+  if (
+    input.config.mode === "deterministic_only" ||
+    provider === "deterministic_fallback"
+  ) {
+    return runJudge(input);
+  }
+
+  const fallback = () =>
+    runJudge({
+      ...input,
+      config: { ...input.config, mode: "deterministic_only" },
+    });
+  if (input.budgetTracker.snapshot().completion.status === "incomplete") {
+    await recordSkippedJudgeCall(input, "review_incomplete");
+    return fallback();
+  }
+  if (
+    input.budgetTracker.budget.skipOptionalPhasesWhenTokenUsageUnknown &&
+    input.budgetTracker.isTokenUsageUnknown()
+  ) {
+    await recordSkippedJudgeCall(input, "token_usage_unknown");
+    return fallback();
+  }
+
+  const reservationResult = input.budgetTracker.reserve({ kind: "judge" });
+  if ("failure" in reservationResult) {
+    await recordSkippedJudgeCall(input, reservationResult.failure.reason);
+    await input.trace.write({
+      type: "review_budget_exhausted",
+      traceId: input.traceId,
+      phase: "judge",
+      kind: "judge",
+      reason: reservationResult.failure.reason,
+      timestamp: new Date().toISOString(),
+    });
+    return fallback();
+  }
+
+  const reservation = reservationResult.reservation;
+  await input.trace.write({
+    type: "model_call_reserved",
+    traceId: input.traceId,
+    kind: "judge",
+    timestamp: new Date().toISOString(),
+  });
+  const timeoutMs = Math.min(
+    input.config.timeoutMs,
+    input.budgetTracker.remainingWallTimeMs(),
+  );
+  if (timeoutMs <= 0) {
+    input.budgetTracker.skip(reservation, "deadline");
+    await input.trace.write({
+      type: "review_budget_exhausted",
+      traceId: input.traceId,
+      phase: "judge",
+      kind: "judge",
+      reason: "deadline",
+      timestamp: new Date().toISOString(),
+    });
+    await input.trace.write({
+      type: "model_call_skipped",
+      traceId: input.traceId,
+      kind: "judge",
+      reason: "deadline",
+      timestamp: new Date().toISOString(),
+    });
+    return fallback();
+  }
+
+  input.budgetTracker.markStarted(reservation);
+  const judge = await runJudge({ ...input, timeoutMs });
+  const usage = normalizeModelTokenUsage(judge.usage);
+  input.budgetTracker.complete(reservation, {
+    ...(usage ? { usage } : {}),
+  });
+  await input.trace.write({
+    type: "model_call_completed",
+    traceId: input.traceId,
+    kind: "judge",
+    provider: judge.provider,
+    resultStatus: judge.status,
+    ...(usage ? { usage } : {}),
+    timestamp: new Date().toISOString(),
+  });
+  return judge;
+}
+
+async function recordSkippedJudgeCall(
+  input: Pick<
+    JudgeRunInput & {
+      budgetTracker: ReviewBudgetTracker;
+      trace: { write(event: Record<string, unknown>): Promise<void> };
+      traceId: string;
+    },
+    "budgetTracker" | "trace" | "traceId"
+  >,
+  reason: string,
+): Promise<void> {
+  input.budgetTracker.recordSkipped({ kind: "judge", reason });
+  await input.trace.write({
+    type: "model_call_skipped",
+    traceId: input.traceId,
+    kind: "judge",
+    reason,
+    timestamp: new Date().toISOString(),
+  });
+}
+
 async function runAgents(input: {
   tool: ReviewTool;
   request: KyosoReviewRequest;
@@ -657,65 +1156,222 @@ async function runAgents(input: {
   manager: AcpAgentManager;
   trace: { write(event: Record<string, unknown>): Promise<void> };
   warnings: string[];
+  budgetTracker: ReviewBudgetTracker;
 }): Promise<AgentRunResult[]> {
   const agentRoles = resolveAgentRoles(input.config);
-  const startedWrites: Promise<void>[] = [];
-  let acceptingStartedEvents = true;
-  const agentInputs = (["codex", "claude"] as const)
-    .filter((agent) => input.config.agents[agent].enabled)
-    .map((agent) => {
-      const agentConfig = input.config.agents[agent];
-      const role = agentRoles[agent] ?? agentConfig.role;
-      return {
+  const enabledAgents = (["codex", "claude"] as const).filter(
+    (agent) => input.config.agents[agent].enabled,
+  );
+  if (enabledAgents.length === 0) return [];
+
+  const reservationResult = input.budgetTracker.reserveMany(
+    enabledAgents.map((agent) => ({ kind: "primary" as const, agent })),
+  );
+  if ("failure" in reservationResult) {
+    input.budgetTracker.markIncomplete(reservationResult.failure.reason);
+    input.budgetTracker.markIncomplete("coverage_incomplete");
+    await input.trace.write({
+      type: "review_budget_exhausted",
+      traceId: input.traceId,
+      phase: "primary",
+      reason: reservationResult.failure.reason,
+      requiredCalls: enabledAgents.length,
+      timestamp: new Date().toISOString(),
+    });
+    for (const agent of enabledAgents) {
+      input.budgetTracker.recordSkipped({
+        kind: "primary",
+        agent,
+        reason: reservationResult.failure.reason,
+      });
+      await input.trace.write({
+        type: "model_call_skipped",
         traceId: input.traceId,
+        kind: "primary",
+        agent,
+        reason: reservationResult.failure.reason,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return enabledAgents.map((agent) => {
+      const role = agentRoles[agent] ?? input.config.agents[agent].role;
+      const timestamp = new Date().toISOString();
+      return {
         agent,
         role,
-        tool: input.tool,
-        prompt: buildAgentPrompt(input.tool, input.request, agent, role),
-        workspaceDir: input.workspaceDir,
-        timeoutMs:
-          input.request.options?.maxAgentTimeoutMs ??
-          agentConfig.timeoutMs ??
-          DEFAULT_AGENT_TIMEOUT_MS,
-        networkMode: input.networkMode,
-        onStarted: () => {
-          if (!acceptingStartedEvents) return Promise.resolve();
-          const event: Record<string, unknown> = {
-            type: "agent_started",
-            traceId: input.traceId,
-            agent,
-            role,
-            timestamp: new Date().toISOString(),
-          };
-          if (agentConfig.model) {
-            event.model = sanitizeTextForDisplay(agentConfig.model);
-          }
-          if (
-            agent === "codex" &&
-            input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
-          ) {
-            event.provider = CODEX_OPENROUTER_PROVIDER;
-          }
-          const write = (async () => {
-            try {
-              await input.trace.write(event);
-            } catch {
-              input.warnings.push(
-                "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
-              );
-            }
-          })();
-          startedWrites.push(write);
-          return write;
+        status: "skipped",
+        startedAt: timestamp,
+        completedAt: timestamp,
+        error: {
+          code:
+            reservationResult.failure.reason === "deadline"
+              ? "REVIEW_DEADLINE_EXCEEDED"
+              : "MODEL_CALL_BUDGET_EXHAUSTED",
+          message:
+            reservationResult.failure.reason === "deadline"
+              ? "Review deadline was reached before primary agents could start."
+              : "The review model-call budget cannot reserve all primary agents.",
         },
       };
     });
+  }
 
-  const results = await input.manager.runAll(agentInputs);
+  const reservations = new Map(
+    reservationResult.reservations.map((reservation) => [
+      reservation.agent,
+      reservation,
+    ]),
+  );
+  for (const reservation of reservationResult.reservations) {
+    await input.trace.write({
+      type: "model_call_reserved",
+      traceId: input.traceId,
+      kind: reservation.kind,
+      agent: reservation.agent,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  if (input.budgetTracker.remainingWallTimeMs() <= 0) {
+    input.budgetTracker.markIncomplete("deadline");
+    input.budgetTracker.markIncomplete("coverage_incomplete");
+    await input.trace.write({
+      type: "review_budget_exhausted",
+      traceId: input.traceId,
+      phase: "primary",
+      reason: "deadline",
+      timestamp: new Date().toISOString(),
+    });
+    return await skipReservedPrimaryAgents({
+      trace: input.trace,
+      traceId: input.traceId,
+      budgetTracker: input.budgetTracker,
+      config: input.config,
+      agents: enabledAgents,
+      agentRoles,
+      reservations,
+      reason: "deadline",
+    });
+  }
+
+  const startedWrites: Promise<void>[] = [];
+  let acceptingStartedEvents = true;
+  const agentInputs = enabledAgents.map((agent) => {
+    const agentConfig = input.config.agents[agent];
+    const role = agentRoles[agent] ?? agentConfig.role;
+    const reservation = reservations.get(agent);
+    if (!reservation) {
+      throw new Error(`Missing primary budget reservation for ${agent}.`);
+    }
+    return {
+      traceId: input.traceId,
+      agent,
+      role,
+      tool: input.tool,
+      prompt: buildAgentPrompt(input.tool, input.request, agent, role),
+      workspaceDir: input.workspaceDir,
+      timeoutMs: Math.min(
+        input.request.options?.maxAgentTimeoutMs ?? Number.POSITIVE_INFINITY,
+        agentConfig.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+        input.budgetTracker.remainingWallTimeMs(),
+      ),
+      deadlineAtEpochMs: input.budgetTracker.deadlineAtEpochMs,
+      maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
+      networkMode: input.networkMode,
+      onStarted: () => {
+        input.budgetTracker.markStarted(reservation);
+        if (!acceptingStartedEvents) return Promise.resolve();
+        const event: Record<string, unknown> = {
+          type: "agent_started",
+          traceId: input.traceId,
+          agent,
+          role,
+          timestamp: new Date().toISOString(),
+        };
+        if (agentConfig.model) {
+          event.model = sanitizeTextForDisplay(agentConfig.model);
+        }
+        if (
+          agent === "codex" &&
+          input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
+        ) {
+          event.provider = CODEX_OPENROUTER_PROVIDER;
+        }
+        const write = (async () => {
+          try {
+            await input.trace.write(event);
+          } catch {
+            input.warnings.push(
+              "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
+            );
+          }
+        })();
+        startedWrites.push(write);
+        return write;
+      },
+    };
+  });
+
+  let results: AgentRunResult[];
+  try {
+    results = await input.manager.runAll(agentInputs);
+  } catch (error) {
+    const detail = sanitizeTextForDisplay(
+      error instanceof Error ? error.message : String(error),
+    );
+    input.warnings.push(`Primary-agent execution failed: ${detail}`);
+    results = agentInputs.map((agentInput) => ({
+      agent: agentInput.agent,
+      role: agentInput.role,
+      status: "failed" as const,
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      error: {
+        code: "AGENT_MANAGER_FAILED",
+        message: "The agent manager did not return a review result.",
+      },
+    }));
+  }
   acceptingStartedEvents = false;
   await Promise.all(startedWrites);
+
+  const resultByAgent = new Map(
+    results.map((result) => [result.agent, result]),
+  );
+  const orderedResults = enabledAgents.map((agent) => {
+    const existing = resultByAgent.get(agent);
+    if (existing) return existing;
+    const role = agentRoles[agent] ?? input.config.agents[agent].role;
+    const timestamp = new Date().toISOString();
+    return {
+      agent,
+      role,
+      status: "failed" as const,
+      startedAt: timestamp,
+      completedAt: timestamp,
+      error: {
+        code: "AGENT_RESULT_MISSING",
+        message: "The agent manager did not return a review result.",
+      },
+    };
+  });
+
+  for (const result of orderedResults) {
+    const reservation = reservations.get(result.agent);
+    if (!reservation) continue;
+    await finalizeModelCallResult({
+      budgetTracker: input.budgetTracker,
+      reservation,
+      result,
+      trace: input.trace,
+      traceId: input.traceId,
+    });
+    if (result.status !== "completed") {
+      input.budgetTracker.markIncomplete("coverage_incomplete");
+    }
+  }
   await Promise.all(
-    results.map((result) => {
+    orderedResults.map((result) => {
       const event: Record<string, unknown> = {
         type: "agent_completed",
         traceId: input.traceId,
@@ -736,7 +1392,119 @@ async function runAgents(input: {
       return input.trace.write(event);
     }),
   );
+  return orderedResults;
+}
+
+async function skipReservedPrimaryAgents(input: {
+  trace: { write(event: Record<string, unknown>): Promise<void> };
+  traceId: string;
+  budgetTracker: ReviewBudgetTracker;
+  config: KyosoConfig;
+  agents: AgentName[];
+  agentRoles: Partial<Record<AgentName, AgentRole>>;
+  reservations: Map<AgentName | undefined, ModelCallReservation>;
+  reason: "deadline";
+}): Promise<AgentRunResult[]> {
+  const results: AgentRunResult[] = [];
+  for (const agent of input.agents) {
+    const reservation = input.reservations.get(agent);
+    if (reservation) input.budgetTracker.skip(reservation, input.reason);
+    await input.trace.write({
+      type: "model_call_skipped",
+      traceId: input.traceId,
+      kind: "primary",
+      agent,
+      reason: input.reason,
+      timestamp: new Date().toISOString(),
+    });
+    const timestamp = new Date().toISOString();
+    results.push({
+      agent,
+      role: input.agentRoles[agent] ?? input.config.agents[agent].role,
+      status: "skipped",
+      startedAt: timestamp,
+      completedAt: timestamp,
+      error: {
+        code: "REVIEW_DEADLINE_EXCEEDED",
+        message: "Review deadline was reached before the agent could start.",
+      },
+    });
+  }
   return results;
+}
+
+async function finalizeModelCallResult(input: {
+  budgetTracker: ReviewBudgetTracker;
+  reservation: ModelCallReservation;
+  result: AgentRunResult;
+  trace: { write(event: Record<string, unknown>): Promise<void> };
+  traceId: string;
+}): Promise<void> {
+  const reason = input.result.error?.code ?? input.result.status;
+  const hasStarted = input.budgetTracker.hasStarted(input.reservation);
+  const canSkip =
+    input.result.status === "skipped" ||
+    isPreflightAgentFailure(input.result) ||
+    (!hasStarted && input.result.error?.code === "REVIEW_DEADLINE_EXCEEDED");
+  if (canSkip && !hasStarted) {
+    input.budgetTracker.skip(input.reservation, reason);
+    if (input.result.error?.code === "REVIEW_DEADLINE_EXCEEDED") {
+      input.budgetTracker.markIncomplete("deadline");
+    }
+    await input.trace.write({
+      type: "model_call_skipped",
+      traceId: input.traceId,
+      kind: input.reservation.kind,
+      agent: input.reservation.agent,
+      reason,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  input.budgetTracker.markStarted(input.reservation);
+  const usage = normalizeModelTokenUsage(input.result.usage);
+  const outputBytes =
+    input.result.outputBytes ??
+    (input.result.rawText
+      ? Buffer.byteLength(input.result.rawText, "utf8")
+      : undefined);
+  input.budgetTracker.complete(input.reservation, {
+    ...(outputBytes === undefined ? {} : { outputBytes }),
+    ...(usage ? { usage } : {}),
+    ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
+  });
+  if (input.result.error?.code === "AGENT_OUTPUT_LIMIT") {
+    input.budgetTracker.markIncomplete("agent_output_limit");
+  }
+  if (input.result.error?.code === "REVIEW_DEADLINE_EXCEEDED") {
+    input.budgetTracker.markIncomplete("deadline");
+  }
+  await input.trace.write({
+    type: "model_call_completed",
+    traceId: input.traceId,
+    kind: input.reservation.kind,
+    agent: input.reservation.agent,
+    resultStatus: input.result.status,
+    ...(input.result.error?.code ? { errorCode: input.result.error.code } : {}),
+    ...(outputBytes === undefined ? {} : { outputBytes }),
+    ...(usage ? { usage } : {}),
+    ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function isPreflightAgentFailure(result: AgentRunResult): boolean {
+  return (
+    result.status === "failed" &&
+    [
+      "AGENT_CONFIG_INVALID",
+      "OPENROUTER_KEY_MISSING",
+      "AGENT_SPAWN_FAILED",
+      "AGENT_MANAGER_FAILED",
+      "AGENT_RESULT_MISSING",
+    ].includes(result.error?.code ?? "")
+  );
 }
 
 function resolveAgentRoles(
@@ -765,18 +1533,48 @@ function defaultAgentManager(
   return new SubprocessAcpAgentManager(config, parentEnv);
 }
 
-function normalizeAgentRunResult(result: AgentRunResult): AgentRunResult {
-  if (result.status === "completed" && result.rawText && !result.normalized) {
-    return {
-      ...result,
-      normalized: normalizeAgentOutput(
-        result.agent,
-        result.role,
-        result.rawText,
-      ),
-    };
+function normalizeAgentRunResult(
+  result: AgentRunResult,
+  maxFindingsPerAgent: number,
+): { result: AgentRunResult; findingsCapped: boolean } {
+  const normalizedResult =
+    result.status === "completed" && result.rawText && !result.normalized
+      ? {
+          ...result,
+          normalized: normalizeAgentOutput(
+            result.agent,
+            result.role,
+            result.rawText,
+          ),
+        }
+      : result;
+  const normalized = normalizedResult.normalized;
+  const findings = normalized?.findings;
+  if (!normalized || !findings || findings.length <= maxFindingsPerAgent) {
+    return { result: normalizedResult, findingsCapped: false };
   }
-  return result;
+
+  const limitedFindings = findings
+    .map((finding, index) => ({ finding, index }))
+    .sort((left, right) => {
+      const severity = compareSeverity(
+        left.finding.severity,
+        right.finding.severity,
+      );
+      return severity === 0 ? left.index - right.index : severity;
+    })
+    .slice(0, maxFindingsPerAgent)
+    .map(({ finding }) => finding);
+  return {
+    result: {
+      ...normalizedResult,
+      normalized: {
+        ...normalized,
+        findings: limitedFindings,
+      },
+    },
+    findingsCapped: true,
+  };
 }
 
 function agentOpinionSummary(
@@ -807,6 +1605,8 @@ async function buildSecretBlockResult(input: {
   networkMode: "model_only" | "unrestricted";
   secretScan: SecretScanResult;
   warnings: string[];
+  budgetTracker: ReviewBudgetTracker;
+  requestFingerprint: string;
 }): Promise<KyosoResult> {
   const finding = buildSecretFinding(input.secretScan, {
     id: "KYOSO-1",
@@ -817,8 +1617,12 @@ async function buildSecretBlockResult(input: {
       ? computeCisaGate([finding], [])
       : undefined;
   const completedAt = new Date().toISOString();
+  const budget = input.budgetTracker.snapshot();
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
+    completion: budget.completion,
+    executionBudget: budget.executionBudget,
+    requestFingerprint: input.requestFingerprint,
     degraded: false,
     agentsUsed: [],
     reviewMode: "multi_agent",
@@ -861,8 +1665,15 @@ async function buildSecretBlockResult(input: {
       workspaceMode: "temp_snapshot",
       configHash: input.configHash,
       warnings: input.warnings,
+      modelCalls: budget.modelCalls,
     },
   };
+  await writeReviewBudgetCompleted({
+    trace: input.trace,
+    traceId: input.traceId,
+    budgetTracker: input.budgetTracker,
+    requestFingerprint: input.requestFingerprint,
+  });
   await input.trace.write({
     type: "decision_completed",
     traceId: input.traceId,
@@ -925,10 +1736,16 @@ async function buildPolicyBlockResult(input: {
   warning: string;
   finding: KyosoFinding;
   redactionsApplied: number;
+  budgetTracker: ReviewBudgetTracker;
+  requestFingerprint: string;
 }): Promise<KyosoResult> {
   const completedAt = new Date().toISOString();
+  const budget = input.budgetTracker.snapshot();
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
+    completion: budget.completion,
+    executionBudget: budget.executionBudget,
+    requestFingerprint: input.requestFingerprint,
     degraded: false,
     agentsUsed: [],
     reviewMode: "multi_agent",
@@ -954,8 +1771,15 @@ async function buildPolicyBlockResult(input: {
       workspaceMode: "temp_snapshot",
       configHash: input.configHash,
       warnings: [input.warning],
+      modelCalls: budget.modelCalls,
     },
   };
+  await writeReviewBudgetCompleted({
+    trace: input.trace,
+    traceId: input.traceId,
+    budgetTracker: input.budgetTracker,
+    requestFingerprint: input.requestFingerprint,
+  });
   await input.trace.write({
     type: "decision_completed",
     traceId: input.traceId,
@@ -999,6 +1823,46 @@ async function finalizeReviewResult(input: {
       summaryText: input.summaryText,
     }),
   };
+}
+
+async function writeReviewBudgetPlanned(input: {
+  trace: { write(event: Record<string, unknown>): Promise<void> };
+  traceId: string;
+  budgetTracker: ReviewBudgetTracker;
+  requestFingerprint: string;
+}): Promise<void> {
+  const snapshot = input.budgetTracker.snapshot();
+  await input.trace.write({
+    type: "review_budget_planned",
+    traceId: input.traceId,
+    requestFingerprint: input.requestFingerprint,
+    maxModelCalls: snapshot.executionBudget.maxModelCalls,
+    maxTotalWallTimeMs: snapshot.executionBudget.wallTime.limitMs,
+    maxAgentOutputBytes: snapshot.executionBudget.maxAgentOutputBytes,
+    maxFindingsPerAgent: snapshot.executionBudget.maxFindingsPerAgent,
+    skipOptionalPhasesWhenTokenUsageUnknown:
+      snapshot.executionBudget.skipOptionalPhasesWhenTokenUsageUnknown,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+async function writeReviewBudgetCompleted(input: {
+  trace: { write(event: Record<string, unknown>): Promise<void> };
+  traceId: string;
+  budgetTracker: ReviewBudgetTracker;
+  requestFingerprint: string;
+}): Promise<void> {
+  const snapshot = input.budgetTracker.snapshot();
+  await input.trace.write({
+    type: "review_budget_completed",
+    traceId: input.traceId,
+    requestFingerprint: input.requestFingerprint,
+    completion: snapshot.completion,
+    modelCalls: snapshot.executionBudget.modelCalls,
+    wallTime: snapshot.executionBudget.wallTime,
+    tokenUsage: snapshot.executionBudget.tokenUsage,
+    timestamp: new Date().toISOString(),
+  });
 }
 
 function mergeDenyPatterns(

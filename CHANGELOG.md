@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- User-global review execution budgets with lower-only request overrides,
+  absolute deadlines, streamed ACP text-output caps (including thought chunks), token-usage accounting,
+  request fingerprints, and structured incomplete-review results.
+- Audit events and JSON/Markdown budget reporting for planned, consumed, and
+  skipped model calls, wall time, output bytes, token-usage state, and review
+  completion reasons.
+- A two-pass stop contract for the bundled Kyoso review Skill: one initial
+  review plus one confirmation after material fixes, with fingerprint-based
+  duplicate prevention and explicit approval required for a third pass.
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.4.0`, pin its Codex and Claude Code MCP
   definitions to `@kyo-so/cli@0.10.0`, and allow clients to forward
   `OPENROUTER_API_KEY` by name for the existing OpenRouter project opt-in.
+- Default the Judge to deterministic-only mode. An LLM Judge now requires an
+  explicit `deterministic_plus_llm` opt-in and shares the review call budget.
 
 ## [0.10.0] - 2026-07-15
 

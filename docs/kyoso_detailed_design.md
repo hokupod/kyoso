@@ -546,6 +546,13 @@ export type KyosoReviewRequest = {
   options?: {
     network?: "model_only" | "unrestricted";
     maxAgentTimeoutMs?: number;
+    reviewBudget?: Partial<{
+      maxModelCalls: number;
+      maxTotalWallTimeMs: number;
+      maxAgentOutputBytes: number;
+      maxFindingsPerAgent: number;
+      skipOptionalPhasesWhenTokenUsageUnknown: boolean;
+    }>;
     includeAgentRawOutputs?: boolean;
     judgeProvider?: "auto" | "openai" | "anthropic" | "none";
     allowSecretRedaction?: boolean;
@@ -588,8 +595,31 @@ export type KyosoDecision = "approve" | "approve_with_changes" | "block";
 
 export type GateStatus = "pass" | "warn" | "fail" | "not_applicable";
 
+export type ReviewCompletion = {
+  status: "complete" | "incomplete";
+  reasons: Array<
+    | "model_call_budget"
+    | "deadline"
+    | "agent_output_limit"
+    | "token_usage_unknown"
+    | "coverage_incomplete"
+    | "disputed_finding"
+  >;
+  retryable: false;
+};
+
 export type KyosoResult = {
   decision: KyosoDecision;
+  completion: ReviewCompletion;
+  executionBudget: {
+    maxModelCalls: number;
+    modelCalls: { planned: number; consumed: number; skipped: number };
+    wallTime: { limitMs: number; consumedMs: number; remainingMs: number };
+    maxAgentOutputBytes: number;
+    maxFindingsPerAgent: number;
+    tokenUsage: { status: "reported" | "partial" | "unknown" };
+  };
+  requestFingerprint: string;
   degraded: boolean;
   summaryMarkdown: string;
 
@@ -698,7 +728,7 @@ TOML config is declarative and does not require trust approval. The user global 
 - tightening-only `network.defaultMode = "model_only"`, `secrets.blockOnDetectedSecret = true`, `secrets.allowOverride = false`
 - `securityReview.cisaSecureByDesign.* = true`
 
-Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, and `verification.allowDemotion`.
+Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `verification.allowDemotion`, and all `reviewBudget.*` values. The global default budget is four model calls, a 480-second absolute deadline, 65,536 UTF-8 bytes per agent across streamed message and thought text chunks, ten findings per agent, and optional-phase skipping when usage is unknown. A request may lower these ceilings through `options.reviewBudget`, but project TOML and `--set` never change them.
 
 The user-global layer may set the Codex provider without an allowlist entry, but a project selecting `provider = "openrouter"`, or overriding `model` while it inherits OpenRouter, first requires the exact absolute canonical directory containing its resolved config file in user-global `[agents.codex] allowProjectProvider = ["/absolute/path/to/project"]`; this is not the invocation cwd or a lexical path. Matching is exact (not descendants or globs) after resolving both the project config file, including trusted `kyoso.config.ts`, and allowlist directory to real paths. A config file and allowlist entry resolving through symlinks to the same directory match; an entry resolving elsewhere or an unresolvable path fails closed, and legacy booleans fail closed. Kyoso captures the canonical config target before reading it and authorizes that captured directory. This is a single-user local CLI boundary: a concurrent process that can replace files inside an authorized canonical directory is out of scope; full file-identity binding would require native dirfd/openat-style support. A project that omits `provider` does not unset an inherited `"openrouter"` value; set `provider = "default"` in that project to return to normal Codex behavior without a model or authorization. Prefer this user-authorized project-local opt-in so unrelated projects retain their existing Codex provider and login behavior. `agents.claude.provider` is not a schema or override path.
 
@@ -712,6 +742,8 @@ Review CLI overrides use repeatable `--set <key>=<value>` arguments and are limi
 - `judge.mode`, `provider`, `timeoutMs`
 
 CLI overrides are applied after config files. They do not execute code or require config trust. Unknown keys are rejected, boolean and numeric keys are converted according to their existing config type, string keys stay strings, and the complete config is schema-validated after application.
+
+`reviewBudget.*` is intentionally absent from the CLI override list. It remains a user-global hard ceiling rather than a repository-owned or invocation-owned escalation path.
 
 `agents.codex.allowProjectProvider` is not an override path, so neither project TOML nor `--set` can grant that authorization. Direct CLI selection must include both `--set agents.codex.provider=openrouter` and `--set agents.codex.model=<model>` in the same invocation; a project-supplied model cannot satisfy a CLI provider override. This explicit user-owned pair does not require the flag. `provider=default` is also accepted as an explicit reset and does not require a model.
 
@@ -773,23 +805,24 @@ All three MCP tools use the same pipeline.
 3. Load config
 4. Apply CLI/tool overrides
 5. Check recursion guard
-6. Build normalized review request
+6. Resolve the lower-only request budget, create an absolute deadline, and fingerprint the redacted/truncated request
 7. Run secret scan
 8. If secret detected and blockOnDetectedSecret, return block result without calling ACP agents
 9. Build temp snapshot workspace
 10. Generate role-specific prompts
-11. Spawn Codex ACP and Claude ACP subprocesses
-12. Send prompts over ACP
-13. Deny write/tool/permission requests that exceed MVP policy
-14. Collect agent responses until completion or timeout
-15. Normalize agent responses into Kyoso internal opinion schema
-16. Aggregate findings deterministically
-17. Run judge LLM if configured and available
-18. Apply CISA gate
-19. Apply final decision policy
-20. Write sanitized JSONL audit trace
-21. Remove temp snapshot
-22. Return JSON + Markdown summary
+11. Reserve every primary reviewer before starting either subprocess
+12. Spawn Codex ACP and Claude ACP subprocesses
+13. Send prompts over ACP, counting streamed UTF-8 bytes from agent message and thought text chunks and cancelling output above the cap
+14. Deny write/tool/permission requests that exceed MVP policy
+15. Collect agent responses until completion or the remaining deadline
+16. Normalize agent responses into Kyoso internal opinion schema and cap findings deterministically
+17. Use only residual calls for finding verification; skip optional calls when usage is unknown
+18. Aggregate findings deterministically
+19. Run the advisory judge only when budget and deadline remain; otherwise use deterministic fallback
+20. Apply CISA gate and fail closed when completion is incomplete
+21. Write sanitized JSONL audit trace
+22. Remove temp snapshot
+23. Return JSON + Markdown summary
 ```
 
 ### 11.1 Failure handling
@@ -799,6 +832,7 @@ All three MCP tools use the same pipeline.
 - If one agent succeeds: return `degraded: true`.
 - For `security_review`, if degraded, never return `approve`; downgrade to `approve_with_changes` unless a policy already returns `block`.
 - If judge LLM fails: use deterministic fallback.
+- If a model-call reservation, deadline, output limit, verification coverage, or disputed verification makes the review incomplete: return a normal `block` result with `completion.retryable = false`; this block describes incomplete review coverage rather than a proven code defect.
 - If audit write fails: continue but include warning in result audit metadata.
 
 ---
@@ -1173,7 +1207,9 @@ Before judge LLM:
 
 ### 15.2 Judge LLM
 
-Judge LLM is configurable.
+Judge LLM is configurable and defaults to `deterministic_only`. Credentials do
+not start a judge call unless the user explicitly enables
+`deterministic_plus_llm`.
 
 ```ts
 type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
@@ -1188,6 +1224,11 @@ type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
 `OPENROUTER_API_KEY` is not an OpenAI judge credential and does not affect `auto` resolution.
 
 Do not require judge LLM for MVP to return a result.
+
+The judge shares the review execution budget but is advisory: when calls,
+token-usage policy, or deadline do not permit it, Kyoso records the skipped
+judge call and uses deterministic fallback without making an otherwise
+complete review incomplete.
 
 Environment overrides:
 
@@ -1519,6 +1560,27 @@ type TraceEvent =
       timestamp: string;
     }
   | {
+      type: "review_budget_planned";
+      traceId: string;
+      requestFingerprint: string;
+      maxModelCalls: number;
+      maxTotalWallTimeMs: number;
+      timestamp: string;
+    }
+  | {
+      type:
+        "model_call_reserved" | "model_call_completed" | "model_call_skipped";
+      traceId: string;
+      kind: "primary" | "verifier" | "judge";
+      agent?: string;
+      timestamp: string;
+    }
+  | {
+      type: "review_budget_exhausted" | "review_budget_completed";
+      traceId: string;
+      timestamp: string;
+    }
+  | {
       type: "snapshot_created";
       traceId: string;
       path: string;
@@ -1583,6 +1645,7 @@ Audit must not include:
 Audit may include:
 
 - paths
+- request fingerprint, budget limits, model-call counts, output byte counts, and numeric token usage metadata
 - hashes
 - counts
 - durations
@@ -1738,9 +1801,19 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - The CLI also accepts `--repo-summary`, repeatable `--constraint`, and repeatable `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
    - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
-5. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
-6. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
-7. Do not claim Kyoso modified files. Kyoso only reviews.
+5. Apply the [review-pass stop contract](#review-pass-stop-contract) before deciding whether to run another review.
+6. Treat `decision: block` as a stop signal. Present the result to the user before implementing.
+7. Treat `decision: approve_with_changes` as requiring changes to the plan or implementation.
+8. Do not claim Kyoso modified files. Kyoso only reviews.
+
+## Review-pass stop contract
+
+- At one explicit review checkpoint, run one automatic review pass only.
+- Record the returned `requestFingerprint`. Do not run the same fingerprint again in the same task.
+- If `completion.status !== "complete"`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
+- A single confirmation pass is allowed only after fixing actionable, material findings from the first complete pass.
+- After the confirmation pass, stop even when findings remain. Do not start a third pass without the user's explicit approval.
+- Do not interpret `approve_with_changes` as permission to repeat until `approve`.
 ```
 
 ### 22.3 Optional `agents/openai.yaml`

@@ -89,7 +89,24 @@ describe("config", () => {
       timeoutMs: 90_000,
       allowDemotion: false,
     });
+    expect(parsed.reviewBudget).toEqual({
+      maxModelCalls: 4,
+      maxTotalWallTimeMs: 480_000,
+      maxAgentOutputBytes: 65_536,
+      maxFindingsPerAgent: 10,
+      skipOptionalPhasesWhenTokenUsageUnknown: true,
+    });
+    expect(parsed.judge.mode).toBe("deterministic_only");
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
+  });
+
+  test("requires enough global model-call budget for enabled primary reviewers", () => {
+    expect(() =>
+      kyosoConfigSchema.parse({
+        ...defaultConfig,
+        reviewBudget: { ...defaultConfig.reviewBudget, maxModelCalls: 1 },
+      }),
+    ).toThrow("enabled primary reviewers");
   });
 
   test("accepts optional per-agent model pins", () => {
@@ -902,12 +919,15 @@ defaultMode = "unrestricted"
 
 [verification]
 allowDemotion = true
+
+[reviewBudget]
+maxModelCalls = 99
 `,
       "utf8",
     );
 
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
-      /agents\.codex\.command.*network\.defaultMode.*verification\.allowDemotion/s,
+      /agents\.codex\.command.*network\.defaultMode.*reviewBudget\.maxModelCalls.*verification\.allowDemotion/s,
     );
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
       join(home, ".config", "kyoso", "config.toml"),
@@ -915,6 +935,13 @@ allowDemotion = true
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
       "If a key is misspelled, fix the name instead.",
     );
+  });
+
+  test("rejects review-budget CLI overrides", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    expect(() =>
+      applyConfigOverrides(config, ["reviewBudget.maxModelCalls=3"]),
+    ).toThrow('Unknown --set key "reviewBudget.maxModelCalls"');
   });
 
   test("prefers kyoso.toml over kyoso.config.ts without executing TypeScript", async () => {
@@ -2523,6 +2550,37 @@ describe("audit sanitize", () => {
     expect(sanitized.token).toBeUndefined();
     expect(sanitized.rawText).toBeUndefined();
     expect(sanitized.nested).toEqual({});
+  });
+
+  test("retains bounded numeric token-usage metadata without retaining credentials", () => {
+    const sanitized = sanitizeForAudit({
+      usage: {
+        totalTokens: 20,
+        inputTokens: 12,
+        outputTokens: 8,
+        accessToken: "secret",
+      },
+      tokenUsage: {
+        status: "reported",
+        reportedCalls: 1,
+        unknownCalls: 0,
+        totals: { totalTokens: 20 },
+      },
+      skipOptionalPhasesWhenTokenUsageUnknown: true,
+    }) as Record<string, unknown>;
+
+    expect(sanitized.usage).toEqual({
+      totalTokens: 20,
+      inputTokens: 12,
+      outputTokens: 8,
+    });
+    expect(sanitized.tokenUsage).toEqual({
+      status: "reported",
+      reportedCalls: 1,
+      unknownCalls: 0,
+      totals: { totalTokens: 20 },
+    });
+    expect(sanitized.skipOptionalPhasesWhenTokenUsageUnknown).toBe(true);
   });
 
   test("allows sanitized rawText only when raw agent output is enabled", () => {

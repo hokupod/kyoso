@@ -74,7 +74,7 @@ export function collectProjectScopeViolations(config: unknown): Violation[] {
   const violations: Violation[] = [];
   for (const leaf of leaves) {
     const path = leaf.path.join(".");
-    const globalOnlyReason = PROJECT_GLOBAL_ONLY_REASONS[path];
+    const globalOnlyReason = projectGlobalOnlyReason(leaf.path);
     if (globalOnlyReason) {
       violations.push({ path, reason: globalOnlyReason });
       continue;
@@ -87,6 +87,15 @@ export function collectProjectScopeViolations(config: unknown): Violation[] {
     if (reason) violations.push({ path, reason });
   }
   return violations.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function projectGlobalOnlyReason(path: string[]): string | undefined {
+  const exactReason = PROJECT_GLOBAL_ONLY_REASONS[path.join(".")];
+  if (exactReason) return exactReason;
+  if (path[0] === "reviewBudget") {
+    return "must be a user-global review budget ceiling";
+  }
+  return undefined;
 }
 
 function isAllowedProjectPath(path: string[]): boolean {

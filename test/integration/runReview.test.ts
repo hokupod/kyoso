@@ -18,6 +18,7 @@ import { runReview } from "../../src/core/runReview.js";
 import type {
   AgentRunInput,
   AgentRunResult,
+  KyosoReviewRequest,
   NormalizedAgentOpinion,
 } from "../../src/core/types.js";
 import { auditTracePath } from "../helpers/auditState.js";
@@ -261,6 +262,11 @@ describe("runReview", () => {
     expect(secretFinding?.title).toContain("redacted");
     expect(result.cisaSecureByDesign?.customerSecurityOutcomes).toBe("warn");
     expect(result.decision).toBe("approve_with_changes");
+    expect(result.completion).toMatchObject({
+      status: "complete",
+      reasons: [],
+      retryable: false,
+    });
   });
 
   test("allowed secret redaction removes credential file contents before prompting agents", async () => {
@@ -818,13 +824,15 @@ model = "openai/o4-mini"
     expect(result.findings[0]?.verification).toBeUndefined();
   });
 
-  test("verification verdicts annotate findings without changing severity or decision", async () => {
+  test("verification verdicts preserve severity and mark incomplete coverage when needed", async () => {
     const cases: Array<{
       name: string;
       verifierRawText?: string;
       verifierStatus?: "timeout";
       expectedStatus: "confirmed" | "refuted" | "uncertain";
       expectedConfidence: "high" | "medium" | "low";
+      expectedDecision: "approve_with_changes" | "block";
+      expectedCompletion: "complete" | "incomplete";
       expectedWarning?: string;
     }> = [
       {
@@ -832,6 +840,8 @@ model = "openai/o4-mini"
         verifierRawText: verifierRaw("KYOSO-1", "confirmed", "confirmed"),
         expectedStatus: "confirmed",
         expectedConfidence: "high",
+        expectedDecision: "approve_with_changes",
+        expectedCompletion: "complete",
       },
       {
         name: "refuted",
@@ -842,18 +852,24 @@ model = "openai/o4-mini"
         ),
         expectedStatus: "refuted",
         expectedConfidence: "low",
+        expectedDecision: "block",
+        expectedCompletion: "incomplete",
       },
       {
         name: "uncertain",
         verifierRawText: verifierRaw("KYOSO-1", "uncertain", "unclear"),
         expectedStatus: "uncertain",
         expectedConfidence: "medium",
+        expectedDecision: "approve_with_changes",
+        expectedCompletion: "complete",
       },
       {
         name: "malformed",
         verifierRawText: "not json",
         expectedStatus: "uncertain",
         expectedConfidence: "medium",
+        expectedDecision: "block",
+        expectedCompletion: "incomplete",
         expectedWarning: "malformed verdict JSON",
       },
       {
@@ -861,6 +877,8 @@ model = "openai/o4-mini"
         verifierStatus: "timeout",
         expectedStatus: "uncertain",
         expectedConfidence: "medium",
+        expectedDecision: "block",
+        expectedCompletion: "incomplete",
         expectedWarning: "timeout",
       },
     ];
@@ -888,7 +906,8 @@ model = "openai/o4-mini"
 
       expect(result.verificationMode).toBe("cross_agent");
       expect(result.degraded).toBe(false);
-      expect(result.decision).toBe("approve_with_changes");
+      expect(result.decision).toBe(testCase.expectedDecision);
+      expect(result.completion.status).toBe(testCase.expectedCompletion);
       expect(finding?.severity).toBe("high");
       expect(finding?.confidence).toBe(testCase.expectedConfidence);
       expect(finding?.verification?.status).toBe(testCase.expectedStatus);
@@ -964,7 +983,12 @@ model = "openai/o4-mini"
       { cwd, config, agentManager: manager },
     );
 
-    expect(result.decision).toBe("approve_with_changes");
+    expect(result.decision).toBe("block");
+    expect(result.completion).toMatchObject({
+      status: "incomplete",
+      reasons: ["disputed_finding"],
+      retryable: false,
+    });
     expect(result.findings[0]?.severity).toBe("high");
     expect(result.findings[0]?.confidence).toBe("low");
     expect(result.findings[0]?.verification?.status).toBe("refuted");
@@ -1024,7 +1048,12 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
-      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 1_000,
+      },
     };
     const originalFetch = globalThis.fetch;
     let requestBody = "";
@@ -1108,7 +1137,12 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
-      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 1_000,
+      },
     };
     const originalFetch = globalThis.fetch;
     let requestBody = "";
@@ -1218,7 +1252,12 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
-      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 1_000,
+      },
     };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url, _init) =>
@@ -1252,7 +1291,12 @@ model = "openai/o4-mini"
     const baseConfig = singleAgentConfig("codex");
     const config: KyosoConfig = {
       ...baseConfig,
-      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 1_000,
+      },
     };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url, _init) =>
@@ -1355,7 +1399,12 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
-      judge: { ...baseConfig.judge, provider: "openai", timeoutMs: 1_000 },
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 1_000,
+      },
     };
     const originalFetch = globalThis.fetch;
     let requestBody = "";
@@ -1749,7 +1798,7 @@ model = "openai/o4-mini"
     ).toBe("timeout");
   });
 
-  test("fake ACP policy and auth failures stay degraded with explicit error codes", async () => {
+  test("fake ACP policy and auth failures fail closed with explicit error codes", async () => {
     const scenarios: Array<{ scenario: FakeAgentScenario; code: string }> = [
       { scenario: "auth_failure", code: "AUTH_FAILED" },
       { scenario: "permission_request", code: "PERMISSION_DENIED" },
@@ -1770,7 +1819,12 @@ model = "openai/o4-mini"
       );
 
       expect(result.degraded).toBe(true);
-      expect(result.decision).toBe("approve");
+      expect(result.decision).toBe("block");
+      expect(result.completion).toMatchObject({
+        status: "incomplete",
+        reasons: ["coverage_incomplete"],
+        retryable: false,
+      });
       expect(
         result.agentOpinions.find((opinion) => opinion.agent === "codex")
           ?.errorCode,
@@ -1815,6 +1869,21 @@ model = "openai/o4-mini"
     );
     expect(result.decision).toBe("block");
     expect(result.findings[0]?.title).toContain("Recursive");
+  });
+
+  test("recursion guard remains fail-closed for malformed requests", async () => {
+    const manager = new FakeAgentManager();
+    const result = await runReview("plan_review", {} as KyosoReviewRequest, {
+      cwd: await tempCwd(),
+      config: kyosoConfigSchema.parse(defaultConfig),
+      agentManager: manager,
+      env: { KYOSO_CHILD_AGENT: "1" },
+    });
+
+    expect(result.decision).toBe("block");
+    expect(result.findings[0]?.title).toContain("Recursive");
+    expect(result.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(manager.calls).toHaveLength(0);
   });
 
   test("security policy blocks include tests and residual risks", async () => {
@@ -1899,6 +1968,55 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("marks non-end ACP stop reasons as incomplete", async () => {
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", join(process.cwd(), "test/fixtures/fake-acp-agent.ts")],
+          env: { FAKE_ACP_MODE: "max_tokens" },
+        },
+        claude: {
+          ...baseConfig.agents.claude,
+          enabled: false,
+        },
+      },
+    };
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+        options: { maxAgentTimeoutMs: 5_000 },
+      },
+      {
+        cwd: process.cwd(),
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result.completion).toEqual({
+      status: "incomplete",
+      reasons: ["coverage_incomplete"],
+      retryable: false,
+    });
+    expect(result.agentOpinions[0]).toMatchObject({
+      status: "failed",
+      errorCode: "AGENT_STOPPED_EARLY",
+    });
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      status: "completed",
+      stopReason: "max_tokens",
+    });
   });
 
   test("passes options.env to the default OpenRouter ACP manager", async () => {
@@ -2260,7 +2378,12 @@ effort = "${rawEffortValue}"
     expect(result.findings[0]?.verification?.note).toContain(
       "KYOSO_CHILD_AGENT=1",
     );
-    expect(result.decision).toBe("approve_with_changes");
+    expect(result.decision).toBe("block");
+    expect(result.completion).toMatchObject({
+      status: "incomplete",
+      reasons: ["disputed_finding"],
+      retryable: false,
+    });
   });
 
   test("subprocess timeout escalates from SIGTERM to SIGKILL", async () => {
@@ -2423,6 +2546,7 @@ function rawTextAgentManager(rawText: string) {
         rawText,
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
+        usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
       };
     },
     async runAll(
@@ -2499,7 +2623,23 @@ function stableResult(
   result: Awaited<ReturnType<typeof runReview>>,
 ): Omit<typeof result, "audit"> {
   const { audit: _audit, ...stable } = result;
-  return stable;
+  const wallTime = stable.executionBudget.wallTime;
+  const exhausted = wallTime.remainingMs === 0;
+  return {
+    ...stable,
+    summaryMarkdown: stable.summaryMarkdown.replace(
+      /- Wall time: \d+ms consumed/g,
+      "- Wall time: 0ms consumed",
+    ),
+    executionBudget: {
+      ...stable.executionBudget,
+      wallTime: {
+        ...wallTime,
+        consumedMs: exhausted ? wallTime.limitMs : 0,
+        remainingMs: exhausted ? 0 : wallTime.limitMs,
+      },
+    },
+  };
 }
 
 function highFinding(
@@ -2565,6 +2705,7 @@ function verificationAgentManager(input: {
             verifierRaw("KYOSO-1", "confirmed", "confirmed"),
           startedAt,
           completedAt: new Date().toISOString(),
+          usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
         };
       }
 
@@ -2585,6 +2726,7 @@ function verificationAgentManager(input: {
         rawText: JSON.stringify(opinion),
         startedAt,
         completedAt: new Date().toISOString(),
+        usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
       };
     },
     async runAll(agentInputs: AgentRunInput[]): Promise<AgentRunResult[]> {

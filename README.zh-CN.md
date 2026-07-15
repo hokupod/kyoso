@@ -50,11 +50,11 @@ Kyoso 不会应用代码更改。
 
 Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
-`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例是用户管理的客户端注册模板；它们既不会修改 Marketplace Plugin manifest，也不会定义它。Stage A 期间，该 manifest 保持其已发布的 CLI pin 与环境契约；只有 Stage B promotion 才会更新它。
+`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Marketplace Plugin `0.4.0` pin 到 `@kyo-so/cli@0.10.0`。
 
 Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
 
-在下一次 Plugin promotion 前，已发布的 Marketplace Plugin **不会** forward `OPENROUTER_API_KEY`。OpenRouter 的 project opt-in 请使用带有 manual MCP registration 的 CLI/source 路径；promotion 后会用兼容的 Plugin version 替换这一限制说明。
+Marketplace Plugin `0.4.0` 向 MCP process 暴露 `OPENROUTER_API_KEY` 变量名，但不保存 credential 值。Kyoso 仅将该值传给显式选择 OpenRouter 的 Codex child，并将未展开的 placeholder 视为未设置。
 
 #### CLI＋Skill-only
 

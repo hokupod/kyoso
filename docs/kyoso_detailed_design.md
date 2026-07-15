@@ -1792,7 +1792,7 @@ Claude Code resolves the inline `mcpServers` declaration in
 mirror, but only the Codex manifest carries Codex-specific metadata and only
 the Claude manifest carries the Claude-compatible MCP shape.
 
-Stage A intentionally leaves these Marketplace artifacts on their released CLI pin and environment contract. Until a future Stage B promotion, the Marketplace Plugin does **not** forward `OPENROUTER_API_KEY`; OpenRouter project opt-in is supported through the CLI/source and manual MCP setup paths only. Do not update the Plugin allowlist, placeholder, or pin until a published CLI release is ready for the coordinated promotion.
+Marketplace Plugin `0.4.0` pins `@kyo-so/cli@0.10.0`. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`, and its Claude MCP definition declares only the matching placeholder. These surfaces expose the variable name without storing a credential value; Kyoso forwards the value only to a Codex child that explicitly selects OpenRouter and treats an unexpanded placeholder as missing.
 
 The distribution contract has these required invariants, checked by
 `plugin:verify` in normal CI and promotion verification:
@@ -1827,7 +1827,7 @@ reintroduction of the root file.
 
 ## 23. Client configuration examples
 
-These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. Therefore, the `--with-openrouter` additions below apply only when `kyoso setup` creates a new manual entry. In Stage A, they neither modify nor imply a change to `plugins/kyoso/.codex-plugin/mcp.json` or `plugins/kyoso/.claude-plugin/plugin.json`; their released CLI pins and environment contracts remain frozen until Stage B promotion.
+These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. The `--with-openrouter` additions below therefore apply only when `kyoso setup` creates a new manual entry; Marketplace Plugin `0.4.0` has its separate pinned `@kyo-so/cli@0.10.0` contract described in §22.4.
 
 ### 23.1 Codex config example
 

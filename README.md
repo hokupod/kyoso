@@ -48,11 +48,11 @@ When in doubt, pick the Marketplace Plugin: two commands install the Skill and t
 
 The Plugin bundles the Skill and an MCP definition pinned to an exact published Kyoso CLI version; it does not bundle the CLI itself. Its first MCP start needs network access to npm. A cached package may work offline, but offline startup is not guaranteed. The manifest's `Read` capability is display metadata, not additional filesystem authorization.
 
-The `kyoso setup ... --with-openrouter` output and manual setup examples are user-managed client-registration templates; they neither modify nor define the Marketplace Plugin manifest. In Stage A, that manifest remains frozen at its released CLI pin and environment contract; only Stage B promotion changes it.
+The `kyoso setup ... --with-openrouter` output and manual setup examples remain user-managed client-registration templates. Marketplace Plugin `0.4.0` is pinned to `@kyo-so/cli@0.10.0`.
 
 The Plugin Skill declares the bundled `kyoso` MCP server as a dependency, so explicit Kyoso reviews are directed through MCP rather than a CLI fallback. If you disable the bundled Plugin MCP, treat the Plugin Skill as unavailable: re-enable it, or remove the Plugin and install CLI plus Skill-only instead. The Plugin is not a CLI-fallback mode.
 
-Until a future Plugin promotion, the released Marketplace Plugin does **not** forward `OPENROUTER_API_KEY`. Use the CLI/source path with a manual MCP registration for the OpenRouter project opt-in; this limitation will be replaced with the compatible Plugin version after that promotion.
+Marketplace Plugin `0.4.0` exposes the `OPENROUTER_API_KEY` variable name to its MCP process; it does not store a credential value. Kyoso forwards the value only to a Codex child that explicitly selects OpenRouter, and treats an unexpanded placeholder as missing.
 
 #### CLI plus Skill-only
 

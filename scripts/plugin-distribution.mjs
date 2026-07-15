@@ -43,9 +43,13 @@ const allowedMcpEnvVars = [
   "CODEX_API_KEY",
   "CODEX_HOME",
   "CODEX_ACCESS_TOKEN",
+  "OPENROUTER_API_KEY",
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_OAUTH_TOKEN",
 ];
+const claudeMcpEnv = {
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+};
 const secretPatterns = [
   /sk-[A-Za-z0-9_-]{20,}/,
   /gh[pousr]_[A-Za-z0-9_]{20,}/,
@@ -602,9 +606,7 @@ function validateClaudeManifest(manifest, paths, failures) {
     `Claude plugin manifest mcpServers.${pluginMcpServerName}`,
     failures,
   );
-  if (server.env !== undefined) {
-    validateClaudeMcpEnv(server.env, failures);
-  }
+  validateClaudeMcpEnv(server.env, failures);
   if (server.command !== "npx") {
     failures.push('Claude plugin MCP command must be "npx"');
   }
@@ -667,6 +669,11 @@ function validateClaudeMcpEnv(env, failures) {
       "Claude plugin MCP env must be an object with non-empty string values",
     );
     return;
+  }
+  if (!isExactStringRecord(env, claudeMcpEnv)) {
+    failures.push(
+      "Claude plugin MCP env must match the OpenRouter placeholder exactly",
+    );
   }
   for (const [key, value] of Object.entries(env)) {
     if (!allowedMcpEnvVars.includes(key)) {
@@ -791,7 +798,7 @@ function validateMcp(mcp, failures) {
   }
   if (!isExactArray(server.env_vars, allowedMcpEnvVars)) {
     failures.push(
-      "Plugin MCP env_vars must match the six-item allowlist exactly",
+      "Plugin MCP env_vars must match the seven-item allowlist exactly",
     );
   }
   if (server.startup_timeout_sec !== 20 || server.tool_timeout_sec !== 360) {
@@ -1359,6 +1366,17 @@ function isObject(value) {
 
 function isStringRecord(value) {
   return isObject(value) && Object.values(value).every(isNonEmptyString);
+}
+
+function isExactStringRecord(value, expected) {
+  return (
+    isStringRecord(value) &&
+    Object.keys(value).length === Object.keys(expected).length &&
+    Object.entries(expected).every(
+      ([key, expectedValue]) =>
+        Object.hasOwn(value, key) && value[key] === expectedValue,
+    )
+  );
 }
 
 function isNonEmptyString(value) {

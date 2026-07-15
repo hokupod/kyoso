@@ -3,9 +3,9 @@
   "minimumSupportedCodexVersion": "0.144.0-alpha.4",
   "expectedContract": {
     "distribution": {
-      "pluginVersion": "0.3.1",
+      "pluginVersion": "0.4.0",
       "mcpCommand": "npx",
-      "mcpPackagePin": "@kyo-so/cli@0.9.1"
+      "mcpPackagePin": "@kyo-so/cli@0.10.0"
     },
     "marketplace": {
       "name": "kyoso",
@@ -45,6 +45,7 @@
           "CODEX_API_KEY",
           "CODEX_HOME",
           "CODEX_ACCESS_TOKEN",
+          "OPENROUTER_API_KEY",
           "ANTHROPIC_API_KEY",
           "CLAUDE_CODE_OAUTH_TOKEN"
         ],
@@ -61,6 +62,7 @@
           "CODEX_API_KEY",
           "CODEX_HOME",
           "CODEX_ACCESS_TOKEN",
+          "OPENROUTER_API_KEY",
           "ANTHROPIC_API_KEY",
           "CLAUDE_CODE_OAUTH_TOKEN"
         ],
@@ -107,6 +109,7 @@
         "OPENAI_API_KEY": true,
         "CODEX_API_KEY": true,
         "CODEX_ACCESS_TOKEN": true,
+        "OPENROUTER_API_KEY": true,
         "ANTHROPIC_API_KEY": true,
         "CLAUDE_CODE_OAUTH_TOKEN": true
       },
@@ -120,7 +123,7 @@
   "probes": [
     {
       "codexVersion": "0.144.0-alpha.4",
-      "verifiedAt": "2026-07-11",
+      "verifiedAt": "2026-07-15",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",
@@ -130,7 +133,7 @@
     },
     {
       "codexVersion": "0.144.1",
-      "verifiedAt": "2026-07-11",
+      "verifiedAt": "2026-07-15",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",

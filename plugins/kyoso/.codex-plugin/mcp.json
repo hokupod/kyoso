@@ -1,12 +1,13 @@
 {
   "kyoso": {
     "command": "npx",
-    "args": ["-y", "@kyo-so/cli@0.9.1", "mcp"],
+    "args": ["-y", "@kyo-so/cli@0.10.0", "mcp"],
     "env_vars": [
       "OPENAI_API_KEY",
       "CODEX_API_KEY",
       "CODEX_HOME",
       "CODEX_ACCESS_TOKEN",
+      "OPENROUTER_API_KEY",
       "ANTHROPIC_API_KEY",
       "CLAUDE_CODE_OAUTH_TOKEN"
     ],

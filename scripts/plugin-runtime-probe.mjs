@@ -31,6 +31,7 @@ const fakeSecrets = {
   OPENAI_API_KEY: "kyoso-probe-openai",
   CODEX_API_KEY: "kyoso-probe-codex-api",
   CODEX_ACCESS_TOKEN: "kyoso-probe-codex-access",
+  OPENROUTER_API_KEY: "kyoso-probe-openrouter",
   ANTHROPIC_API_KEY: "kyoso-probe-anthropic",
   CLAUDE_CODE_OAUTH_TOKEN: "kyoso-probe-claude-oauth",
 };

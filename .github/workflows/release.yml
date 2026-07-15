@@ -258,7 +258,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           ISSUE_TITLE="Plugin promotion needed: CLI v${RELEASE_VERSION} released, plugins pin v${PLUGIN_PIN}"
-          OPEN_ISSUE_TITLES="$(gh search issues "$ISSUE_TITLE in:title state:open repo:$GITHUB_REPOSITORY" \
+          OPEN_ISSUE_TITLES="$(gh search issues "$ISSUE_TITLE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --match title \
             --json title --limit 100 --jq '.[].title')"
           if printf '%s\n' "$OPEN_ISSUE_TITLES" | grep -Fxq "$ISSUE_TITLE"; then
             echo "An open promotion reminder already exists; skipping duplicate issue." >> "$GITHUB_STEP_SUMMARY"

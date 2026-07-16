@@ -50,11 +50,9 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 
 PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
 
-`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Marketplace Plugin `0.6.0` は `@kyo-so/cli@0.12.0` へpinしています。
-
 PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
 
-Marketplace Plugin `0.4.0` はMCP processへ`OPENROUTER_API_KEY`の変数名を公開しますが、credential値は保存しません。KyosoはOpenRouterを明示選択したCodex childだけへ値を転送し、展開されていないplaceholderは未設定として扱います。
+Plugin経由のOpenRouter key転送については、[Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。
 
 #### CLI＋Skill-only
 
@@ -181,7 +179,7 @@ kyoso plan \
   --file src/auth/callback.ts
 ```
 
-結果は上から順に読んでください。`Decision` は deterministic gate の結果、`Coverage` は実行した必須観点と役割、各 finding の `disposition` は block 対象か参考情報かを示します。
+結果は上から順に読んでください。`Decision` は deterministic gate の結果、`Coverage` は実行した必須観点と役割、各 finding の `disposition` は block 対象か参考情報かを示します([Review contract と finding admission](#review-contract-と-finding-admission) を参照)。
 
 patch に対して CISA Secure by Design security review を実行します。
 
@@ -226,6 +224,18 @@ Kyoso が公開する MCP tools は次の 3 つだけです。
 
 MCP stdout は protocol messages 専用です。logs は stderr または local audit traces に出力されます。
 
+## Skill
+
+同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
+
+Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。typed [review contract](#review-contract-と-finding-admission) にnon-goalsまたはaccepted risksがありMCPを利用できない場合、CLI fallbackは`focus`しか保持できないためSkillは停止します。
+
+`kyoso setup codex --write --skill-only`はcanonical Skill directoryを既定で`.agents/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.agents/skills/kyoso-review/`へコピーします。
+
+`kyoso setup claude-code --write --skill-only`は既定で`.claude/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.claude/skills/kyoso-review/`へコピーします。
+
+managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのSkill directoryだけを置換し、MCP設定を削除・上書きしません。
+
 ## Review contract と finding admission
 
 すべての review で、correctness、regression、security boundaries、secrets/injection、data integrity、public contract を削除不能な safety floor として確認します。review の形状に応じて supply chain、privacy、resource amplification も追加します。user-global `reviewPolicy.additionalLenses` は観点を追加できますが、floor は削除できません。
@@ -260,18 +270,6 @@ Kyoso は各 finding の evidence quality、対象変更との関係、stable fi
 
 deterministic decision に影響するのは `gate` と `actionable` だけです。`disputed` は completion を incomplete にし、自動修正してはいけません。`coverage` は required/attempted lenses、required/completed perspectives、独立した cross-model review の有無を記録します。`Tests to Add` は具体的な regression test を最大3件に制限し、generic command や広範な test-suite 要求は除外します。
 
-## Skill
-
-同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
-
-Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。typed contractにnon-goalsまたはaccepted risksがありMCPを利用できない場合、CLI fallbackは`focus`しか保持できないためSkillは停止します。
-
-`kyoso setup codex --write --skill-only`はcanonical Skill directoryを既定で`.agents/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.agents/skills/kyoso-review/`へコピーします。
-
-`kyoso setup claude-code --write --skill-only`は既定で`.claude/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.claude/skills/kyoso-review/`へコピーします。
-
-managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのSkill directoryだけを置換し、MCP設定を削除・上書きしません。
-
 ## Configuration
 
 ### Files and precedence
@@ -297,9 +295,6 @@ Global TOML は command 実行や env forwarding を含む user-owned settings �
 [agents.codex]
 command = "bunx"
 args = ["@agentclientprotocol/codex-acp"]
-# この完全一致のproject directoryだけに`provider`選択、または継承した
-# OpenRouterのmodel上書きを許可します。
-allowProjectProvider = ["/absolute/path/to/project"]
 
 [agents.codex.env]
 CODEX_CONFIG = '{"model":"gpt-5.5"}'
@@ -309,7 +304,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。`agents.codex.allowProjectProvider`はglobal config専用のabsolute project directory allowlistです。完全一致のproject TOMLだけが`provider`を選択、または継承したOpenRouterの`model`を上書きでき、descendantやglobには一致しません。project configと`--set`では変更できず、legacy boolean値は拒否します。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。projectから`provider`を選択するには、global config専用の`agents.codex.allowProjectProvider` allowlistが必要です。詳細な規則は [Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
 
 `agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）などの local Codex config を使用し、Claude は adapter default を使用します。
 
@@ -353,7 +348,7 @@ model = "openai/o4-mini"
 
 `provider = "openrouter"` の場合、`model`は空白でない値が必須です。これはOpenRouterのmodel IDです。Kyosoはcatalogやtool calling対応を検証しないため、利用するmodelのtool supportはproviderで確認してください。
 
-`allowProjectProvider`はprojectの`provider`と、OpenRouterを継承中のproject `model`上書きに必要で、listには解決後のproject config fileを含むcanonical directoryのabsolute pathを完全一致で指定します。invocationのcwdやlexical pathではありません。trusted `kyoso.config.ts`を含むproject config fileとallowlist entryの両方をsymlink経由も含めて同じdirectoryのreal pathへ解決して比較するため、そのdirectoryへ解決されるentryは一致し、別の場所へ解決されるentryまたは解決できないpathはfail closedです。user globalの`provider = "openrouter"`にはallowlist entryは不要です。CLIで選択する場合は、同一 invocation に`--set agents.codex.provider=openrouter`と`--set agents.codex.model=<model>`の両方が必要であり、project modelで前者を補完することはできません。`allowProjectProvider`は`--set` pathではなく、legacy boolean値は拒否されます。
+`allowProjectProvider`はprojectの`provider`と、OpenRouterを継承中のproject `model`上書きに必要で、listには解決後のproject config fileを含むcanonical directoryのabsolute pathを完全一致で指定します。invocationのcwdやlexical pathではありません。descendantやglobには一致しません。trusted `kyoso.config.ts`を含むproject config fileとallowlist entryの両方をsymlink経由も含めて同じdirectoryのreal pathへ解決して比較するため、そのdirectoryへ解決されるentryは一致し、別の場所へ解決されるentryまたは解決できないpathはfail closedです。user globalの`provider = "openrouter"`にはallowlist entryは不要です。CLIで選択する場合は、同一 invocation に`--set agents.codex.provider=openrouter`と`--set agents.codex.model=<model>`の両方が必要であり、project modelで前者を補完することはできません。`allowProjectProvider`は`--set` pathではなく、legacy boolean値は拒否されます。
 
 user global configがOpenRouterを選択している場合、projectは`provider = "default"`で明示的にopt-outできます。このresetにはmodelもauthorizationも不要で、同じlayerで通常のCodex modelを明示しない限り継承したOpenRouter modelも消去し、そのprojectではOpenRouter keyをforwardしません。
 
@@ -365,9 +360,9 @@ export OPENROUTER_API_KEY="<secret>"
 
 keyは`kyoso.toml`、Git管理するconfig、Audit trace、review outputへ保存しません。KyosoはKyoso processまたは明示した`agents.codex.env`のいずれのsourceであっても、このproviderを選択した場合だけCodex childへ転送します。`provider`を省略するか`provider = "default"`の場合は、両方のsourceを意図的に転送しません。空でない明示的な`agents.codex.env.OPENROUTER_API_KEY`は、転送しなかったことを示すsanitized warningも出します。選択されたCodex OpenRouter childだけがkeyを受け取れるため、`agents.claude.env`など別のchild configurationに空でないkeyがある場合も同じwarningを出します。`provider`を省略すると既存のCodex login、`OPENAI_API_KEY`、`CODEX_API_KEY`、`CODEX_CONFIG`の挙動を維持し、行を削除するとその挙動へ戻ります。
 
-GUI clientはshell exportを継承しない場合があります。新規manual MCP registrationは`kyoso setup <client> --write --with-openrouter`で作成し、clientを再起動してから`kyoso doctor`でKyoso processがkeyを検出できるか確認してください。`kyoso setup`は既存のMCP entryを再書換えせずに保持するため、既存registrationでは[examples](examples/codex-config.toml)を参照してopt-in allowlistを手動更新する必要があります。
+Marketplace PluginはMCP processへ`OPENROUTER_API_KEY`の変数名を公開しますが、credential値は保存しません。GUI clientはshell exportを継承しない場合があります。新規manual MCP registrationは`kyoso setup <client> --write --with-openrouter`で作成し、clientを再起動してから`kyoso doctor`でKyoso processがkeyを検出できるか確認してください。`kyoso setup`は既存のMCP entryを再書換えせずに保持するため、既存registrationでは[examples](examples/codex-config.toml)を参照してopt-in allowlistを手動更新する必要があります。
 
-新規manual MCP registrationは既定で`OPENROUTER_API_KEY`を含めません。providerを意図して選択した後だけ`--with-openrouter`で追加し、既存registrationは書換えません。Claude Code registrationの`${OPENROUTER_API_KEY}`はclientが展開する必要があり、Kyosoは`${NAME}`、`$NAME`、`%NAME%`（前後の空白は許容）だけから成る未展開credential placeholderだけを無視し、変数名だけを含むsanitized warningを出します。ほかの文字列を含む値は維持します。custom credential-like nameの末尾が`_KEY`、`_TOKEN`、`_SECRET`、`_PASSWORD`である場合にも同じ規則を適用し、credentialではないtemplateは維持されます。
+新規manual MCP registrationは既定で`OPENROUTER_API_KEY`を含めません。providerを意図して選択した後だけ`--with-openrouter`で追加し、既存registrationは書換えません。`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Claude Code registrationの`${OPENROUTER_API_KEY}`はclientが展開する必要があり、Kyosoは`${NAME}`、`$NAME`、`%NAME%`（前後の空白は許容）だけから成る未展開credential placeholderだけを無視し、変数名だけを含むsanitized warningを出します。ほかの文字列を含む値は維持します。custom credential-like nameの末尾が`_KEY`、`_TOKEN`、`_SECRET`、`_PASSWORD`である場合にも同じ規則を適用し、credentialではないtemplateは維持されます。
 
 このuser-authorized project-scoped opt-inを推奨します。global `provider = "openrouter"`は、projectが`provider = "default"`を設定するまで継承されます。`provider`の省略だけでは解除されません。固定のOpenRouter Responses API presetはbetaです。custom endpoint、provider routing、fallback、judge integrationは公開しません。keyをこのpresetに束縛するため、OpenRouter modeではtop-levelの`profile`または`profiles`を含む`CODEX_CONFIG`と、objectではない`model_providers` valueをchild起動前に拒否します。objectの場合は`model_providers`を固定の`kyoso-openrouter` entryだけに置換し、破棄したentry数だけを含むsanitized warningを出します。provider IDやconfig valueは出力しません。拒否するfield以外では、`model`、`model_provider`、`model_providers`以外のunrelatedな`CODEX_CONFIG` fieldを維持するため、foreign provider configurationがkey付きのendpointを選択することはできません。Claudeは設定済みproviderのままで、judgeは`OPENROUTER_API_KEY`を使用しません。
 
@@ -439,6 +434,10 @@ skipOptionalPhasesWhenTokenUsageUnknown = true
 
 結果には `completion`、`executionBudget`、`requestFingerprint` が含まれます。Markdown と Audit は call数、wall time、output bytes、reported / unknown token usage を示します。`completion.status` が `incomplete` の場合、Kyoso は `retryable: false` の通常の `block` 結果を返します。これは code defect の断定ではなく、review coverage が未完了であることを意味します。同じ fingerprint を自動 retry しないでください。同一review checkpointでは、bundled Skill は初回1 passと material fix後の確認1 passだけを許可し、3回目には明示的な user approval が必要です。
 
+### Timeouts
+
+Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒(`reviewBudget.maxTotalWallTimeMs`)で、各phaseはdeadlineを延長せず残り時間を使います。MCP clients は tool calls に少なくとも480秒を許可してください。
+
 ### Verification
 
 Verification keys: `verification.<enabled|maxFindings|timeoutMs>`。Optional finding verification は default で disabled です:
@@ -463,10 +462,6 @@ Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs は optional で、de
 - `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-haiku-4-5`
 
 Judge defaults は意図的に lightweight models を使用します。より強い judge を使う場合は、`KYOSO_ANTHROPIC_JUDGE_MODEL` に `claude-sonnet-5` のような Sonnet-class model を設定してください。
-
-### Timeouts
-
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒で、各phaseはdeadlineを延長せず残り時間を使います。MCP clients は tool calls に少なくとも480秒を許可してください。
 
 ### Audit
 
@@ -498,7 +493,12 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 
 ## 移行
 
+### アップグレード時の注意
+
 - Project `kyoso.toml` の `tools.*` は user-global config へ移してください。repository content が review を無効化できないよう、project-owned tool availability は拒否されます。
+
+### 導入モードの切り替え
+
 - 手動MCPからCLI＋Skill: CLIとSkillを先に導入し、`codex mcp remove kyoso`または`claude mcp remove kyoso --scope local|project|user`を実行します。
 - CLI＋SkillからPlugin: Pluginを追加してenabledを確認してから、手動MCP登録を削除します。手動コピーSkillは自動削除しません。
 - PluginからCLI＋Skill: CLIとSkillを先に導入し、`codex plugin remove kyoso@kyoso`を実行します。
@@ -506,7 +506,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 
 ## Troubleshooting
 
-- MCP timeout: client tool timeouts を少なくとも 360 秒、`verification.enabled` が true の場合は少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
+- MCP timeout: review全体のdeadlineをカバーできるよう、client tool timeouts を少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 - OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。Marketplace Plugin `0.4.0`以降はこの変数名をKyoso processへ転送し、それ以前のversionは転送しません。既存MCP registrationはsetupで再書換えされません。

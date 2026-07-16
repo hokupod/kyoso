@@ -50,11 +50,9 @@ Kyoso 不会应用代码更改。
 
 Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
-`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Marketplace Plugin `0.6.0` pin 到 `@kyo-so/cli@0.12.0`。
-
 Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
 
-Marketplace Plugin `0.4.0` 向 MCP process 暴露 `OPENROUTER_API_KEY` 变量名，但不保存 credential 值。Kyoso 仅将该值传给显式选择 OpenRouter 的 Codex child，并将未展开的 placeholder 视为未设置。
+关于通过 Plugin 转发 OpenRouter key，请参阅 [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in)。
 
 #### CLI＋Skill-only
 
@@ -181,7 +179,7 @@ kyoso plan \
   --file src/auth/callback.ts
 ```
 
-按从上到下的顺序阅读结果：`Decision` 是 deterministic gate outcome，`Coverage` 显示已执行的必需 lenses 和 perspectives，每个 finding 的 `disposition` 说明它会 block 还是仅供参考。
+按从上到下的顺序阅读结果：`Decision` 是 deterministic gate outcome，`Coverage` 显示已执行的必需 lenses 和 perspectives，每个 finding 的 `disposition` 说明它会 block 还是仅供参考（参见 [Review contract 与 finding admission](#review-contract-与-finding-admission)）。
 
 对 patch 运行 CISA Secure by Design security review：
 
@@ -226,6 +224,18 @@ Kyoso 只暴露以下 MCP tools：
 
 MCP stdout 专用于 protocol messages。Logs 会写到 stderr 或 local audit traces。
 
+## Skill
+
+内置的 `kyoso-review` skill 有意保持范围很窄。只有当你明确请求 Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review 或 diff review 时，才应触发它。
+
+Skill使用第一个可用路径，顺序是Kyoso MCP tools、PATH上已安装的`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`。package runner fallback可能需要network access，也可能发生version drift，因此MCP-less正常路径应使用已安装CLI。如果 typed [review contract](#review-contract-与-finding-admission) 包含non-goals或accepted risks且MCP不可用，CLI fallback只能保留`focus`，因此Skill会停止。
+
+`kyoso setup codex --write --skill-only`默认将canonical Skill directory复制到`.agents/skills/kyoso-review/`。添加`--global`后复制到`~/.agents/skills/kyoso-review/`。
+
+`kyoso setup claude-code --write --skill-only`默认复制到`.claude/skills/kyoso-review/`。添加`--global`后复制到`~/.claude/skills/kyoso-review/`。
+
+managed install会把canonical directory digest和CLI version记录到`.kyoso-install.json`。当前或已知historical copy会被adopt并自动更新；修改过或未知的copy会报告conflict并保持不变。`--force`只替换该Skill directory，不会删除或覆盖MCP配置。
+
 ## Review contract 与 finding admission
 
 每次 review 都包含不可移除的 safety floor：correctness、regression、security boundaries、secrets/injection、data integrity 和 public contract。Kyoso 还会根据 review 形状添加 supply chain、privacy 和 resource amplification lenses。user-global `reviewPolicy.additionalLenses` 可以添加观点评审，但不能移除 floor。
@@ -260,18 +270,6 @@ Kyoso 会重新计算每个 finding 的 evidence quality、与被审查变更的
 
 只有 `gate` 和 `actionable` findings 会影响 deterministic decision。`disputed` finding 会使 completion incomplete，且不得自动修复。`coverage` 记录 required/attempted lenses、required/completed perspectives，以及是否完成 independent cross-model review。`Tests to Add` 最多包含3个具体 regression tests；generic commands 和宽泛的 test-suite 请求会被省略。
 
-## Skill
-
-内置的 `kyoso-review` skill 有意保持范围很窄。只有当你明确请求 Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review 或 diff review 时，才应触发它。
-
-Skill使用第一个可用路径，顺序是Kyoso MCP tools、PATH上已安装的`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`。package runner fallback可能需要network access，也可能发生version drift，因此MCP-less正常路径应使用已安装CLI。如果typed contract包含non-goals或accepted risks且MCP不可用，CLI fallback只能保留`focus`，因此Skill会停止。
-
-`kyoso setup codex --write --skill-only`默认将canonical Skill directory复制到`.agents/skills/kyoso-review/`。添加`--global`后复制到`~/.agents/skills/kyoso-review/`。
-
-`kyoso setup claude-code --write --skill-only`默认复制到`.claude/skills/kyoso-review/`。添加`--global`后复制到`~/.claude/skills/kyoso-review/`。
-
-managed install会把canonical directory digest和CLI version记录到`.kyoso-install.json`。当前或已知historical copy会被adopt并自动更新；修改过或未知的copy会报告conflict并保持不变。`--force`只替换该Skill directory，不会删除或覆盖MCP配置。
-
 ## Configuration
 
 ### Files and precedence
@@ -297,9 +295,6 @@ Global TOML 用于 user-owned settings，包括 command 启动和 env forwarding
 [agents.codex]
 command = "bunx"
 args = ["@agentclientprotocol/codex-acp"]
-# 仅授权此精确 project directory 选择 `provider`，或在继承 OpenRouter 时
-# 覆盖 model。
-allowProjectProvider = ["/absolute/path/to/project"]
 
 [agents.codex.env]
 CODEX_CONFIG = '{"model":"gpt-5.5"}'
@@ -309,7 +304,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codex 还支持 `agents.codex.provider`：`"openrouter"` 选择 external provider，而 `"default"` 会将继承的 OpenRouter 选择重置为正常 Codex behavior；Claude 没有 provider 设置。`agents.codex.allowProjectProvider` 只能在 global config 中设置，它是 absolute project directory allowlist：只有完全匹配的 project TOML 能选择 `provider`，或在继承 OpenRouter 时覆盖 `model`；不匹配子目录或 glob。不能通过 project config 或 `--set` 修改，legacy boolean 值会被拒绝。`command` / `args` / `env` 也只能在 global config 中设置（参见 [Files and precedence](#files-and-precedence)）。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codex 还支持 `agents.codex.provider`：`"openrouter"` 选择 external provider，而 `"default"` 会将继承的 OpenRouter 选择重置为正常 Codex behavior；Claude 没有 provider 设置。从 project 选择 provider 需要只能在 global config 中设置的 `agents.codex.allowProjectProvider` allowlist；完整规则请参阅 [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in)。`command` / `args` / `env` 也只能在 global config 中设置（参见 [Files and precedence](#files-and-precedence)）。
 
 省略 `agents.<name>.model` 或 `agents.<name>.effort` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`（若已设置`CODEX_HOME`，则为`$CODEX_HOME/config.toml`）；Claude 使用 adapter default。
 
@@ -353,7 +348,7 @@ model = "openai/o4-mini"
 
 当 `provider = "openrouter"` 时，`model` 必须存在且不能是空白。它是 OpenRouter model ID；Kyoso 不会 validate model catalog 或该 model 是否支持 tool calling，请向 provider 确认 tool support。
 
-`allowProjectProvider` 适用于 project `provider`，以及继承 OpenRouter 时 project 对 `model` 的覆盖；list 必须完全匹配包含已解析 project config file 的 canonical directory 的 absolute path，而不是 invocation cwd 或 lexical path。project config file（包括受信任的 `kyoso.config.ts`）与 allowlist entry 都会通过 symlink 解析到该 directory；解析到同一 directory 的 entry 会匹配，解析到其他位置或无法解析的 path 会 fail closed。user-global `provider = "openrouter"` 不需要 allowlist entry。直接选择 CLI 时，必须在同一 invocation 中同时使用 `--set agents.codex.provider=openrouter` 和 `--set agents.codex.model=<model>`；project model 不能为该 CLI provider override 补足 model。`allowProjectProvider` 不是 `--set` path，legacy boolean 值会被拒绝。
+`allowProjectProvider` 适用于 project `provider`，以及继承 OpenRouter 时 project 对 `model` 的覆盖；list 必须完全匹配包含已解析 project config file 的 canonical directory 的 absolute path，而不是 invocation cwd 或 lexical path。不匹配子目录或 glob。project config file（包括受信任的 `kyoso.config.ts`）与 allowlist entry 都会通过 symlink 解析到该 directory；解析到同一 directory 的 entry 会匹配，解析到其他位置或无法解析的 path 会 fail closed。user-global `provider = "openrouter"` 不需要 allowlist entry。直接选择 CLI 时，必须在同一 invocation 中同时使用 `--set agents.codex.provider=openrouter` 和 `--set agents.codex.model=<model>`；project model 不能为该 CLI provider override 补足 model。`allowProjectProvider` 不是 `--set` path，legacy boolean 值会被拒绝。
 
 当 user-global config 选择 OpenRouter 时，project 可以用 `provider = "default"` 显式 opt-out。这个 reset 不需要 model 或 authorization；除非同一 layer 明确提供普通 Codex model，它还会清除继承的 OpenRouter model，并且不会为该 project forward OpenRouter key。
 
@@ -365,9 +360,9 @@ export OPENROUTER_API_KEY="<secret>"
 
 key 不会存入 `kyoso.toml`、Git 管理的 config、Audit trace 或 review output。无论它来自 Kyoso process 还是显式 `agents.codex.env`，只有选中该 provider 时，Kyoso 才会将它 forward 给 Codex child。当省略 `provider` 或设为 `provider = "default"` 时，Kyoso 会有意阻止这两种来源；非空的显式 `agents.codex.env.OPENROUTER_API_KEY` 还会产生说明其未被 forward 的 sanitized warning。由于只有被选中的 Codex OpenRouter child 能接收 key，另一个 child configuration（例如 `agents.claude.env`）中的非空 key 也会产生相同 warning。省略 `provider` 会保留现有 Codex login、`OPENAI_API_KEY`、`CODEX_API_KEY` 和 `CODEX_CONFIG` 行为；删除该行即可回到这些行为。
 
-GUI client 可能不会继承 shell export。使用 `kyoso setup <client> --write --with-openrouter` 创建新的 manual MCP registration，重启 client 后再运行 `kyoso doctor` 检查 Kyoso process 能否检测到 key。`kyoso setup` 会保留已有 MCP entry 而不会重写，因此已有 registration 需要根据[示例](examples/codex-config.toml)手动更新 opt-in allowlist。
+Marketplace Plugin 会向其 MCP process 暴露 `OPENROUTER_API_KEY` 变量名，但不保存 credential 值。GUI client 可能不会继承 shell export。使用 `kyoso setup <client> --write --with-openrouter` 创建新的 manual MCP registration，重启 client 后再运行 `kyoso doctor` 检查 Kyoso process 能否检测到 key。`kyoso setup` 会保留已有 MCP entry 而不会重写，因此已有 registration 需要根据[示例](examples/codex-config.toml)手动更新 opt-in allowlist。
 
-新的 manual MCP registration 默认不包含 `OPENROUTER_API_KEY`。仅在有意选择 provider 后使用 `--with-openrouter` 添加它；已有 registration 永不重写。Claude Code registration 中的 `${OPENROUTER_API_KEY}` 必须由 client 展开；Kyoso 只会忽略完全由 `${NAME}`、`$NAME` 或 `%NAME%`（允许前后空白）构成的未展开 credential placeholder，并且只输出含变量名的 sanitized warning。含有其他文字的值会被保留。对于以 `_KEY`、`_TOKEN`、`_SECRET` 或 `_PASSWORD` 结尾的 custom credential-like name，也适用同一规则；非 credential template 会被保留。
+新的 manual MCP registration 默认不包含 `OPENROUTER_API_KEY`。仅在有意选择 provider 后使用 `--with-openrouter` 添加它；已有 registration 永不重写。`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Claude Code registration 中的 `${OPENROUTER_API_KEY}` 必须由 client 展开；Kyoso 只会忽略完全由 `${NAME}`、`$NAME` 或 `%NAME%`（允许前后空白）构成的未展开 credential placeholder，并且只输出含变量名的 sanitized warning。含有其他文字的值会被保留。对于以 `_KEY`、`_TOKEN`、`_SECRET` 或 `_PASSWORD` 结尾的 custom credential-like name，也适用同一规则；非 credential template 会被保留。
 
 推荐使用这种经过 user authorization 的 project-scoped opt-in。global `provider = "openrouter"` 会被 project 继承，直到 project 设置 `provider = "default"`；仅省略 `provider` 不会将其 unset。固定的 OpenRouter Responses API preset 为 beta；不开放 custom endpoint、provider routing、fallback 或 judge integration。为将 key 绑定到该 preset，OpenRouter mode 会拒绝含 top-level `profile` 或 `profiles` 的 `CODEX_CONFIG`，并会在启动 child 前拒绝非 object 的 `model_providers` value。对于 object，它会将 `model_providers` 替换为仅含固定 `kyoso-openrouter` entry 的对象，并发出只包含已丢弃 entry 数量的 sanitized warning；不会显示 provider ID 或 config value。除这些被拒绝的 field 外，它会保留 `model`、`model_provider` 和 `model_providers` 之外无关的 `CODEX_CONFIG` field，因此 foreign provider configuration 无法选择使用该 key 的 endpoint。Claude 仍使用已配置的 provider，judge 不会使用 `OPENROUTER_API_KEY`。
 
@@ -439,6 +434,10 @@ skipOptionalPhasesWhenTokenUsageUnknown = true
 
 结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、output bytes，以及 reported 或 unknown token usage。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次评审与 material fix 后的确认评审各1次；第三次需要用户明确批准。
 
+### Timeouts
+
+Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒(`reviewBudget.maxTotalWallTimeMs`)，各 phase 使用剩余 deadline 而不会延长它。MCP clients 应允许 tool calls 至少运行480秒。
+
 ### Verification
 
 Verification keys: `verification.<enabled|maxFindings|timeoutMs>`。Optional finding verification 默认 disabled:
@@ -463,10 +462,6 @@ Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs 是 optional，默认
 - `KYOSO_ANTHROPIC_JUDGE_MODEL`: Anthropic judge model, default `claude-haiku-4-5`
 
 Judge defaults 有意使用 lightweight models。若需要更强的 judge，请将 `KYOSO_ANTHROPIC_JUDGE_MODEL` 设置为 Sonnet-class model，例如 `claude-sonnet-5`。
-
-### Timeouts
-
-Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒，各 phase 使用剩余 deadline 而不会延长它。MCP clients 应允许 tool calls 至少运行480秒。
 
 ### Audit
 
@@ -498,7 +493,12 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 
 ## 迁移
 
+### 升级注意事项
+
 - 将 project `kyoso.toml` 中的 `tools.*` 移到 user-global config。project-owned tool availability 现在会被拒绝，避免 repository content 禁用 review。
+
+### 切换集成模式
+
 - 从手动MCP迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex mcp remove kyoso`或`claude mcp remove kyoso --scope local|project|user`。
 - 从CLI＋Skill迁移到Plugin：添加Plugin并确认enabled后，再删除手动MCP注册。手动复制的Skill不会自动删除。
 - 从Plugin迁移到CLI＋Skill：先安装CLI和Skill，再运行`codex plugin remove kyoso@kyoso`。
@@ -506,7 +506,7 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 
 ## Troubleshooting
 
-- MCP timeout: 将 client tool timeouts 设置为至少 360 秒；当 `verification.enabled` 为 true 时，设置为至少 480 秒。Kyoso defaults 请参阅 [Timeouts](#timeouts)。
+- MCP timeout: 将 client tool timeouts 设置为至少 480 秒，以覆盖 review-wide deadline。Kyoso defaults 请参阅 [Timeouts](#timeouts)。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
 - Deprecated TypeScript config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip；新配置请使用 `kyoso.toml`。
 - OpenRouter key missing: 确认 Codex `model` 非空、`OPENROUTER_API_KEY` 已 forward 给 Kyoso process，并已重启 client；再运行 `kyoso doctor`。Marketplace Plugin `0.4.0` 及更高版本会将此变量名 forward 给 Kyoso process，旧版本不会。setup 也不会重写已有 MCP registration。

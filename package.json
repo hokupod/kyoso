@@ -25,10 +25,12 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "kyoso": "dist/bin/kyoso.js"
+    "kyoso": "dist/bin/kyoso.js",
+    "kyoso-budget-report": "scripts/review-budget-report.mjs"
   },
   "files": [
     "dist",
+    "scripts/review-budget-report.mjs",
     ".agents/skills/kyoso-review",
     "examples",
     "README.md",
@@ -51,6 +53,7 @@
     "plugin:promote": "node scripts/plugin-promote.mjs",
     "skill:runtime:verify": "node scripts/verify-skill-runtime.mjs",
     "audit:runtime:verify": "node scripts/verify-audit-runtime.mjs",
+    "audit:budget-report": "node scripts/review-budget-report.mjs",
     "pack:verify": "node scripts/verify-pack.mjs",
     "prepack": "bun run build"
   },

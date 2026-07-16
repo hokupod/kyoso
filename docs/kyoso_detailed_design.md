@@ -216,6 +216,8 @@ kyoso/
   tsconfig.json
   README.md
   LICENSE
+  scripts/
+    review-budget-report.mjs
   src/
     index.ts
     cli/
@@ -310,6 +312,7 @@ kyoso/
     kyoso.toml
   test/
     unit/
+      reviewBudgetReport.test.ts
     integration/
 ```
 
@@ -628,6 +631,24 @@ export type KyosoDecision = "approve" | "approve_with_changes" | "block";
 
 export type GateStatus = "pass" | "warn" | "fail" | "not_applicable";
 
+export type ModelTokenUsage = {
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+};
+
+export type ModelExecutionIdentity = {
+  providerRoute:
+    "codex_default" | "claude_default" | "openrouter" | "openai" | "anthropic";
+  requestedModel?: string;
+  reportedProvider?: string;
+  reportedModel?: string;
+  reportingStatus: "reported" | "requested_only" | "unknown";
+};
+
 export type ReviewCompletion = {
   status: "complete" | "incomplete";
   reasons: Array<
@@ -648,9 +669,17 @@ export type KyosoResult = {
     maxModelCalls: number;
     modelCalls: { planned: number; consumed: number; skipped: number };
     wallTime: { limitMs: number; consumedMs: number; remainingMs: number };
+    effectiveWarnAgentOutputBytes?: number;
     maxAgentOutputBytes: number;
     maxFindingsPerAgent: number;
-    tokenUsage: { status: "reported" | "partial" | "unknown" };
+    skipOptionalPhasesWhenTokenUsageUnknown: boolean;
+    agentOutputBytes: Partial<Record<"codex" | "claude", number>>;
+    tokenUsage: {
+      status: "reported" | "partial" | "unknown";
+      reportedCalls: number;
+      unknownCalls: number;
+      totals: ModelTokenUsage;
+    };
   };
   requestFingerprint: string;
   degraded: boolean;
@@ -750,6 +779,8 @@ export type KyosoResult = {
 
   testsToAdd: string[];
 
+  residualRisks: string[];
+
   openQuestions: string[];
 
   agentOpinions: Array<{
@@ -758,6 +789,8 @@ export type KyosoResult = {
     summary: string;
     status: "completed" | "failed" | "timeout" | "skipped";
     errorCode?: string;
+    salvaged?: boolean;
+    rawText?: string;
   }>;
 
   audit: {
@@ -769,6 +802,23 @@ export type KyosoResult = {
     networkMode: "model_only" | "unrestricted";
     workspaceMode: "temp_snapshot";
     configHash?: string;
+    warnings?: string[];
+    modelCalls: Array<{
+      kind: "primary" | "verifier" | "judge";
+      agent?: "codex" | "claude";
+      status: "completed" | "skipped";
+      reason?: string;
+      messageBytes?: number;
+      thoughtBytes?: number;
+      outputBytes?: number;
+      outputWarningTriggered?: boolean;
+      salvaged?: boolean;
+      reportedFindings?: number;
+      findingsTargetExceeded?: boolean;
+      usage?: ModelTokenUsage;
+      executionIdentity?: ModelExecutionIdentity;
+      stopReason?: string;
+    }>;
   };
 };
 ```
@@ -802,7 +852,7 @@ TOML config is declarative and does not require trust approval. The user global 
 - tightening-only `network.defaultMode = "model_only"`, `secrets.blockOnDetectedSecret = true`, `secrets.allowOverride = false`
 - `securityReview.cisaSecureByDesign.* = true`
 
-Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 480-second absolute deadline, 65,536 UTF-8 bytes per agent across streamed message and thought text chunks, ten findings per agent, and optional-phase skipping when usage is unknown. A request may lower these ceilings through `options.reviewBudget`, but project TOML and `--set` never change them.
+Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 480-second absolute deadline, a non-blocking warning at 524,288 UTF-8 bytes per agent, and a hard breaker at 1,048,576 bytes across streamed message and thought text chunks. Ten findings per agent is a prompt target rather than a truncation limit, and unknown token usage warns while optional phases continue by default. A request may lower the hard ceilings and soft targets through `options.reviewBudget`, but project TOML and `--set` never change them.
 
 Fixed or reserved schema values are explicit: `firstClassClient = "codex"` is metadata only, `workspace.readOnly = true` describes the enforced read-only review contract, `network.mediatedWeb.enabled = false` reserves the future mode, and `audit.includeFileContents = false` prevents file-content persistence through Audit config. `verification.allowDemotion` is accepted for compatibility but is annotate-only and has no runtime demotion effect.
 
@@ -1710,19 +1760,72 @@ type TraceEvent =
       requestFingerprint: string;
       maxModelCalls: number;
       maxTotalWallTimeMs: number;
+      effectiveWarnAgentOutputBytes?: number;
+      maxAgentOutputBytes: number;
+      maxFindingsPerAgent: number;
+      skipOptionalPhasesWhenTokenUsageUnknown: boolean;
       timestamp: string;
     }
   | {
-      type:
-        "model_call_reserved" | "model_call_completed" | "model_call_skipped";
+      type: "model_call_reserved";
       traceId: string;
       kind: "primary" | "verifier" | "judge";
       agent?: string;
       timestamp: string;
     }
   | {
-      type: "review_budget_exhausted" | "review_budget_completed";
+      type: "model_call_skipped";
       traceId: string;
+      kind: "primary" | "verifier" | "judge";
+      agent?: string;
+      reason: string;
+      timestamp: string;
+    }
+  | {
+      type: "model_call_completed";
+      traceId: string;
+      kind: "primary" | "verifier" | "judge";
+      agent?: string;
+      resultStatus?: string;
+      errorCode?: string;
+      messageBytes?: number;
+      thoughtBytes?: number;
+      outputBytes?: number;
+      outputWarningTriggered?: boolean;
+      salvaged?: boolean;
+      reportedFindings?: number;
+      findingsTargetExceeded?: boolean;
+      usage?: ModelTokenUsage;
+      executionIdentity?: ModelExecutionIdentity;
+      stopReason?: string;
+      timestamp: string;
+    }
+  | {
+      type: "agent_output_warning";
+      traceId: string;
+      kind: "primary" | "verifier";
+      agent?: string;
+      thresholdBytes: number;
+      messageBytes: number;
+      thoughtBytes: number;
+      outputBytes: number;
+      timestamp: string;
+    }
+  | {
+      type: "review_budget_exhausted";
+      traceId: string;
+      phase: "primary" | "verification" | "judge";
+      reason: string;
+      timestamp: string;
+    }
+  | {
+      type: "review_budget_completed";
+      traceId: string;
+      requestFingerprint: string;
+      completion: ReviewCompletion;
+      modelCalls: KyosoResult["executionBudget"]["modelCalls"];
+      wallTime: KyosoResult["executionBudget"]["wallTime"];
+      tokenUsage: KyosoResult["executionBudget"]["tokenUsage"];
       timestamp: string;
     }
   | {
@@ -1738,6 +1841,7 @@ type TraceEvent =
       agent: string;
       provider?: "openrouter";
       model?: string;
+      executionIdentity?: ModelExecutionIdentity;
       timestamp: string;
     }
   | {
@@ -1762,6 +1866,7 @@ type TraceEvent =
       traceId: string;
       provider: string;
       status: string;
+      executionIdentity?: ModelExecutionIdentity;
       timestamp: string;
     }
   | {
@@ -1773,7 +1878,7 @@ type TraceEvent =
   | { type: "response_sent"; traceId: string; timestamp: string };
 ```
 
-For an OpenRouter Codex run, `agent_started` includes the public provider name and configured model. When the provider is omitted, the event leaves the provider field absent and includes a model only when one is configured. No trace event includes `OPENROUTER_API_KEY` or any other credential value.
+`agent_started`, `model_call_completed`, and model-backed `judge_completed` may include `executionIdentity`. `providerRoute` records the Kyoso route; `requestedModel` records the effective model sent to the child/API; and `reportedProvider` / `reportedModel` appear only when the backend reports them. `reportingStatus` keeps `reported`, `requested_only`, and `unknown` distinct. Calls skipped before a model request have no execution identity. The legacy top-level `provider` / `model` fields on `agent_started` mirror safe values for compatibility; the nested identity is canonical. No trace event includes `OPENROUTER_API_KEY`, base URLs, provider configuration bodies, or any other credential value.
 
 If selected-provider preflight fails before an ACP child starts (for example, because `OPENROUTER_API_KEY` is absent), the trace intentionally emits only a failed `agent_completed` event with its error code. It emits no paired `agent_started`; consumers must treat that absence as an explicit preflight outcome, not a lost trace event.
 
@@ -1819,6 +1924,28 @@ Audit may include:
 - Open the trace lazily once per review with exclusive append flags and required no-follow/non-blocking capability. Before the first write, verify a regular file, realpath containment, and matching `dev`/`ino` for the opened handle and path.
 - Serialize JSONL writes through one queue and close the handle after pending writes finish. A partial write, close error, or write after finalization permanently disables the writer for that review.
 - `TraceWriter.write()` never throws. Audit failures do not change the review decision; after finalization, deduplicated sanitized warnings are included in `result.audit.warnings` and the Markdown result.
+
+### 20.7 Read-only budget report and recalibration
+
+The operator must provide an absolute trusted trace directory; the report never infers a workspace or user-state path. The installed package exposes a dedicated bin:
+
+```bash
+kyoso-budget-report --trace-dir /absolute/path/to/traces --json
+```
+
+The source checkout retains a package script for dogfooding:
+
+```bash
+bun run audit:budget-report -- --trace-dir /absolute/path/to/traces --json
+```
+
+`scripts/review-budget-report.mjs` rejects a symlink root, opens the root without following its final path component where supported, and verifies the opened path's non-zero device and inode identity. It then launches a dedicated worker with that root as its current directory and requires the worker's `.` identity to match before reading. Recursive descent uses entry-relative operations only: after changing into a child directory it verifies the child's identity, and after returning it verifies the parent identity. Replacing and later restoring the lexical root therefore cannot redirect traversal to another tree. The worker skips symlinks and reads only regular `.jsonl` files. It never writes, moves, or deletes traces. Each file is opened read-only with no-follow and non-blocking flags, limited to its discovered byte length, and revalidated before and after reading against its discovered size, device, inode, nanosecond modification time, and nanosecond change time; a changed or growing file aborts the report. Missing secure file-open capabilities also abort the report. Malformed lines and unrelated events are counted without aborting the report, and untrusted metadata is sanitized before output. Sanitization rejects known credential families, credential-bearing URLs and assignments, JWT/Bearer forms, and private-key headers, but remains defense in depth: the operator must supply a trusted trace directory.
+
+Input and aggregation memory are finite. The report accepts at most 10,000 `.jsonl` files, 10,000 directories, 100,000 directory entries, 16 MiB per file, 256 MiB total discovered bytes, 1,000,000 JSONL lines, 1 MiB per JSONL line, 250,000 parsed events, 100,000 completed calls, reviews, and warning events, 100,000 correlation keys, and 10,000 execution groups and distinct reasons. The JSON publishes these values as `inputLimits`; exceeding one aborts without emitting a partial report.
+
+The JSON report keeps requested-only and provider-reported execution identities in separate groups. It includes call counts by agent/kind/provider route/requested model, separate all-call and normal-path nearest-rank p50/p95/p99/max for message/thought/total output bytes, review-level reported/partial/unknown token-usage rates, call-level usage-reporting rates, soft-warning and `AGENT_OUTPUT_LIMIT` rates, completion reasons, and optional-phase skip reasons. A normal-path call must explicitly have `resultStatus = "completed"` and no `errorCode`; ambiguous historical events remain in all-call statistics only. Top-level byte distributions and soft-warning/`AGENT_OUTPUT_LIMIT` call rates use primary and verifier calls; completed judge calls remain in all-model-call and per-execution totals but do not dilute recalibration metrics. A soft-warning event contributes to the call rate only when it correlates to a `model_call_completed` event with the same trace, kind, and agent; warning events for non-agent-stream call kinds are invalid. Duplicate and orphan warning events remain visible as `uncorrelatedEvents` but cannot inflate the call rate above one. Bytes are measured independently; the report does not estimate token counts or monetary cost from bytes.
+
+Recalibration uses normal-path traces: keep the soft warning at least twice the normal p99, set the hard breaker sufficiently above the warning that its normal trigger rate is near zero, and inspect unknown token-usage rates per provider/model before changing optional-phase policy. Tests generate temporary fixtures for malformed, mixed-identity, empty-directory, and path-boundary cases; no credential-bearing fixed fixture belongs in the repository.
 
 ---
 
@@ -2436,7 +2563,7 @@ MVP is considered complete when all of the following pass:
 | §16 CISA gate                        | `src/security/cisaGate.ts`                                                                                                                                                                                                                     |
 | §17 Secrets and redaction            | `src/security/secretScan.ts`, `src/security/redact.ts`, `src/security/sanitizeText.ts`                                                                                                                                                         |
 | §18 Network policy                   | `src/core/runReview.ts`, `src/cli/main.ts`                                                                                                                                                                                                     |
-| §20 Audit trace                      | `src/audit/trace.ts`, `src/audit/sanitize.ts`                                                                                                                                                                                                  |
+| §20 Audit trace                      | `src/audit/trace.ts`, `src/audit/sanitize.ts`, `scripts/review-budget-report.mjs`, `test/unit/reviewBudgetReport.test.ts`                                                                                                                      |
 | §21 Markdown output                  | `src/output/markdown.ts`                                                                                                                                                                                                                       |
 | §22 Packaged skill                   | `.agents/skills/kyoso-review/SKILL.md`, `.agents/skills/kyoso-review/agents/openai.yaml`                                                                                                                                                       |
 | §25 Test strategy                    | `test/unit/core.test.ts`, `test/integration/runReview.test.ts`, `test/e2e/e2e.test.ts`, `test/fixtures/fake-acp-agent.ts`                                                                                                                      |

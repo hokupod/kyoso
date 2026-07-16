@@ -7,8 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a read-only `kyoso-budget-report` package bin and `audit:budget-report`
+  source script for explicit trusted trace directories, with execution grouping,
+  separate all-call/normal-path byte percentiles, token-reporting rates,
+  call-correlated output-limit signals, root-identity-anchored traversal,
+  bounded trace ingestion, sanitized metadata, and completion/skip reasons.
+- Expose effective model execution identity in Audit events and JSON/Markdown
+  results while keeping requested-only and provider-reported values distinct.
+
 ### Changed
 
+- Recalibrate review output defaults to a non-blocking 512 KiB warning and a
+  1 MiB hard breaker, make the ten-finding limit a soft target, and continue
+  optional phases when token usage is unknown by default.
+- Preserve strictly parseable paid results after output-limit cancellation,
+  enforce one absolute review deadline across phases, and align the dogfooding
+  MCP client timeout with its 35-minute review preset.
 - Promote the Marketplace Plugin to `0.6.0` and pin its Codex and Claude Code
   MCP definitions to `@kyo-so/cli@0.12.0`, delivering typed review contracts,
   deterministic finding admission, and explicit coverage through the Plugin runtime.

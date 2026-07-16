@@ -417,20 +417,21 @@ This mode does not provide independent cross-model validation and may retain sel
 
 ### Execution budget and review stopping
 
-Every review has a user-global hard ceiling for model calls, total wall time, streamed agent text (message and thought chunks), and findings per agent:
+Every review has user-global hard ceilings for model calls, total wall time, and streamed agent text (message and thought chunks). Streamed text also has a lower soft-warning threshold, while findings per agent is a soft target:
 
 ```toml
 [reviewBudget]
 maxModelCalls = 4
 maxTotalWallTimeMs = 480000
-maxAgentOutputBytes = 65536
+warnAgentOutputBytes = 524288
+maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
-skipOptionalPhasesWhenTokenUsageUnknown = true
+skipOptionalPhasesWhenTokenUsageUnknown = false
 ```
 
-`reviewBudget` is user-global only: project `kyoso.toml` and `--set` cannot change it. MCP and library requests may lower a ceiling through `options.reviewBudget`, never raise it. Kyoso reserves both primary reviewers before starting either one, uses any residual calls for verification, and treats the LLM judge as advisory. The default judge mode is `deterministic_only`.
+`reviewBudget` is user-global only: project `kyoso.toml` and `--set` cannot change it. MCP and library requests may lower a ceiling through `options.reviewBudget`, never raise it. The 512 KiB warning is non-blocking, the 1 MiB limit cancels the call, and the ten-finding target does not discard additional material findings. Unknown token usage warns and continues by default; an explicit user-global `true` preserves strict optional-phase skipping. Kyoso reserves both primary reviewers before starting either one, uses any residual calls for verification, and treats the LLM judge as advisory. The default judge mode is `deterministic_only`.
 
-The result includes `completion`, `executionBudget`, and `requestFingerprint`; Markdown and Audit show call counts, wall time, output bytes, and reported or unknown token usage. If `completion.status` is `incomplete`, Kyoso returns a normal `block` result with `retryable: false`: the block means review coverage is incomplete, not that a code defect was established. Do not automatically retry the same fingerprint. At one review checkpoint, the bundled Skill permits one initial pass and one confirmation pass only after material fixes; a third pass requires explicit user approval.
+The result includes `completion`, `executionBudget`, and `requestFingerprint`; Markdown and Audit show call counts, wall time, message/thought/total output bytes, and reported, partial, or unknown token usage. Each completed model call can also expose `executionIdentity`, separating the Kyoso route and requested model from provider-reported identity; requested-only values are never presented as provider reports. If `completion.status` is `incomplete`, Kyoso returns a normal `block` result with `retryable: false`: the block means review coverage is incomplete, not that a code defect was established. Do not automatically retry the same fingerprint. At one review checkpoint, the bundled Skill permits one initial pass and one confirmation pass only after material fixes; a third pass requires explicit user approval.
 
 ### Timeouts
 
@@ -485,6 +486,20 @@ On supported POSIX runtimes, Audit traces are written below the user state base 
 ```
 
 `audit.directory` is a logical relative directory (default: `.kyoso/traces`), not a directory in the workspace. Existing workspace `.kyoso/traces` files are not migrated or deleted automatically.
+
+Generate a read-only budget report from the installed package by supplying an absolute trusted trace directory explicitly:
+
+```bash
+kyoso-budget-report --trace-dir /absolute/path/to/traces --json
+```
+
+From a source checkout, use the package script:
+
+```bash
+bun run audit:budget-report -- --trace-dir /absolute/path/to/traces --json
+```
+
+The report recursively reads regular `.jsonl` files only, skips symlinks, and never infers a trace path. It groups calls by agent, kind, provider route, requested model, and requested/reported identity status; reports separate all-call and normal-path nearest-rank p50/p95/p99/max byte distributions, token-usage reporting rates, output-warning/limit rates, and completion/skip reasons; and never converts bytes into estimated tokens or cost. A normal-path call explicitly has `resultStatus = "completed"` and no `errorCode`; ambiguous historical events remain in all-call statistics only. Top-level byte distributions and output-warning/hard-limit call rates use primary and verifier calls; judge calls remain in all-call and per-execution totals but do not dilute recalibration metrics. Warning call rates include only warning events correlated to a completed call with the same trace, kind, and agent; duplicate or orphan warning events are reported separately. The JSON exposes fixed ingestion bounds as `inputLimits`, and the command aborts instead of truncating when file, byte, line, event, call, review, warning, group, reason, or directory bounds are exceeded. Traversal runs in a dedicated worker whose validated current directory is bound to the supplied root's device and inode; recursive descent revalidates each directory identity, so replacing and restoring the lexical root cannot redirect reads. File reads use no-follow, non-blocking opens and never consume beyond the discovered size; the report aborts when the platform cannot provide those open capabilities. Metadata sanitization is defense in depth, so supply only an operator-trusted trace directory. For recalibration, keep a soft warning at least twice the normal-path p99, place the hard breaker well above the warning so its normal trigger rate stays near zero, and inspect unknown token-usage rates by provider/model before changing policy.
 
 Raw agent output is disabled by default. `audit.includeFileContents` is reserved and fixed to `false`; file contents are never persisted through that setting. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces according to your local retention policy. On Windows or an environment without proven safe filesystem capabilities, Audit trace writing stays disabled and the review returns a sanitized warning (see [Safety Model](#safety-model)).
 

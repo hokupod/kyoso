@@ -12,6 +12,6 @@
       "CLAUDE_CODE_OAUTH_TOKEN"
     ],
     "startup_timeout_sec": 20,
-    "tool_timeout_sec": 360
+    "tool_timeout_sec": 2160
   }
 }

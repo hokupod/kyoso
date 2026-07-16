@@ -65,7 +65,7 @@ describe("Codex Plugin fixture", () => {
           "CLAUDE_CODE_OAUTH_TOKEN",
         ],
         startup_timeout_sec: 20,
-        tool_timeout_sec: 360,
+        tool_timeout_sec: 2160,
       },
     });
     expect(claudeManifest.mcpServers.kyoso.env).toEqual({
@@ -169,6 +169,80 @@ describe("Codex Plugin fixture", () => {
     expect(PLUGIN_RUNTIME_EXPECTED_CONTRACT).toEqual(
       compatibility.expectedContract,
     );
+  });
+
+  test("bounds every runtime probe command by one version-wide deadline", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import {
+            boundedProbeTimeoutMs,
+            remainingProbeTimeoutMs,
+          } from "./scripts/plugin-runtime-deadline.mjs";
+
+          if (boundedProbeTimeoutMs(1_000, 600, 100) !== 600) {
+            throw new Error("requested timeout was not preserved");
+          }
+          if (boundedProbeTimeoutMs(1_000, 600, 700) !== 300) {
+            throw new Error("timeout was not capped by the probe deadline");
+          }
+          if (remainingProbeTimeoutMs(1_000, 2_000, 700) !== 300) {
+            throw new Error("cleanup timeout was not capped by the probe deadline");
+          }
+          if (remainingProbeTimeoutMs(1_000, 2_000, 1_000) !== 0) {
+            throw new Error("expired cleanup timeout was not zero");
+          }
+          try {
+            boundedProbeTimeoutMs(1_000, 600, 1_000);
+            throw new Error("expired deadline was accepted");
+          } catch (error) {
+            if (!String(error).includes("wall-time deadline")) throw error;
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  test("stops missing observation polling at the shared deadline", () => {
+    const startedAt = Date.now();
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { waitForFileUntilDeadline } from "./scripts/plugin-runtime-deadline.mjs";
+
+          try {
+            await waitForFileUntilDeadline(
+              "/private/tmp/kyoso-plugin-runtime-missing-" + process.pid,
+              Date.now() + 50,
+              {
+                pollIntervalMs: 10,
+                timeoutMessage: "expected observation timeout",
+              },
+            );
+            throw new Error("missing observation was accepted");
+          } catch (error) {
+            if (!String(error).includes("expected observation timeout")) {
+              throw error;
+            }
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8", timeout: 2_000 },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
   test("keeps the Plugin Skill mirror checkable through plugin:sync", () => {

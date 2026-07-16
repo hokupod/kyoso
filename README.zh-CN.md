@@ -436,7 +436,22 @@ skipOptionalPhasesWhenTokenUsageUnknown = true
 
 ### Timeouts
 
-Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒(`reviewBudget.maxTotalWallTimeMs`)，各 phase 使用剩余 deadline 而不会延长它。MCP clients 应允许 tool calls 至少运行480秒。
+Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒(`reviewBudget.maxTotalWallTimeMs`)，各 phase 使用剩余 deadline 而不会延长它。`kyoso doctor` 会显示已配置的顺序phase时间，以及加入10%或60秒（取较大值）余量后的review-wide建议值。只有当judge mode允许且direct provider credential可用时，才会计入LLM judge timeout。
+
+本repository的primary 15分钟＋verification 15分钟dogfooding preset使用以下user-global override：
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+Codex Plugin和新生成的manual Codex registration使用`tool_timeout_sec = 2160`，比Kyoso的35分钟deadline多保留60秒。`kyoso setup`会保留已有manual registration，因此需要手动更新。Claude Code Plugin manifest不设置client tool timeout；请用等效的毫秒值启动Claude Code，然后重启client：
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+延长client timeout不会延长Kyoso内部的review-wide deadline。对于其他preset，请确保client timeout大于`reviewBudget.maxTotalWallTimeMs`。
 
 ### Verification
 
@@ -506,7 +521,7 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 
 ## Troubleshooting
 
-- MCP timeout: 将 client tool timeouts 设置为至少 480 秒，以覆盖 review-wide deadline。Kyoso defaults 请参阅 [Timeouts](#timeouts)。
+- MCP timeout: client timeout应长于review-wide deadline。35分钟preset在Codex中使用2160秒，在Claude Code中使用`MCP_TOOL_TIMEOUT=2160000`。请参阅[Timeouts](#timeouts)。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
 - Deprecated TypeScript config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip；新配置请使用 `kyoso.toml`。
 - OpenRouter key missing: 确认 Codex `model` 非空、`OPENROUTER_API_KEY` 已 forward 给 Kyoso process，并已重启 client；再运行 `kyoso doctor`。Marketplace Plugin `0.4.0` 及更高版本会将此变量名 forward 给 Kyoso process，旧版本不会。setup 也不会重写已有 MCP registration。

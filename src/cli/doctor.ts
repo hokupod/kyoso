@@ -11,8 +11,9 @@ import {
 import {
   CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE,
   CODEX_OPENROUTER_PROVIDER,
+  type KyosoConfig,
 } from "../config/schema.js";
-import { resolveJudgeProvider } from "../judge/provider.js";
+import { resolveJudgeCallRoute } from "../judge/provider.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import {
   hasUsableEnvValue,
@@ -257,10 +258,42 @@ export async function runDoctor(options: {
     );
   }
 
-  const judgeProvider =
-    loaded.config.judge.mode === "deterministic_only"
-      ? "deterministic_fallback"
-      : resolveJudgeProvider(loaded.config.judge.provider, env);
+  const judgeRoute = resolveJudgeCallRoute(
+    loaded.config.judge.mode,
+    loaded.config.judge.provider,
+    env,
+  );
+  const reviewTiming = calculateReviewTiming(
+    loaded.config,
+    judgeRoute.llmAvailable,
+  );
+  lines.push("", "Review timing");
+  lines.push(
+    `  review-wide deadline: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms`,
+    `  sequential phases: primary ${reviewTiming.primaryPhaseMs} + verification ${reviewTiming.verificationPhaseMs} + LLM judge ${reviewTiming.judgePhaseMs} = ${reviewTiming.sequentialPhaseMs} ms`,
+    `  recommended review-wide deadline: ${reviewTiming.recommendedReviewWallTimeMs} ms`,
+  );
+  if (
+    loaded.config.reviewBudget.maxTotalWallTimeMs <
+    reviewTiming.sequentialPhaseMs
+  ) {
+    lines.push(
+      `  warning: review-wide deadline is insufficient: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms is below the configured sequential phase time of ${reviewTiming.sequentialPhaseMs} ms; later phases cannot receive their configured timeout.`,
+      `  hint: set user-global reviewBudget.maxTotalWallTimeMs to at least ${reviewTiming.recommendedReviewWallTimeMs}.`,
+    );
+  } else if (
+    loaded.config.reviewBudget.maxTotalWallTimeMs <
+    reviewTiming.recommendedReviewWallTimeMs
+  ) {
+    lines.push(
+      `  warning: review-wide deadline has low margin: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms is below the recommended ${reviewTiming.recommendedReviewWallTimeMs} ms; scheduling and finalization margin is reduced.`,
+      `  hint: set user-global reviewBudget.maxTotalWallTimeMs to at least ${reviewTiming.recommendedReviewWallTimeMs}.`,
+    );
+  }
+
+  const judgeProvider = judgeRoute.llmAvailable
+    ? judgeRoute.provider
+    : "deterministic_fallback";
   lines.push("", "Judge");
   lines.push(`  provider: ${judgeProvider}`);
   lines.push(
@@ -301,6 +334,39 @@ export async function runDoctor(options: {
   );
 
   return lines.join("\n");
+}
+
+function calculateReviewTiming(
+  config: KyosoConfig,
+  llmJudgeAvailable: boolean,
+): {
+  primaryPhaseMs: number;
+  verificationPhaseMs: number;
+  judgePhaseMs: number;
+  sequentialPhaseMs: number;
+  recommendedReviewWallTimeMs: number;
+} {
+  const primaryPhaseMs = Math.max(
+    0,
+    ...Object.values(config.agents)
+      .filter((agent) => agent.enabled)
+      .map((agent) => agent.timeoutMs),
+  );
+  const verificationPhaseMs = config.verification.enabled
+    ? config.verification.timeoutMs
+    : 0;
+  const judgePhaseMs = llmJudgeAvailable ? config.judge.timeoutMs : 0;
+  const sequentialPhaseMs = primaryPhaseMs + verificationPhaseMs + judgePhaseMs;
+  const recommendedReviewWallTimeMs =
+    sequentialPhaseMs + Math.max(60_000, Math.ceil(sequentialPhaseMs * 0.1));
+
+  return {
+    primaryPhaseMs,
+    verificationPhaseMs,
+    judgePhaseMs,
+    sequentialPhaseMs,
+    recommendedReviewWallTimeMs,
+  };
 }
 
 type DoctorIntegrationMode = IntegrationMode | "plugin-mcp" | "plugin-skill";

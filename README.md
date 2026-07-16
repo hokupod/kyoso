@@ -434,7 +434,22 @@ The result includes `completion`, `executionBudget`, and `requestFingerprint`; M
 
 ### Timeouts
 
-Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. The review-wide deadline defaults to 480 seconds (`reviewBudget.maxTotalWallTimeMs`), and each phase uses the remaining deadline rather than extending it. MCP clients should allow at least 480 seconds for tool calls.
+Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. The review-wide deadline defaults to 480 seconds (`reviewBudget.maxTotalWallTimeMs`), and each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
+
+This repository's 15-minute primary plus 15-minute verification dogfooding preset uses the following user-global override:
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+The Codex Plugin and newly generated manual Codex registrations use `tool_timeout_sec = 2160`, leaving 60 seconds beyond that 35-minute Kyoso deadline. Existing manual registrations are preserved by `kyoso setup` and must be updated manually. The Claude Code Plugin manifest does not set a client tool timeout; launch Claude Code with the equivalent millisecond value, then restart the client:
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+Increasing the client timeout does not extend Kyoso's internal review-wide deadline. For other presets, keep the client timeout longer than `reviewBudget.maxTotalWallTimeMs`.
 
 ### Verification
 
@@ -504,7 +519,7 @@ Windows, and environments where the required filesystem capabilities cannot be p
 
 ## Troubleshooting
 
-- MCP timeout: set client tool timeouts to at least 480 seconds to cover the review-wide deadline. See [Timeouts](#timeouts) for the Kyoso defaults.
+- MCP timeout: keep the client timeout longer than the review-wide deadline. For the 35-minute preset, use 2160 seconds in Codex or `MCP_TOOL_TIMEOUT=2160000` in Claude Code. See [Timeouts](#timeouts).
 - Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx @kyo-so/cli` resolution after publish.
 - Deprecated TypeScript config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`; prefer `kyoso.toml`.
 - OpenRouter key missing: confirm a non-empty Codex `model`, an `OPENROUTER_API_KEY` forwarded to the Kyoso process, and a restarted client; run `kyoso doctor`. Marketplace Plugin `0.4.0` and later forward this variable name to the Kyoso process; earlier versions do not. Existing MCP registrations are not rewritten by setup.

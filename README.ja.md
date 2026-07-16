@@ -436,7 +436,22 @@ skipOptionalPhasesWhenTokenUsageUnknown = true
 
 ### Timeouts
 
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒(`reviewBudget.maxTotalWallTimeMs`)で、各phaseはdeadlineを延長せず残り時間を使います。MCP clients は tool calls に少なくとも480秒を許可してください。
+Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒(`reviewBudget.maxTotalWallTimeMs`)で、各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許可し、direct provider credentialが利用できる場合だけ加算します。
+
+このrepositoryのprimary 15分＋verification 15分のdogfooding presetでは、次のuser-global overrideを使います。
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+Codex Pluginと新規生成するmanual Codex registrationは`tool_timeout_sec = 2160`を使い、Kyosoの35分deadlineより60秒長く待機します。既存manual registrationは`kyoso setup`が保持するため、手動更新が必要です。Claude Code Plugin manifestはclient tool timeoutを設定しないため、同値をミリ秒で指定してClaude Codeを起動し、clientを再起動してください。
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+client timeoutを延ばしてもKyoso内部のreview-wide deadlineは延長されません。ほかのpresetでは、client timeoutを`reviewBudget.maxTotalWallTimeMs`より長くしてください。
 
 ### Verification
 
@@ -506,7 +521,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 
 ## Troubleshooting
 
-- MCP timeout: review全体のdeadlineをカバーできるよう、client tool timeouts を少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
+- MCP timeout: client timeoutはreview-wide deadlineより長くしてください。35分presetではCodexに2160秒、Claude Codeに`MCP_TOOL_TIMEOUT=2160000`を設定します。[Timeouts](#timeouts)を参照してください。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 - OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。Marketplace Plugin `0.4.0`以降はこの変数名をKyoso processへ転送し、それ以前のversionは転送しません。既存MCP registrationはsetupで再書換えされません。

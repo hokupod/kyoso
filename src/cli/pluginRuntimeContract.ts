@@ -48,7 +48,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
       ],
       cwd: null,
       startupTimeoutSec: 20,
-      toolTimeoutSec: 360,
+      toolTimeoutSec: 2160,
     },
     pluginOverride: {
       enabled: false,
@@ -65,7 +65,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
       ],
       cwd: null,
       startupTimeoutSec: 20,
-      toolTimeoutSec: 360,
+      toolTimeoutSec: 2160,
     },
     manualOverride: {
       enabled: true,

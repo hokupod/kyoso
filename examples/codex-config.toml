@@ -6,7 +6,7 @@ args = ["-y", "@kyo-so/cli", "mcp"]
 # "OPENROUTER_API_KEY" after "CODEX_ACCESS_TOKEN" in this list.
 env_vars = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_HOME", "CODEX_ACCESS_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]
 startup_timeout_sec = 20
-tool_timeout_sec = 360
+tool_timeout_sec = 2160
 enabled = true
 
 # Bun alternative:

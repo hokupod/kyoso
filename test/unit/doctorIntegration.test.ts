@@ -68,6 +68,144 @@ describe("doctor integration modes", () => {
     );
   }
 
+  test("accepts the 35-minute review-wide budget for 15-minute primary and verification phases", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      "[reviewBudget]\nmaxTotalWallTimeMs = 2100000\n",
+      "utf8",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      `[agents.codex]
+timeoutMs = 900000
+
+[agents.claude]
+timeoutMs = 900000
+
+[verification]
+enabled = true
+timeoutMs = 900000
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("review-wide deadline: 2100000 ms");
+    expect(output).toContain(
+      "sequential phases: primary 900000 + verification 900000 + LLM judge 0 = 1800000 ms",
+    );
+    expect(output).toContain("recommended review-wide deadline: 1980000 ms");
+    expect(output).not.toContain("warning: review-wide deadline");
+  });
+
+  test.each([
+    [
+      1_700_000,
+      "warning: review-wide deadline is insufficient: 1700000 ms is below the configured sequential phase time of 1800000 ms",
+    ],
+    [
+      1_900_000,
+      "warning: review-wide deadline has low margin: 1900000 ms is below the recommended 1980000 ms",
+    ],
+  ] as const)(
+    "warns when the %i ms review-wide budget cannot safely cover configured phases",
+    async (maxTotalWallTimeMs, expectedWarning) => {
+      const context = await doctorFixture();
+      const globalConfigDir = join(context.home, ".config", "kyoso");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(
+        join(globalConfigDir, "config.toml"),
+        `[reviewBudget]\nmaxTotalWallTimeMs = ${maxTotalWallTimeMs}\n`,
+        "utf8",
+      );
+      await writeFile(
+        join(context.cwd, "kyoso.toml"),
+        `[agents.codex]
+timeoutMs = 900000
+
+[agents.claude]
+timeoutMs = 900000
+
+[verification]
+enabled = true
+timeoutMs = 900000
+`,
+        "utf8",
+      );
+
+      const output = await runDoctor({
+        cwd: context.cwd,
+        env: context.env,
+        pluginInspector: () => pluginUnsupported,
+      });
+
+      expect(output).toContain(expectedWarning);
+      expect(output).toContain(
+        "hint: set user-global reviewBudget.maxTotalWallTimeMs to at least 1980000.",
+      );
+    },
+  );
+
+  test("adds judge time only for a credential-backed LLM route", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      "[reviewBudget]\nmaxTotalWallTimeMs = 350000\n",
+      "utf8",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      `[agents.codex]
+timeoutMs = 100000
+
+[agents.claude]
+timeoutMs = 100000
+
+[judge]
+mode = "deterministic_plus_llm"
+provider = "openai"
+timeoutMs = 200000
+`,
+      "utf8",
+    );
+
+    const withoutCredential = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+    const withCredential = await runDoctor({
+      cwd: context.cwd,
+      env: { ...context.env, OPENAI_API_KEY: "doctor-test-key" },
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(withoutCredential).toContain(
+      "sequential phases: primary 100000 + verification 0 + LLM judge 0 = 100000 ms",
+    );
+    expect(withoutCredential).toContain(
+      "Judge\n  provider: deterministic_fallback",
+    );
+    expect(withCredential).toContain(
+      "sequential phases: primary 100000 + verification 0 + LLM judge 200000 = 300000 ms",
+    );
+    expect(withCredential).toContain("Judge\n  provider: openai");
+    expect(withCredential).toContain(
+      "warning: review-wide deadline has low margin: 350000 ms is below the recommended 360000 ms",
+    );
+    expect(withCredential).not.toContain("doctor-test-key");
+  });
+
   test("reports OpenRouter key presence without leaking its value", async () => {
     const context = await doctorFixture();
     const fakeKey = "openrouter-test-key-must-not-appear";

@@ -131,7 +131,7 @@ export function buildCodexMcpToml(
     `args = ${JSON.stringify(command.args)}`,
     `env_vars = [${envVars.map((value) => JSON.stringify(value)).join(", ")}]`,
     "startup_timeout_sec = 20",
-    "tool_timeout_sec = 360",
+    "tool_timeout_sec = 2160",
     "enabled = true",
     "",
   ].join("\n");

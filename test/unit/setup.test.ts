@@ -73,6 +73,12 @@ describe("setup", () => {
     );
   });
 
+  test("allows the MCP client to outlive a 35-minute review", () => {
+    expect(buildCodexMcpToml(commandForRunner("npx"))).toContain(
+      "tool_timeout_sec = 2160",
+    );
+  });
+
   test("renders dry-run output without writing files", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-dry-");
     const output = await runSetup({

@@ -13,8 +13,20 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import {
+  boundedProbeTimeoutMs,
+  remainingProbeTimeoutMs,
+  waitForFileUntilDeadline,
+} from "./plugin-runtime-deadline.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CODEX_NPX_INSTALL_TIMEOUT_MS = 180_000;
+const CODEX_COMMAND_TIMEOUT_MS = 60_000;
+const PROBE_WALL_TIME_MS = 300_000;
+const probeDeadlineAtEpochMs = Date.now() + PROBE_WALL_TIME_MS;
+const probeNpmCache = process.env.KYOSO_PLUGIN_RUNTIME_NPM_CACHE
+  ? resolve(process.env.KYOSO_PLUGIN_RUNTIME_NPM_CACHE)
+  : undefined;
 const options = parseOptions(process.argv.slice(2));
 const codexVersion =
   options.codexVersion ?? process.env.CODEX_VERSION ?? "0.144.1";
@@ -69,7 +81,9 @@ try {
 }
 
 async function runProbe() {
-  const versionOutput = runCodex(["--version"]).stdout.trim();
+  const versionOutput = runCodex(["--version"], {
+    timeoutMs: CODEX_NPX_INSTALL_TIMEOUT_MS,
+  }).stdout.trim();
   const marketplaceAdd = runCodexJson([
     "plugin",
     "marketplace",
@@ -212,6 +226,10 @@ function prepareFixture() {
 }
 
 function runCodex(args, runOptions = {}) {
+  const timeoutMs = boundedProbeTimeoutMs(
+    probeDeadlineAtEpochMs,
+    runOptions.timeoutMs ?? CODEX_COMMAND_TIMEOUT_MS,
+  );
   const result = spawnSync(
     "npx",
     ["-y", `@openai/codex@${codexVersion}`, ...args],
@@ -219,7 +237,7 @@ function runCodex(args, runOptions = {}) {
       cwd: runOptions.cwd ?? workspace,
       env: probeEnvironment(),
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024,
     },
   );
@@ -307,13 +325,19 @@ async function runAppServerProbe(options) {
     });
     const skills = await responseFor(3, 30_000);
     if (options.expectMcpLaunch) {
-      await waitForFile(observationPath, 10_000);
+      await waitForFileUntilDeadline(
+        observationPath,
+        Math.min(probeDeadlineAtEpochMs, Date.now() + 10_000),
+        {
+          timeoutMessage: `MCP observation was not written: ${observationPath}`,
+        },
+      );
     } else {
-      await delay(1_000);
+      await delay(boundedProbeTimeoutMs(probeDeadlineAtEpochMs, 1_000));
     }
     return { mcpStatus: mcpStatus.result, skills: skills.result };
   } finally {
-    await terminateChild(child);
+    await terminateChild(child, probeDeadlineAtEpochMs);
   }
 
   function send(message) {
@@ -324,7 +348,7 @@ async function runAppServerProbe(options) {
     if (!responses.has(id)) {
       await withTimeout(
         new Promise((resolveResponse) => waiters.set(id, resolveResponse)),
-        timeoutMs,
+        boundedProbeTimeoutMs(probeDeadlineAtEpochMs, timeoutMs),
         `app-server response ${id} timed out: ${stderr}`,
       );
     }
@@ -338,13 +362,25 @@ async function runAppServerProbe(options) {
   }
 }
 
-async function terminateChild(child) {
+async function terminateChild(child, deadlineAtEpochMs) {
   child.stdin.end();
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
-  if (await waitForChildExit(child, 2_000)) return;
+  const gracefulWaitMs = remainingProbeTimeoutMs(deadlineAtEpochMs, 2_000);
+  if (gracefulWaitMs > 0 && (await waitForChildExit(child, gracefulWaitMs))) {
+    return;
+  }
   child.kill("SIGKILL");
-  await waitForChildExit(child, 2_000);
+  const forceWaitMs = remainingProbeTimeoutMs(deadlineAtEpochMs, 2_000);
+  if (forceWaitMs > 0) {
+    await waitForChildExit(child, forceWaitMs);
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    child.stdin.destroy();
+    child.stdout.destroy();
+    child.stderr.destroy();
+    child.unref();
+  }
 }
 
 function waitForChildExit(child, timeoutMs) {
@@ -375,9 +411,13 @@ function probeEnvironment() {
     HOME: home,
     CODEX_HOME: codexHome,
     TMPDIR: tempDirectory,
-    PATH: `${pathSentinel}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: [
+      pathSentinel,
+      dirname(process.execPath),
+      process.env.PATH ?? "",
+    ].join(delimiter),
     KYOSO_PROBE_DENIED_SENTINEL: deniedSentinel,
-    npm_config_cache: join(probeRoot, "npm-cache"),
+    npm_config_cache: probeNpmCache ?? join(probeRoot, "npm-cache"),
     npm_config_update_notifier: "false",
   };
 }
@@ -536,16 +576,6 @@ function assertCompatibilityRecord(path, result) {
       `Codex ${result.codexVersion} runtime contract differs from the compatibility record`,
     );
   }
-}
-
-async function waitForFile(path, timeoutMs) {
-  await withTimeout(
-    (async () => {
-      while (!existsSync(path)) await delay(25);
-    })(),
-    timeoutMs,
-    `MCP observation was not written: ${path}`,
-  );
 }
 
 async function withTimeout(promise, timeoutMs, message) {

@@ -801,8 +801,8 @@ function validateMcp(mcp, failures) {
       "Plugin MCP env_vars must match the seven-item allowlist exactly",
     );
   }
-  if (server.startup_timeout_sec !== 20 || server.tool_timeout_sec !== 360) {
-    failures.push("Plugin MCP timeouts must remain 20 and 360 seconds");
+  if (server.startup_timeout_sec !== 20 || server.tool_timeout_sec !== 2160) {
+    failures.push("Plugin MCP timeouts must remain 20 and 2160 seconds");
   }
   return pin ?? { packageName: "", packageVersion: "" };
 }

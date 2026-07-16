@@ -141,7 +141,11 @@ describe("review budget", () => {
     });
     const [codex, claude] = primary.reservations;
     if (!codex || !claude) throw new Error("missing primary reservations");
-    tracker.markStarted(codex);
+    tracker.markStarted(codex, {
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    });
     tracker.complete(codex, {
       messageBytes: 40,
       thoughtBytes: 60,
@@ -151,6 +155,13 @@ describe("review budget", () => {
       reportedFindings: 11,
       findingsTargetExceeded: true,
       usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
+      executionIdentity: {
+        providerRoute: "openrouter",
+        requestedModel: "openai/o4-mini",
+        reportedProvider: "openai",
+        reportedModel: "o4-mini-2026-06-01",
+        reportingStatus: "reported",
+      },
     });
     tracker.markStarted(claude);
     tracker.complete(claude, { outputBytes: 80 });
@@ -181,6 +192,13 @@ describe("review budget", () => {
       salvaged: true,
       reportedFindings: 11,
       findingsTargetExceeded: true,
+      executionIdentity: {
+        providerRoute: "openrouter",
+        requestedModel: "openai/o4-mini",
+        reportedProvider: "openai",
+        reportedModel: "o4-mini-2026-06-01",
+        reportingStatus: "reported",
+      },
     });
   });
 

@@ -3,12 +3,19 @@ import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import type { JudgeProviderOutput, JudgeRunInput } from "./provider.js";
 import { buildJudgePrompt, parseJudgeOutput } from "./prompt.js";
 
+export const DEFAULT_OPENAI_JUDGE_MODEL = "gpt-5.4-mini";
+
+export function resolveOpenAiJudgeModel(env: NodeJS.ProcessEnv): string {
+  return env.KYOSO_OPENAI_JUDGE_MODEL ?? DEFAULT_OPENAI_JUDGE_MODEL;
+}
+
 export async function runOpenAiJudge(
   input: JudgeRunInput,
   timeoutMs: number,
 ): Promise<JudgeProviderOutput> {
   const apiKey = input.env.OPENAI_API_KEY ?? input.env.CODEX_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+  const requestedModel = resolveOpenAiJudgeModel(input.env);
 
   const response = await fetchWithTimeout(
     `${input.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`,
@@ -19,7 +26,7 @@ export async function runOpenAiJudge(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: input.env.KYOSO_OPENAI_JUDGE_MODEL ?? "gpt-5.4-mini",
+        model: requestedModel,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -42,6 +49,7 @@ export async function runOpenAiJudge(
   if (!response.ok)
     throw new Error(`OpenAI judge failed with HTTP ${response.status}.`);
   const payload = (await response.json()) as {
+    model?: unknown;
     choices?: Array<{ message?: { content?: string } }>;
     usage?: {
       total_tokens?: number;
@@ -55,8 +63,12 @@ export async function runOpenAiJudge(
   if (!content)
     throw new Error("OpenAI judge response did not include content.");
   const usage = normalizeUsage(payload.usage);
+  const reportedModel =
+    typeof payload.model === "string" ? payload.model : undefined;
   return {
     output: parseJudgeOutput(content, input.summaryText),
+    requestedModel,
+    ...(reportedModel ? { reportedModel } : {}),
     ...(usage ? { usage } : {}),
   };
 }

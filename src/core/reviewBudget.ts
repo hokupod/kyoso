@@ -1,5 +1,6 @@
 import type {
   AgentName,
+  ModelExecutionIdentity,
   ModelCallKind,
   ModelTokenUsage,
   ReviewBudget,
@@ -13,6 +14,7 @@ import type {
 } from "./types.js";
 import { KyosoRequestError } from "./errors.js";
 import { normalizeModelTokenUsage } from "./tokenUsage.js";
+import { normalizeModelExecutionIdentity } from "./modelExecutionIdentity.js";
 
 type ReservationStatus = "reserved" | "started" | "completed" | "skipped";
 
@@ -30,6 +32,7 @@ type Reservation = {
   reportedFindings?: number;
   findingsTargetExceeded?: boolean;
   usage?: ModelTokenUsage;
+  executionIdentity?: ModelExecutionIdentity;
   stopReason?: string;
 };
 
@@ -280,15 +283,26 @@ export class ReviewBudgetTracker {
     return { reservation };
   }
 
-  markStarted(reservation: ModelCallReservation): void {
+  markStarted(
+    reservation: ModelCallReservation,
+    executionIdentity?: ModelExecutionIdentity,
+  ): void {
     const current = this.reservations.get(reservation.id);
     if (!current || current.status !== "reserved") return;
     current.status = "started";
+    current.executionIdentity =
+      normalizeModelExecutionIdentity(executionIdentity);
   }
 
   hasStarted(reservation: ModelCallReservation): boolean {
     const current = this.reservations.get(reservation.id);
     return current?.status === "started" || current?.status === "completed";
+  }
+
+  executionIdentity(
+    reservation: ModelCallReservation,
+  ): ModelExecutionIdentity | undefined {
+    return this.reservations.get(reservation.id)?.executionIdentity;
   }
 
   complete(
@@ -302,6 +316,7 @@ export class ReviewBudgetTracker {
       reportedFindings?: number;
       findingsTargetExceeded?: boolean;
       usage?: ModelTokenUsage;
+      executionIdentity?: ModelExecutionIdentity;
       stopReason?: string;
     } = {},
   ): void {
@@ -322,6 +337,9 @@ export class ReviewBudgetTracker {
     current.reportedFindings = values.reportedFindings;
     current.findingsTargetExceeded = values.findingsTargetExceeded;
     current.usage = normalizeModelTokenUsage(values.usage);
+    current.executionIdentity =
+      normalizeModelExecutionIdentity(values.executionIdentity) ??
+      current.executionIdentity;
     current.stopReason = values.stopReason;
   }
 
@@ -492,6 +510,9 @@ export class ReviewBudgetTracker {
           ? { findingsTargetExceeded: reservation.findingsTargetExceeded }
           : {}),
         ...(reservation.usage ? { usage: reservation.usage } : {}),
+        ...(reservation.executionIdentity
+          ? { executionIdentity: reservation.executionIdentity }
+          : {}),
         ...(reservation.stopReason
           ? { stopReason: reservation.stopReason }
           : {}),

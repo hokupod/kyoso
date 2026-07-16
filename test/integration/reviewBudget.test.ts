@@ -182,6 +182,15 @@ describe("review execution budget", () => {
       verifier: { planned: 1, consumed: 1, skipped: 0 },
       judge: { planned: 0, consumed: 0, skipped: 0 },
     });
+    expect(
+      result.audit.modelCalls.every(
+        (call) => call.executionIdentity === undefined,
+      ),
+    ).toBe(true);
+    expect(result.summaryMarkdown).toContain("primary/codex: identity=unknown");
+    expect(result.summaryMarkdown).toContain(
+      "verifier/claude: identity=unknown",
+    );
     expect(result.completion.status).toBe("complete");
   });
 

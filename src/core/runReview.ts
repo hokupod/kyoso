@@ -1,9 +1,5 @@
 import { resolve } from "node:path";
-import {
-  CODEX_OPENROUTER_PROVIDER,
-  kyosoConfigSchema,
-  type KyosoConfig,
-} from "../config/schema.js";
+import { kyosoConfigSchema, type KyosoConfig } from "../config/schema.js";
 import { defaultConfig } from "../config/defaultConfig.js";
 import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
 import { applyConfigOverrides } from "../config/configOverrides.js";
@@ -34,6 +30,7 @@ import type {
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
+  ModelExecutionIdentity,
   NetworkMode,
   NormalizedAgentOpinion,
   ReviewCoverage,
@@ -42,6 +39,7 @@ import type {
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
+import { normalizeModelExecutionIdentity } from "./modelExecutionIdentity.js";
 import { validateReviewRequest } from "./validateRequest.js";
 import {
   defaultSummaryText,
@@ -766,6 +764,9 @@ export async function runReview(
       traceId,
       provider: judge.provider,
       status: judge.status,
+      ...(judge.executionIdentity
+        ? { executionIdentity: judge.executionIdentity }
+        : {}),
       timestamp: new Date().toISOString(),
     };
     if (judge.error) judgeEvent.error = judge.error;
@@ -1029,9 +1030,21 @@ async function runFindingVerification(input: {
     warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
     maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
     networkMode: input.networkMode,
-    onStarted: () => {
-      input.budgetTracker.markStarted(group.reservation);
-      return Promise.resolve();
+    onStarted: (executionIdentity?: ModelExecutionIdentity) => {
+      input.budgetTracker.markStarted(group.reservation, executionIdentity);
+      const event = buildAgentStartedEvent({
+        traceId: input.traceId,
+        agent: group.verifier,
+        role: "finding_verifier",
+        executionIdentity: input.budgetTracker.executionIdentity(
+          group.reservation,
+        ),
+      });
+      return input.trace.write(event).catch(() => {
+        warnings.push(
+          "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
+        );
+      });
     },
   }));
 
@@ -1279,7 +1292,11 @@ async function runBudgetedJudge(
   const usage = normalizeModelTokenUsage(judge.usage);
   input.budgetTracker.complete(reservation, {
     ...(usage ? { usage } : {}),
+    ...(judge.executionIdentity
+      ? { executionIdentity: judge.executionIdentity }
+      : {}),
   });
+  const executionIdentity = input.budgetTracker.executionIdentity(reservation);
   await input.trace.write({
     type: "model_call_completed",
     traceId: input.traceId,
@@ -1287,6 +1304,7 @@ async function runBudgetedJudge(
     provider: judge.provider,
     resultStatus: judge.status,
     ...(usage ? { usage } : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
     timestamp: new Date().toISOString(),
   });
   return judge;
@@ -1454,25 +1472,15 @@ async function runAgents(input: {
       warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
       maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
       networkMode: input.networkMode,
-      onStarted: () => {
-        input.budgetTracker.markStarted(reservation);
+      onStarted: (executionIdentity?: ModelExecutionIdentity) => {
+        input.budgetTracker.markStarted(reservation, executionIdentity);
         if (!acceptingStartedEvents) return Promise.resolve();
-        const event: Record<string, unknown> = {
-          type: "agent_started",
+        const event = buildAgentStartedEvent({
           traceId: input.traceId,
           agent,
           role,
-          timestamp: new Date().toISOString(),
-        };
-        if (agentConfig.model) {
-          event.model = sanitizeTextForDisplay(agentConfig.model);
-        }
-        if (
-          agent === "codex" &&
-          input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
-        ) {
-          event.provider = CODEX_OPENROUTER_PROVIDER;
-        }
+          executionIdentity: input.budgetTracker.executionIdentity(reservation),
+        });
         const write = (async () => {
           try {
             await input.trace.write(event);
@@ -1652,7 +1660,10 @@ async function finalizeModelCallResult(input: {
     return;
   }
 
-  input.budgetTracker.markStarted(input.reservation);
+  input.budgetTracker.markStarted(
+    input.reservation,
+    input.result.executionIdentity,
+  );
   const usage = normalizeModelTokenUsage(input.result.usage);
   const { messageBytes, thoughtBytes, outputBytes } = resolveOutputByteMetrics(
     input.result,
@@ -1683,8 +1694,14 @@ async function finalizeModelCallResult(input: {
       ? {}
       : { findingsTargetExceeded: input.result.findingsTargetExceeded }),
     ...(usage ? { usage } : {}),
+    ...(input.result.executionIdentity
+      ? { executionIdentity: input.result.executionIdentity }
+      : {}),
     ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
   });
+  const executionIdentity = input.budgetTracker.executionIdentity(
+    input.reservation,
+  );
   if (input.result.error?.code === "AGENT_OUTPUT_LIMIT") {
     input.budgetTracker.markIncomplete("agent_output_limit");
   }
@@ -1731,9 +1748,35 @@ async function finalizeModelCallResult(input: {
       ? {}
       : { findingsTargetExceeded: input.result.findingsTargetExceeded }),
     ...(usage ? { usage } : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
     ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
     timestamp: new Date().toISOString(),
   });
+}
+
+function buildAgentStartedEvent(input: {
+  traceId: string;
+  agent: AgentName;
+  role: AgentRole;
+  executionIdentity?: ModelExecutionIdentity;
+}): Record<string, unknown> {
+  const executionIdentity = normalizeModelExecutionIdentity(
+    input.executionIdentity,
+  );
+  return {
+    type: "agent_started",
+    traceId: input.traceId,
+    agent: input.agent,
+    role: input.role,
+    ...(executionIdentity ? { executionIdentity } : {}),
+    ...(executionIdentity?.requestedModel
+      ? { model: executionIdentity.requestedModel }
+      : {}),
+    ...(executionIdentity?.providerRoute === "openrouter"
+      ? { provider: "openrouter" }
+      : {}),
+    timestamp: new Date().toISOString(),
+  };
 }
 
 function resolveOutputByteMetrics(result: AgentRunResult): {

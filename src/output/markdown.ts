@@ -237,6 +237,14 @@ function formatExecutionBudget(
           return `- ${title(agent)}: ${bytes} bytes${breakdown ? ` (message: ${breakdown.messageBytes}, thought: ${breakdown.thoughtBytes})` : ""}`;
         })
       : ["- None reported."];
+  const identityLines = result.audit.modelCalls
+    .filter((call) => call.status === "completed")
+    .map((call) => {
+      const label = [call.kind, call.agent].filter(Boolean).join("/");
+      const identity = call.executionIdentity;
+      if (!identity) return `- ${label}: identity=unknown`;
+      return `- ${label}: route=${identity.providerRoute}, requested=${escapeMarkdownText(identity.requestedModel ?? "unknown")}, reporting=${identity.reportingStatus}`;
+    });
   const totalTokens = budget.tokenUsage.totals.totalTokens;
   const plan = budget.modelCallPlan;
   const outputLimits =
@@ -255,6 +263,8 @@ function formatExecutionBudget(
     `- Findings target: ${budget.maxFindingsPerAgent} per primary agent (soft)`,
     "- Agent output:",
     ...outputLines,
+    "- Model identities:",
+    ...(identityLines.length > 0 ? identityLines : ["- None completed."]),
   ];
 }
 

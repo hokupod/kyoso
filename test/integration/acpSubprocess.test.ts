@@ -9,20 +9,35 @@ import {
   kyosoConfigSchema,
   type KyosoConfig,
 } from "../../src/config/schema.js";
-import type { AgentName, AgentRunInput } from "../../src/core/types.js";
+import type {
+  AgentName,
+  AgentRunInput,
+  ModelExecutionIdentity,
+} from "../../src/core/types.js";
 
 describe("SubprocessAcpAgentManager ACP integration", () => {
   test("completes a happy-path ACP session and normalizes findings", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"));
     let startEvents = 0;
+    let startedIdentity: ModelExecutionIdentity | undefined;
 
     const result = await manager.runAgent(
-      agentInput(cwd, { onStarted: () => (startEvents += 1) }),
+      agentInput(cwd, {
+        onStarted: (identity) => {
+          startEvents += 1;
+          startedIdentity = identity;
+        },
+      }),
     );
 
     expect(result.status).toBe("completed");
     expect(startEvents).toBe(1);
+    expect(startedIdentity).toEqual({
+      providerRoute: "codex_default",
+      reportingStatus: "unknown",
+    });
+    expect(result.executionIdentity).toEqual(startedIdentity);
     expect(result.normalized?.summary).toContain("read snapshot context");
     expect(result.normalized?.findings[0]?.title).toBe(
       "Fake ACP subprocess finding",
@@ -83,6 +98,30 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
       "CODEX_CONFIG_OPENROUTER_PRESET=true",
     );
     expect(JSON.stringify(result)).not.toContain(key);
+    expect(result.executionIdentity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    });
+  });
+
+  test("records only explicitly reported ACP provider and model metadata", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("happy", {
+        FAKE_ACP_REPORTED_PROVIDER: "backend-provider",
+        FAKE_ACP_REPORTED_MODEL: "backend-model-2026-07",
+      }),
+    );
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      reportedProvider: "backend-provider",
+      reportedModel: "backend-model-2026-07",
+      reportingStatus: "reported",
+    });
   });
 
   test("returns a structured failure before spawning an OpenRouter child when the key is missing", async () => {
@@ -105,6 +144,7 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.error?.detail).toBeUndefined();
     expect(startEvents).toBe(0);
     expect(existsSync(pidPath)).toBe(false);
+    expect(result.executionIdentity).toBeUndefined();
   });
 
   test("keeps a sanitized detail for an unexpected child-environment preflight failure", async () => {
@@ -424,6 +464,10 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
 
     expect(result.status).toBe("timeout");
     expect(result.error?.code).toBe("AGENT_TIMEOUT");
+    expect(result.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      reportingStatus: "unknown",
+    });
     await Bun.sleep(1_000);
     expect(isProcessAlive(pid)).toBe(false);
   });

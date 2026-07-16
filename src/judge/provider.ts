@@ -4,13 +4,15 @@ import type {
   CrossModelAnalysis,
   KyosoResult,
   JudgeProvider,
+  ModelExecutionIdentity,
   ModelTokenUsage,
   NormalizedAgentOpinion,
   ReviewTool,
 } from "../core/types.js";
-import { runAnthropicJudge } from "./anthropic.js";
+import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
+import { resolveAnthropicJudgeModel, runAnthropicJudge } from "./anthropic.js";
 import { runDeterministicJudge } from "./deterministicFallback.js";
-import { runOpenAiJudge } from "./openai.js";
+import { resolveOpenAiJudgeModel, runOpenAiJudge } from "./openai.js";
 
 export type JudgeOutput = {
   summaryText: string;
@@ -31,12 +33,15 @@ export type JudgeRunResult = {
   status: "completed" | "deterministic_fallback" | "failed_fallback";
   output: JudgeOutput;
   usage?: ModelTokenUsage;
+  executionIdentity?: ModelExecutionIdentity;
   error?: string;
 };
 
 export type JudgeProviderOutput = {
   output: JudgeOutput;
   usage?: ModelTokenUsage;
+  requestedModel: string;
+  reportedModel?: string;
 };
 
 export type JudgeRunInput = {
@@ -100,6 +105,13 @@ export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
   }
 
   const provider = route.provider;
+  const requestExecutionIdentity = createModelExecutionIdentity({
+    providerRoute: provider === "openai" ? "openai" : "anthropic",
+    requestedModel:
+      provider === "openai"
+        ? resolveOpenAiJudgeModel(input.env)
+        : resolveAnthropicJudgeModel(input.env),
+  });
 
   try {
     const output =
@@ -113,6 +125,11 @@ export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
       provider,
       status: "completed",
       output: output.output,
+      executionIdentity: createModelExecutionIdentity({
+        providerRoute: requestExecutionIdentity.providerRoute,
+        requestedModel: output.requestedModel,
+        reportedModel: output.reportedModel,
+      }),
       ...(output.usage ? { usage: output.usage } : {}),
     };
   } catch (error) {
@@ -120,6 +137,7 @@ export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
       provider,
       status: "failed_fallback",
       output: fallback,
+      executionIdentity: requestExecutionIdentity,
       error: error instanceof Error ? error.message : String(error),
     };
   }

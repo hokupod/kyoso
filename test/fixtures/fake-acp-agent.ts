@@ -246,7 +246,11 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         },
       },
     });
-    return { stopReason: terminalStopReason(mode), usage: fakeUsage() };
+    return {
+      stopReason: terminalStopReason(mode),
+      usage: fakeUsage(),
+      ...fakeExecutionMetadata(),
+    };
   });
 
 const stream = ndJsonStream(
@@ -281,6 +285,21 @@ function hasEnv(key: string): boolean {
 
 function fakeUsage() {
   return { totalTokens: 20, inputTokens: 12, outputTokens: 8 };
+}
+
+function fakeExecutionMetadata(): {
+  _meta?: { provider?: string; model?: string };
+} {
+  const provider = process.env.FAKE_ACP_REPORTED_PROVIDER;
+  const model = process.env.FAKE_ACP_REPORTED_MODEL;
+  return provider || model
+    ? {
+        _meta: {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+        },
+      }
+    : {};
 }
 
 function terminalStopReason(value: string) {

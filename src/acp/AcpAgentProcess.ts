@@ -14,11 +14,16 @@ import type {
   AgentName,
   AgentRunInput,
   AgentRunResult,
+  ModelExecutionIdentity,
   ModelTokenUsage,
 } from "../core/types.js";
+import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
-import { ChildEnvPreflightError, buildChildEnv } from "../utils/env.js";
+import {
+  ChildEnvPreflightError,
+  buildChildLaunchContext,
+} from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
 import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
 
@@ -45,9 +50,9 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
 
     const provider =
       input.agent === "codex" ? this.config.agents.codex.provider : undefined;
-    let env: NodeJS.ProcessEnv;
+    let launchContext: ReturnType<typeof buildChildLaunchContext>;
     try {
-      env = buildChildEnv(
+      launchContext = buildChildLaunchContext(
         this.parentEnv,
         agentConfig.auth.envWhitelist,
         agentConfig.env,
@@ -70,7 +75,13 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
     }
 
     try {
-      return await runSubprocessAgent(input.agent, agentConfig, input, env);
+      return await runSubprocessAgent(
+        input.agent,
+        agentConfig,
+        input,
+        launchContext.env,
+        launchContext.executionIdentity,
+      );
     } catch (error) {
       return {
         agent: input.agent,
@@ -94,6 +105,7 @@ async function runSubprocessAgent(
   agentConfig: AgentConfig,
   input: AgentRunInput,
   env: NodeJS.ProcessEnv,
+  launchExecutionIdentity: ModelExecutionIdentity,
 ): Promise<AgentRunResult> {
   const startedAt = new Date().toISOString();
   const effectiveTimeoutMs = resolveEffectiveTimeoutMs(input);
@@ -121,11 +133,15 @@ async function runSubprocessAgent(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let spawned = false;
     let startedWrite: Promise<void> | undefined;
     child.once("spawn", () => {
       if (settled) return;
+      spawned = true;
       startedWrite = Promise.resolve()
-        .then(() => input.onStarted?.())
+        .then(async () => {
+          await input.onStarted?.(launchExecutionIdentity);
+        })
         .catch(() => undefined);
     });
 
@@ -135,8 +151,12 @@ async function runSubprocessAgent(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      const finalResult =
+        spawned && result.executionIdentity === undefined
+          ? { ...result, executionIdentity: launchExecutionIdentity }
+          : result;
       void (startedWrite ?? Promise.resolve()).then(() =>
-        resolveResult(result),
+        resolveResult(finalResult),
       );
     };
 
@@ -185,6 +205,7 @@ async function runSubprocessAgent(
       input,
       abortController,
       resolveEffortConfigOption(agent, agentConfig.effort),
+      launchExecutionIdentity,
     )
       .then(
         ({
@@ -196,6 +217,7 @@ async function runSubprocessAgent(
           outputBytes,
           outputWarningTriggered,
           stopReason,
+          executionIdentity,
         }) => {
           stdout = rawText;
           const completed = stopReason === "end_turn";
@@ -212,6 +234,7 @@ async function runSubprocessAgent(
             outputBytes,
             outputWarningTriggered,
             stopReason,
+            executionIdentity,
             ...(usage ? { usage } : {}),
             ...(warnings.length > 0 ? { warnings } : {}),
             ...(completed
@@ -289,6 +312,7 @@ async function runAcpClientWorkflow(
   input: AgentRunInput,
   abortController: AbortController,
   configOption: { configId: string; value: string } | undefined,
+  launchExecutionIdentity: ModelExecutionIdentity,
 ): Promise<{
   rawText: string;
   warnings: string[];
@@ -298,6 +322,7 @@ async function runAcpClientWorkflow(
   outputBytes: number;
   outputWarningTriggered: boolean;
   stopReason: string;
+  executionIdentity: ModelExecutionIdentity;
 }> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
@@ -414,6 +439,10 @@ async function runAcpClientWorkflow(
               outputBytes,
               outputWarningTriggered,
               stopReason: message.stopReason,
+              executionIdentity: withReportedExecutionIdentity(
+                launchExecutionIdentity,
+                message.response._meta,
+              ),
             };
           }
 
@@ -519,6 +548,23 @@ function resolveEffectiveTimeoutMs(input: AgentRunInput): number {
 
 function normalizeUsage(usage: unknown): ModelTokenUsage | undefined {
   return normalizeModelTokenUsage(usage);
+}
+
+function withReportedExecutionIdentity(
+  identity: ModelExecutionIdentity,
+  metadata: unknown,
+): ModelExecutionIdentity {
+  const record = isRecord(metadata) ? metadata : {};
+  return createModelExecutionIdentity({
+    providerRoute: identity.providerRoute,
+    requestedModel: identity.requestedModel,
+    reportedProvider: record.provider,
+    reportedModel: record.model,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveEffortConfigOption(

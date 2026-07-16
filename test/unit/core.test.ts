@@ -60,12 +60,16 @@ import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
 import { resolveReviewBudget } from "../../src/core/reviewBudget.js";
 import {
+  createModelExecutionIdentity,
+  MODEL_EXECUTION_IDENTITY_MAX_CHARS,
+} from "../../src/core/modelExecutionIdentity.js";
+import {
   applyVerificationVerdicts,
   markVerificationOverflow,
   parseVerificationVerdicts,
   selectVerificationTargets,
 } from "../../src/core/verification.js";
-import { buildChildEnv } from "../../src/utils/env.js";
+import { buildChildEnv, buildChildLaunchContext } from "../../src/utils/env.js";
 import type {
   AgentName,
   AgentRunResult,
@@ -1796,6 +1800,27 @@ describe("display sanitization", () => {
     expect(value).not.toContain("\u001b");
     expect(value).not.toContain("\n");
   });
+
+  test("sanitizes and bounds model execution identity metadata", () => {
+    const identity = createModelExecutionIdentity({
+      providerRoute: "openrouter",
+      requestedModel: `openai/${"x".repeat(300)}\nforged`,
+      reportedProvider: "https://provider.example.test/v1",
+      reportedModel: `api_key=sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`,
+    });
+
+    expect(identity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: expect.any(String),
+      reportingStatus: "requested_only",
+    });
+    expect(identity.requestedModel?.length).toBeLessThanOrEqual(
+      MODEL_EXECUTION_IDENTITY_MAX_CHARS,
+    );
+    expect(identity.requestedModel).not.toContain("\n");
+    expect(JSON.stringify(identity)).not.toContain("provider.example.test");
+    expect(JSON.stringify(identity)).not.toContain("sk-proj-");
+  });
 });
 
 describe("truncate", () => {
@@ -3097,6 +3122,80 @@ describe("child env", () => {
       model: "gpt-5.5",
     });
     expect(explicit.CODEX_CONFIG).toBe('{"model":"gpt-5.4"}');
+  });
+
+  test("resolves requested models from the final child environment", () => {
+    const claude = buildChildLaunchContext(
+      { PATH: "/bin", ANTHROPIC_MODEL: "claude-parent" },
+      ["ANTHROPIC_MODEL"],
+      { ANTHROPIC_MODEL: "claude-explicit" },
+      { agent: "claude", model: "claude-config" },
+    );
+    const codex = buildChildLaunchContext(
+      { PATH: "/bin" },
+      [],
+      { CODEX_CONFIG: '{"model":"gpt-explicit"}' },
+      { agent: "codex", model: "gpt-config" },
+    );
+
+    expect(claude.executionIdentity).toEqual({
+      providerRoute: "claude_default",
+      requestedModel: "claude-explicit",
+      reportingStatus: "requested_only",
+    });
+    expect(codex.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      requestedModel: "gpt-explicit",
+      reportingStatus: "requested_only",
+    });
+  });
+
+  test("keeps invalid default Codex config runnable with unknown identity", () => {
+    const context = buildChildLaunchContext(
+      { PATH: "/bin" },
+      [],
+      { CODEX_CONFIG: "not-json" },
+      { agent: "codex" },
+    );
+
+    expect(context.env.CODEX_CONFIG).toBe("not-json");
+    expect(context.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      reportingStatus: "unknown",
+    });
+  });
+
+  test("exposes only the effective OpenRouter route and requested model", () => {
+    const key = "openrouter-child-identity-key";
+    const context = buildChildLaunchContext(
+      { PATH: "/bin", OPENROUTER_API_KEY: key },
+      [],
+      {
+        CODEX_CONFIG: JSON.stringify({
+          model_providers: {
+            foreign: {
+              base_url: "https://foreign.example.test/v1",
+              env_key: "FOREIGN_API_KEY",
+            },
+          },
+        }),
+      },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    );
+    const serialized = JSON.stringify(context.executionIdentity);
+
+    expect(context.executionIdentity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    });
+    expect(serialized).not.toContain(key);
+    expect(serialized).not.toContain("foreign");
+    expect(serialized).not.toContain("base_url");
   });
 
   test("applies the fixed OpenRouter preset while preserving unrelated config", () => {

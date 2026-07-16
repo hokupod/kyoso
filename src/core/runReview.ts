@@ -31,6 +31,7 @@ import type {
   AgentRole,
   CisaSecureByDesignResult,
   CrossModelAnalysis,
+  JudgeProvider,
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
@@ -38,6 +39,7 @@ import type {
   NormalizedAgentOpinion,
   ReviewCoverage,
   ReviewLens,
+  ResolvedReviewBudget,
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
@@ -47,7 +49,7 @@ import {
   renderMarkdownResult,
 } from "../output/markdown.js";
 import {
-  resolveJudgeProvider,
+  resolveJudgeCallRoute,
   runJudge,
   type JudgeRunInput,
   type JudgeRunResult,
@@ -67,6 +69,7 @@ import { newTraceId } from "../utils/ids.js";
 import { createRequestFingerprint } from "./requestFingerprint.js";
 import { normalizeModelTokenUsage } from "./tokenUsage.js";
 import {
+  buildReviewModelCallPlan,
   ReviewBudgetTracker,
   resolveReviewBudget,
   type ModelCallReservation,
@@ -131,16 +134,22 @@ export async function runReview(
   } catch (error) {
     if (error instanceof KyosoRequestError) {
       const config = kyosoConfigSchema.parse(defaultConfig);
+      const reviewBudget = resolveReviewBudget(config.reviewBudget, undefined);
       const budgetTracker = new ReviewBudgetTracker(
-        config.reviewBudget,
+        reviewBudget,
         startedAtEpochMs,
+        configuredReviewModelCallPlan(
+          config,
+          reviewBudget,
+          options.env ?? process.env,
+        ),
       );
       const requestFingerprint = createRequestFingerprint({
         tool,
         request: requestForRecursionFingerprint(request),
         config,
         roles: resolveAgentRoles(config),
-        budget: config.reviewBudget,
+        budget: reviewBudget,
         entrypoint: options.entrypoint,
       });
       const trace = traceWriterFactory({
@@ -271,6 +280,12 @@ export async function runReview(
     const budgetTracker = new ReviewBudgetTracker(
       reviewBudget,
       startedAtEpochMs,
+      configuredReviewModelCallPlan(
+        loaded.config,
+        reviewBudget,
+        options.env ?? process.env,
+        request.options?.judgeProvider,
+      ),
     );
     assertTrustedWorkspaceRoot(
       request.workspace?.root,
@@ -1179,11 +1194,12 @@ async function runBudgetedJudge(
   },
 ): Promise<JudgeRunResult> {
   const configuredProvider = input.requestedProvider ?? input.config.provider;
-  const provider = resolveJudgeProvider(configuredProvider, input.env);
-  if (
-    input.config.mode === "deterministic_only" ||
-    provider === "deterministic_fallback"
-  ) {
+  const judgeRoute = resolveJudgeCallRoute(
+    input.config.mode,
+    configuredProvider,
+    input.env,
+  );
+  if (!judgeRoute.llmAvailable) {
     return runJudge(input);
   }
 
@@ -2091,11 +2107,40 @@ async function writeReviewBudgetPlanned(input: {
     requestFingerprint: input.requestFingerprint,
     maxModelCalls: snapshot.executionBudget.maxModelCalls,
     maxTotalWallTimeMs: snapshot.executionBudget.wallTime.limitMs,
+    ...(snapshot.executionBudget.effectiveWarnAgentOutputBytes !== undefined
+      ? {
+          effectiveWarnAgentOutputBytes:
+            snapshot.executionBudget.effectiveWarnAgentOutputBytes,
+        }
+      : {}),
     maxAgentOutputBytes: snapshot.executionBudget.maxAgentOutputBytes,
     maxFindingsPerAgent: snapshot.executionBudget.maxFindingsPerAgent,
     skipOptionalPhasesWhenTokenUsageUnknown:
       snapshot.executionBudget.skipOptionalPhasesWhenTokenUsageUnknown,
+    ...snapshot.executionBudget.modelCallPlan,
     timestamp: new Date().toISOString(),
+  });
+}
+
+function configuredReviewModelCallPlan(
+  config: KyosoConfig,
+  budget: ResolvedReviewBudget,
+  env: NodeJS.ProcessEnv,
+  requestedJudgeProvider?: JudgeProvider,
+) {
+  const judgeRoute = resolveJudgeCallRoute(
+    config.judge.mode,
+    requestedJudgeProvider ?? config.judge.provider,
+    env,
+  );
+  return buildReviewModelCallPlan({
+    maxModelCalls: budget.maxModelCalls,
+    requiredPrimaryCalls: Object.values(config.agents).filter(
+      (agent) => agent.enabled,
+    ).length,
+    verificationEnabled: config.verification.enabled,
+    verificationMaxFindings: config.verification.maxFindings,
+    llmJudgeAvailable: judgeRoute.llmAvailable,
   });
 }
 

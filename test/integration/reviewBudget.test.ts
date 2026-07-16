@@ -50,6 +50,24 @@ describe("review execution budget", () => {
       consumed: 0,
       skipped: 2,
     });
+    expect(result.executionBudget).toMatchObject({
+      effectiveWarnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 1_048_576,
+      modelCallPlan: {
+        requiredPrimaryCalls: 2,
+        potentialVerifierCalls: 0,
+        potentialJudgeCalls: 0,
+        potentialTotalCalls: 2,
+        ceilingEffects: [
+          {
+            kind: "primary",
+            action: "skip",
+            calls: 2,
+            reason: "model_call_budget",
+          },
+        ],
+      },
+    });
     expect(events.map((event) => event.type)).toContain(
       "review_budget_planned",
     );
@@ -59,6 +77,16 @@ describe("review execution budget", () => {
     expect(events.map((event) => event.type)).toContain(
       "review_budget_completed",
     );
+    expect(
+      events.find((event) => event.type === "review_budget_planned"),
+    ).toMatchObject({
+      effectiveWarnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 1_048_576,
+      requiredPrimaryCalls: 2,
+      potentialVerifierCalls: 0,
+      potentialJudgeCalls: 0,
+      potentialTotalCalls: 2,
+    });
     const response = formatMcpResponse(result);
     const json = JSON.parse(response.content[1]?.text ?? "{}") as {
       completion?: unknown;
@@ -71,6 +99,26 @@ describe("review execution budget", () => {
     expect(response.content[0]?.text).toContain("## Execution Budget");
     expect(response.content[0]?.text).toContain(
       "review coverage is incomplete",
+    );
+  });
+
+  test("omits the soft warning when a request tightens the hard limit below it", async () => {
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review plan",
+        options: { reviewBudget: { maxAgentOutputBytes: 524_288 } },
+      },
+      {
+        cwd: await tempCwd(),
+        config: baseConfig(),
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    expect(result.executionBudget.maxAgentOutputBytes).toBe(524_288);
+    expect(result.executionBudget).not.toHaveProperty(
+      "effectiveWarnAgentOutputBytes",
     );
   });
 
@@ -175,9 +223,14 @@ describe("review execution budget", () => {
 
   test("skips optional verification instead of treating missing usage as zero", async () => {
     const manager = new ScriptedBudgetManager(false);
+    const base = baseConfig();
     const config: KyosoConfig = {
-      ...baseConfig(),
-      verification: { ...baseConfig().verification, enabled: true },
+      ...base,
+      verification: { ...base.verification, enabled: true },
+      reviewBudget: {
+        ...base.reviewBudget,
+        skipOptionalPhasesWhenTokenUsageUnknown: true,
+      },
     };
 
     const result = await runReview(
@@ -306,6 +359,76 @@ describe("review execution budget", () => {
         status: "skipped",
         reason: "model_call_budget",
       });
+      expect(result.executionBudget.modelCallPlan).toEqual({
+        requiredPrimaryCalls: 2,
+        potentialVerifierCalls: 0,
+        potentialJudgeCalls: 1,
+        potentialTotalCalls: 3,
+        ceilingEffects: [
+          {
+            kind: "judge",
+            action: "deterministic_fallback",
+            calls: 1,
+            reason: "model_call_budget",
+          },
+        ],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("does not reserve an explicit LLM judge without its credential", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("credentialless judge should not be called");
+    }) as unknown as typeof fetch;
+    try {
+      const base = baseConfig();
+      const events: Record<string, unknown>[] = [];
+      const result = await runReview(
+        "plan_review",
+        { goal: "review plan" },
+        {
+          cwd: await tempCwd(),
+          config: {
+            ...base,
+            judge: {
+              ...base.judge,
+              mode: "deterministic_plus_llm",
+              provider: "openai",
+            },
+          },
+          agentManager: new FakeAgentManager(),
+          env: {},
+          traceWriterFactory: () => memoryTrace(events),
+        },
+      );
+
+      expect(fetchCalls).toBe(0);
+      expect(result.executionBudget.modelCallPlan).toMatchObject({
+        potentialJudgeCalls: 0,
+        potentialTotalCalls: 2,
+      });
+      expect(result.executionBudget.modelCalls.byKind.judge).toEqual({
+        planned: 0,
+        consumed: 0,
+        skipped: 0,
+      });
+      expect(
+        result.audit.modelCalls.some((call) => call.kind === "judge"),
+      ).toBe(false);
+      expect(
+        events.some(
+          (event) =>
+            event.kind === "judge" &&
+            ["model_call_reserved", "model_call_completed"].includes(
+              String(event.type),
+            ),
+        ),
+      ).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

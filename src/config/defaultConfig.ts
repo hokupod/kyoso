@@ -1,4 +1,5 @@
 import type { KyosoConfigInput } from "./schema.js";
+import { DEFAULT_WARN_AGENT_OUTPUT_BYTES } from "../core/constants.js";
 
 export const defaultConfig: KyosoConfigInput = {
   entrypoints: { mcp: true, cli: true },
@@ -128,9 +129,10 @@ export const defaultConfig: KyosoConfigInput = {
   reviewBudget: {
     maxModelCalls: 4,
     maxTotalWallTimeMs: 480_000,
-    maxAgentOutputBytes: 65_536,
+    warnAgentOutputBytes: DEFAULT_WARN_AGENT_OUTPUT_BYTES,
+    maxAgentOutputBytes: 1_048_576,
     maxFindingsPerAgent: 10,
-    skipOptionalPhasesWhenTokenUsageUnknown: true,
+    skipOptionalPhasesWhenTokenUsageUnknown: false,
   },
   audit: {
     enabled: true,

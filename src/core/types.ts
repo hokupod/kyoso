@@ -54,12 +54,19 @@ export type EvidenceRef = {
 export type ReviewBudget = {
   maxModelCalls: number;
   maxTotalWallTimeMs: number;
+  warnAgentOutputBytes: number;
   maxAgentOutputBytes: number;
   maxFindingsPerAgent: number;
   skipOptionalPhasesWhenTokenUsageUnknown: boolean;
 };
 
-export type ReviewBudgetRequest = Partial<ReviewBudget>;
+export type ReviewBudgetRequest = Partial<
+  Omit<ReviewBudget, "warnAgentOutputBytes">
+>;
+
+export type ResolvedReviewBudget = ReviewBudget & {
+  effectiveWarnAgentOutputBytes?: number;
+};
 
 export type ReviewCompletionReason =
   | "model_call_budget"
@@ -76,6 +83,19 @@ export type ReviewCompletion = {
 };
 
 export type ModelCallKind = "primary" | "verifier" | "judge";
+
+export type ReviewModelCallPlan = {
+  requiredPrimaryCalls: number;
+  potentialVerifierCalls: number;
+  potentialJudgeCalls: number;
+  potentialTotalCalls: number;
+  ceilingEffects: Array<{
+    kind: ModelCallKind;
+    action: "skip" | "deterministic_fallback";
+    calls: number;
+    reason: "model_call_budget";
+  }>;
+};
 
 export type ModelTokenUsage = {
   totalTokens?: number;
@@ -268,6 +288,7 @@ export type AgentRunResult = {
 
 export type ReviewExecutionBudget = {
   maxModelCalls: number;
+  modelCallPlan: ReviewModelCallPlan;
   modelCalls: {
     planned: number;
     consumed: number;
@@ -282,6 +303,7 @@ export type ReviewExecutionBudget = {
     consumedMs: number;
     remainingMs: number;
   };
+  effectiveWarnAgentOutputBytes?: number;
   maxAgentOutputBytes: number;
   maxFindingsPerAgent: number;
   skipOptionalPhasesWhenTokenUsageUnknown: boolean;

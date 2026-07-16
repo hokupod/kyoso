@@ -7,16 +7,19 @@ import {
   REVIEW_CONTRACT_VERSION,
 } from "../../src/core/requestFingerprint.js";
 import {
+  buildReviewModelCallPlan,
   resolveReviewBudget,
   ReviewBudgetTracker,
 } from "../../src/core/reviewBudget.js";
+import { kyosoReviewRequestSchema } from "../../src/mcp/schemas.js";
 import { normalizeModelTokenUsage } from "../../src/core/tokenUsage.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 
 const budget = {
   maxModelCalls: 4,
   maxTotalWallTimeMs: 480_000,
-  maxAgentOutputBytes: 65_536,
+  warnAgentOutputBytes: 524_288,
+  maxAgentOutputBytes: 1_048_576,
   maxFindingsPerAgent: 10,
   skipOptionalPhasesWhenTokenUsageUnknown: true,
 };
@@ -45,6 +48,83 @@ describe("review budget", () => {
         skipOptionalPhasesWhenTokenUsageUnknown: false,
       }),
     ).toThrow("cannot relax the user-global ceiling");
+    expect(() =>
+      resolveReviewBudget(budget, {
+        warnAgentOutputBytes: 1,
+      } as unknown as Parameters<typeof resolveReviewBudget>[1]),
+    ).toThrow("is not supported");
+  });
+
+  test("resolves the soft warning only when it is below the effective hard limit", () => {
+    expect(resolveReviewBudget(budget, undefined)).toEqual({
+      ...budget,
+      effectiveWarnAgentOutputBytes: 524_288,
+    });
+    expect(
+      resolveReviewBudget(budget, { maxAgentOutputBytes: 524_289 }),
+    ).toMatchObject({ effectiveWarnAgentOutputBytes: 524_288 });
+    expect(
+      resolveReviewBudget(budget, { maxAgentOutputBytes: 524_288 }),
+    ).not.toHaveProperty("effectiveWarnAgentOutputBytes");
+    expect(
+      resolveReviewBudget(budget, { maxAgentOutputBytes: 65_536 }),
+    ).not.toHaveProperty("effectiveWarnAgentOutputBytes");
+  });
+
+  test("keeps the soft warning out of the MCP request contract", () => {
+    expect(
+      kyosoReviewRequestSchema.safeParse({
+        goal: "review",
+        options: { reviewBudget: { warnAgentOutputBytes: 1 } },
+      }).success,
+    ).toBe(false);
+  });
+
+  test("plans model calls in primary, verifier, then judge priority order", () => {
+    expect(
+      buildReviewModelCallPlan({
+        maxModelCalls: 4,
+        requiredPrimaryCalls: 2,
+        verificationEnabled: true,
+        verificationMaxFindings: 5,
+        llmJudgeAvailable: true,
+      }),
+    ).toEqual({
+      requiredPrimaryCalls: 2,
+      potentialVerifierCalls: 2,
+      potentialJudgeCalls: 1,
+      potentialTotalCalls: 5,
+      ceilingEffects: [
+        {
+          kind: "judge",
+          action: "deterministic_fallback",
+          calls: 1,
+          reason: "model_call_budget",
+        },
+      ],
+    });
+    expect(
+      buildReviewModelCallPlan({
+        maxModelCalls: 1,
+        requiredPrimaryCalls: 2,
+        verificationEnabled: true,
+        verificationMaxFindings: 1,
+        llmJudgeAvailable: false,
+      }).ceilingEffects,
+    ).toEqual([
+      {
+        kind: "primary",
+        action: "skip",
+        calls: 2,
+        reason: "model_call_budget",
+      },
+      {
+        kind: "verifier",
+        action: "skip",
+        calls: 1,
+        reason: "model_call_budget",
+      },
+    ]);
   });
 
   test("reserves primary calls atomically and records unknown usage honestly", () => {

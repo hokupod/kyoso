@@ -46,7 +46,10 @@ import {
 import { createSnapshot } from "../../src/workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
 import { parseJudgeOutput } from "../../src/judge/prompt.js";
-import { resolveJudgeProvider } from "../../src/judge/provider.js";
+import {
+  resolveJudgeCallRoute,
+  resolveJudgeProvider,
+} from "../../src/judge/provider.js";
 import {
   sanitizeTextForDisplay,
   sanitizeTextForRawOutput,
@@ -54,6 +57,7 @@ import {
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
+import { resolveReviewBudget } from "../../src/core/reviewBudget.js";
 import {
   applyVerificationVerdicts,
   markVerificationOverflow,
@@ -92,9 +96,10 @@ describe("config", () => {
     expect(parsed.reviewBudget).toEqual({
       maxModelCalls: 4,
       maxTotalWallTimeMs: 480_000,
-      maxAgentOutputBytes: 65_536,
+      warnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 1_048_576,
       maxFindingsPerAgent: 10,
-      skipOptionalPhasesWhenTokenUsageUnknown: true,
+      skipOptionalPhasesWhenTokenUsageUnknown: false,
     });
     expect(parsed.judge.mode).toBe("deterministic_only");
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
@@ -107,6 +112,49 @@ describe("config", () => {
         reviewBudget: { ...defaultConfig.reviewBudget, maxModelCalls: 1 },
       }),
     ).toThrow("enabled primary reviewers");
+  });
+
+  test("requires an explicit output warning threshold below the hard breaker", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-output-warning-invalid-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[reviewBudget]
+warnAgentOutputBytes = 1048576
+maxAgentOutputBytes = 1048576
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("must be less than reviewBudget.maxAgentOutputBytes");
+  });
+
+  test("preserves a legacy global hard limit below the default warning threshold", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-output-warning-legacy-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[reviewBudget]
+maxAgentOutputBytes = 65536
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+    const resolved = resolveReviewBudget(loaded.config.reviewBudget, undefined);
+
+    expect(loaded.config.reviewBudget).toMatchObject({
+      warnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 65_536,
+    });
+    expect(resolved).not.toHaveProperty("effectiveWarnAgentOutputBytes");
   });
 
   test("accepts optional per-agent model pins", () => {
@@ -922,12 +970,13 @@ allowDemotion = true
 
 [reviewBudget]
 maxModelCalls = 99
+warnAgentOutputBytes = 123
 `,
       "utf8",
     );
 
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
-      /agents\.codex\.command.*network\.defaultMode.*reviewBudget\.maxModelCalls.*verification\.allowDemotion/s,
+      /agents\.codex\.command.*network\.defaultMode.*reviewBudget\.maxModelCalls.*reviewBudget\.warnAgentOutputBytes.*verification\.allowDemotion/s,
     );
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
       join(home, ".config", "kyoso", "config.toml"),
@@ -1279,6 +1328,22 @@ describe("judge", () => {
     expect(resolveJudgeProvider("none", { OPENAI_API_KEY: "openai" })).toBe(
       "deterministic_fallback",
     );
+  });
+
+  test("requires a credential before planning an LLM judge call", () => {
+    expect(
+      resolveJudgeCallRoute("deterministic_plus_llm", "openai", {}),
+    ).toEqual({ provider: "openai", llmAvailable: false });
+    expect(
+      resolveJudgeCallRoute("deterministic_plus_llm", "openai", {
+        CODEX_API_KEY: "codex",
+      }),
+    ).toEqual({ provider: "openai", llmAvailable: true });
+    expect(
+      resolveJudgeCallRoute("deterministic_only", "anthropic", {
+        ANTHROPIC_API_KEY: "anthropic",
+      }),
+    ).toEqual({ provider: "anthropic", llmAvailable: false });
   });
 
   test("parses only advisory judge fields", () => {

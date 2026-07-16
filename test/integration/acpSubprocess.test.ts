@@ -145,22 +145,34 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     );
 
     const exact = await manager.runAgent(
-      agentInput(cwd, { maxOutputBytes: 4 }),
+      agentInput(cwd, { warnOutputBytes: 3, maxOutputBytes: 4 }),
     );
     expect(exact).toMatchObject({
       status: "completed",
       rawText: "あb",
+      messageBytes: 4,
+      thoughtBytes: 0,
       outputBytes: 4,
+      outputWarningTriggered: true,
       usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
     });
 
-    const over = await manager.runAgent(agentInput(cwd, { maxOutputBytes: 3 }));
+    const over = await manager.runAgent(
+      agentInput(cwd, { warnOutputBytes: 3, maxOutputBytes: 3 }),
+    );
     expect(over).toMatchObject({
       status: "failed",
       rawText: "あ",
+      messageBytes: 4,
+      thoughtBytes: 0,
       outputBytes: 4,
+      outputWarningTriggered: true,
       error: { code: "AGENT_OUTPUT_LIMIT" },
     });
+    expect(over.error?.message).toContain("message: 4, thought: 0, total: 4");
+    expect(over.error?.message).toContain(
+      "user-global reviewBudget.maxAgentOutputBytes",
+    );
     const pid = Number(await readFile(pidPath, "utf8"));
     await Bun.sleep(1_000);
     expect(isProcessAlive(pid)).toBe(false);
@@ -178,16 +190,117 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(exact).toMatchObject({
       status: "completed",
       rawText: "b",
+      messageBytes: 1,
+      thoughtBytes: 3,
       outputBytes: 4,
+      outputWarningTriggered: false,
     });
 
     const over = await manager.runAgent(agentInput(cwd, { maxOutputBytes: 3 }));
     expect(over).toMatchObject({
       status: "failed",
       rawText: "",
+      messageBytes: 1,
+      thoughtBytes: 3,
       outputBytes: 4,
+      outputWarningTriggered: false,
       error: { code: "AGENT_OUTPUT_LIMIT" },
     });
+  });
+
+  test("salvages only complete strict JSON received before the hard breaker", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("valid_then_thought"),
+    );
+    const completed = await manager.runAgent(agentInput(cwd));
+    const messageBytes = completed.messageBytes;
+    expect(messageBytes).toBeGreaterThan(0);
+
+    const limited = await manager.runAgent(
+      agentInput(cwd, {
+        warnOutputBytes: messageBytes,
+        maxOutputBytes: messageBytes,
+      }),
+    );
+
+    expect(limited).toMatchObject({
+      status: "failed",
+      error: { code: "AGENT_OUTPUT_LIMIT" },
+      salvaged: true,
+      messageBytes,
+      thoughtBytes: 8,
+      outputBytes: messageBytes! + 8,
+      outputWarningTriggered: true,
+      normalized: {
+        summary: "salvaged output",
+        testsToAdd: [
+          "verify a complete primary finding remains after thought output crosses the hard limit",
+        ],
+        residualRisks: ["salvaged risk"],
+        openQuestions: ["salvaged question"],
+      },
+    });
+    expect(limited.normalized?.findings[0]?.title).toBe(
+      "Salvaged complete finding",
+    );
+    expect(limited.outputBytes).toBe(
+      (limited.messageBytes ?? 0) + (limited.thoughtBytes ?? 0),
+    );
+  });
+
+  test("salvages an in-budget JSON prefix from an oversized message chunk", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("valid_with_overflow_suffix"),
+    );
+    const completed = await manager.runAgent(agentInput(cwd));
+    const suffix = "あoverflow";
+    expect(completed.rawText?.endsWith(suffix)).toBe(true);
+    const jsonText = completed.rawText!.slice(0, -suffix.length);
+    const maxOutputBytes = Buffer.byteLength(jsonText, "utf8") + 1;
+
+    const limited = await manager.runAgent(agentInput(cwd, { maxOutputBytes }));
+
+    expect(limited).toMatchObject({
+      status: "failed",
+      error: { code: "AGENT_OUTPUT_LIMIT" },
+      salvaged: true,
+      rawText: jsonText,
+      messageBytes: completed.messageBytes,
+      thoughtBytes: 0,
+      outputBytes: completed.outputBytes,
+      normalized: { summary: "salvaged output" },
+    });
+    expect(limited.normalized?.findings[0]?.title).toBe(
+      "Salvaged complete finding",
+    );
+  });
+
+  test("does not salvage partial JSON or a complete object missing required structure", async () => {
+    const cwd = await fakeWorkspace();
+    for (const mode of [
+      "partial_then_thought",
+      "invalid_then_thought",
+    ] as const) {
+      const manager = new SubprocessAcpAgentManager(fakeAcpConfig(mode));
+      const completed = await manager.runAgent(agentInput(cwd));
+      const messageBytes = completed.messageBytes;
+      expect(messageBytes).toBeGreaterThan(0);
+
+      const limited = await manager.runAgent(
+        agentInput(cwd, { maxOutputBytes: messageBytes }),
+      );
+      expect(limited).toMatchObject({
+        status: "failed",
+        error: { code: "AGENT_OUTPUT_LIMIT" },
+      });
+      expect(limited.salvaged).toBeUndefined();
+      expect(limited.normalized).toBeUndefined();
+      expect(limited.outputBytes).toBe(
+        (limited.messageBytes ?? 0) + (limited.thoughtBytes ?? 0),
+      );
+    }
   });
 
   test("classifies immediate ACP child crashes from stderr", async () => {
@@ -317,7 +430,16 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
 });
 
 type FakeAcpMode =
-  "happy" | "garbage" | "crash" | "hang" | "chunked" | "thought_chunked";
+  | "happy"
+  | "garbage"
+  | "crash"
+  | "hang"
+  | "chunked"
+  | "thought_chunked"
+  | "valid_then_thought"
+  | "invalid_then_thought"
+  | "partial_then_thought"
+  | "valid_with_overflow_suffix";
 
 function fakeAcpConfig(
   mode: FakeAcpMode,

@@ -22,7 +22,13 @@ type Reservation = {
   agent?: AgentName;
   status: ReservationStatus;
   reason?: string;
+  messageBytes?: number;
+  thoughtBytes?: number;
   outputBytes?: number;
+  outputWarningTriggered?: boolean;
+  salvaged?: boolean;
+  reportedFindings?: number;
+  findingsTargetExceeded?: boolean;
   usage?: ModelTokenUsage;
   stopReason?: string;
 };
@@ -288,7 +294,13 @@ export class ReviewBudgetTracker {
   complete(
     reservation: ModelCallReservation,
     values: {
+      messageBytes?: number;
+      thoughtBytes?: number;
       outputBytes?: number;
+      outputWarningTriggered?: boolean;
+      salvaged?: boolean;
+      reportedFindings?: number;
+      findingsTargetExceeded?: boolean;
       usage?: ModelTokenUsage;
       stopReason?: string;
     } = {},
@@ -302,7 +314,13 @@ export class ReviewBudgetTracker {
       return;
     }
     current.status = "completed";
+    current.messageBytes = values.messageBytes;
+    current.thoughtBytes = values.thoughtBytes;
     current.outputBytes = values.outputBytes;
+    current.outputWarningTriggered = values.outputWarningTriggered;
+    current.salvaged = values.salvaged;
+    current.reportedFindings = values.reportedFindings;
+    current.findingsTargetExceeded = values.findingsTargetExceeded;
     current.usage = normalizeModelTokenUsage(values.usage);
     current.stopReason = values.stopReason;
   }
@@ -452,8 +470,26 @@ export class ReviewBudgetTracker {
         ...(reservation.agent ? { agent: reservation.agent } : {}),
         status: reservation.status === "completed" ? "completed" : "skipped",
         ...(reservation.reason ? { reason: reservation.reason } : {}),
+        ...(reservation.messageBytes !== undefined
+          ? { messageBytes: reservation.messageBytes }
+          : {}),
+        ...(reservation.thoughtBytes !== undefined
+          ? { thoughtBytes: reservation.thoughtBytes }
+          : {}),
         ...(reservation.outputBytes !== undefined
           ? { outputBytes: reservation.outputBytes }
+          : {}),
+        ...(reservation.outputWarningTriggered !== undefined
+          ? { outputWarningTriggered: reservation.outputWarningTriggered }
+          : {}),
+        ...(reservation.salvaged !== undefined
+          ? { salvaged: reservation.salvaged }
+          : {}),
+        ...(reservation.reportedFindings !== undefined
+          ? { reportedFindings: reservation.reportedFindings }
+          : {}),
+        ...(reservation.findingsTargetExceeded !== undefined
+          ? { findingsTargetExceeded: reservation.findingsTargetExceeded }
           : {}),
         ...(reservation.usage ? { usage: reservation.usage } : {}),
         ...(reservation.stopReason

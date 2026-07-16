@@ -1098,6 +1098,10 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
+      reviewBudget: {
+        ...baseConfig.reviewBudget,
+        maxFindingsPerAgent: 1,
+      },
       verification: {
         ...baseConfig.verification,
         enabled: true,
@@ -1122,6 +1126,15 @@ model = "openai/o4-mini"
     expect(
       result.findings.map((finding) => finding.verification?.status),
     ).toEqual(["confirmed", "not_verified"]);
+    expect(result.findings).toHaveLength(2);
+    expect(result.completion).toMatchObject({
+      status: "incomplete",
+      reasons: expect.arrayContaining(["coverage_incomplete"]),
+    });
+    expect(result.decision).toBe("block");
+    expect(result.audit.warnings).toContain(
+      "Agent codex reported 2 findings, above the soft target of 1; all findings were retained.",
+    );
   });
 
   test("verification allowDemotion true remains annotate-only in phase 1", async () => {
@@ -2148,6 +2161,91 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("retains strictly salvaged primary output while keeping coverage incomplete", async () => {
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const base = singleAgentConfig("codex");
+    const probeConfig: KyosoConfig = {
+      ...base,
+      agents: {
+        ...base.agents,
+        codex: {
+          ...base.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          env: { FAKE_ACP_MODE: "valid_then_thought" },
+        },
+      },
+    };
+    const manager = new SubprocessAcpAgentManager(probeConfig);
+    const probe = await manager.runAgent({
+      traceId: "tr_salvage_probe",
+      agent: "codex",
+      role: "combined_reviewer",
+      tool: "plan_review",
+      prompt: "probe",
+      workspaceDir: await tempCwd(),
+      timeoutMs: 5_000,
+      networkMode: "model_only",
+    });
+    const messageBytes = probe.messageBytes;
+    if (messageBytes === undefined) {
+      throw new Error("fake ACP probe did not report message bytes");
+    }
+    const config: KyosoConfig = {
+      ...probeConfig,
+      reviewBudget: {
+        ...probeConfig.reviewBudget,
+        warnAgentOutputBytes: Math.max(1, messageBytes - 1),
+        maxAgentOutputBytes: messageBytes,
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result).toMatchObject({
+      decision: "block",
+      completion: {
+        status: "incomplete",
+        reasons: expect.arrayContaining([
+          "agent_output_limit",
+          "coverage_incomplete",
+        ]),
+      },
+    });
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({ title: "Salvaged complete finding" }),
+    );
+    expect(result.testsToAdd).toContain(
+      "verify a complete primary finding remains after thought output crosses the hard limit",
+    );
+    expect(result.residualRisks).toContain("salvaged risk");
+    expect(result.openQuestions).toContain("salvaged question");
+    expect(result.agentOpinions[0]).toMatchObject({
+      agent: "codex",
+      status: "failed",
+      errorCode: "AGENT_OUTPUT_LIMIT",
+      salvaged: true,
+      summary: "salvaged output",
+    });
+    expect(result.coverage.completedPerspectives).toEqual([]);
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      kind: "primary",
+      agent: "codex",
+      salvaged: true,
+      messageBytes,
+      thoughtBytes: 8,
+      outputBytes: messageBytes + 8,
+    });
   });
 
   test("marks non-end ACP stop reasons as incomplete", async () => {

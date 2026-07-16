@@ -20,7 +20,7 @@ import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import { ChildEnvPreflightError, buildChildEnv } from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
-import { normalizeAgentOutput } from "./normalize.js";
+import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
   constructor(
@@ -186,47 +186,66 @@ async function runSubprocessAgent(
       abortController,
       resolveEffortConfigOption(agent, agentConfig.effort),
     )
-      .then(({ rawText, warnings, usage, outputBytes, stopReason }) => {
-        stdout = rawText;
-        const completed = stopReason === "end_turn";
-        resolveOnce({
-          agent,
-          role: input.role,
-          status: completed ? "completed" : "failed",
+      .then(
+        ({
           rawText,
-          normalized: normalizeAgentOutput(agent, input.role, rawText),
-          startedAt,
-          completedAt: new Date().toISOString(),
+          warnings,
+          usage,
+          messageBytes,
+          thoughtBytes,
           outputBytes,
+          outputWarningTriggered,
           stopReason,
-          ...(usage ? { usage } : {}),
-          ...(warnings.length > 0 ? { warnings } : {}),
-          ...(completed
-            ? {}
-            : {
-                error: {
-                  code: "AGENT_STOPPED_EARLY",
-                  message: `Agent stopped before completing the review: ${stopReason}.`,
-                },
-              }),
-        });
-      })
+        }) => {
+          stdout = rawText;
+          const completed = stopReason === "end_turn";
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: completed ? "completed" : "failed",
+            rawText,
+            normalized: normalizeAgentOutput(agent, input.role, rawText),
+            startedAt,
+            completedAt: new Date().toISOString(),
+            messageBytes,
+            thoughtBytes,
+            outputBytes,
+            outputWarningTriggered,
+            stopReason,
+            ...(usage ? { usage } : {}),
+            ...(warnings.length > 0 ? { warnings } : {}),
+            ...(completed
+              ? {}
+              : {
+                  error: {
+                    code: "AGENT_STOPPED_EARLY",
+                    message: `Agent stopped before completing the review: ${stopReason}.`,
+                  },
+                }),
+          });
+        },
+      )
       .catch((error) => {
         const outputLimitError = findOutputLimitError(error, abortController);
         if (outputLimitError) {
           stdout = outputLimitError.rawText;
+          const normalized = parseAgentOutputStrict(agent, input.role, stdout);
           resolveOnce({
             agent,
             role: input.role,
             status: "failed",
             rawText: stdout,
+            ...(normalized ? { normalized, salvaged: true } : {}),
+            messageBytes: outputLimitError.messageBytes,
+            thoughtBytes: outputLimitError.thoughtBytes,
             outputBytes: outputLimitError.outputBytes,
+            outputWarningTriggered: outputLimitError.outputWarningTriggered,
             stopReason: "cancelled",
             startedAt,
             completedAt: new Date().toISOString(),
             error: {
               code: "AGENT_OUTPUT_LIMIT",
-              message: `Agent output exceeded ${outputLimitError.maxOutputBytes} bytes and was cancelled.`,
+              message: `Agent output exceeded the ${outputLimitError.maxOutputBytes}-byte hard limit (message: ${outputLimitError.messageBytes}, thought: ${outputLimitError.thoughtBytes}, total: ${outputLimitError.outputBytes}) and was cancelled. Adjust user-global reviewBudget.maxAgentOutputBytes to change this ceiling.`,
             },
           });
           return;
@@ -274,7 +293,10 @@ async function runAcpClientWorkflow(
   rawText: string;
   warnings: string[];
   usage?: ModelTokenUsage;
+  messageBytes: number;
+  thoughtBytes: number;
   outputBytes: number;
+  outputWarningTriggered: boolean;
   stopReason: string;
 }> {
   if (!child.stdin || !child.stdout) {
@@ -375,7 +397,10 @@ async function runAcpClientWorkflow(
         });
         void promptResponse.catch(() => undefined);
         let rawText = "";
+        let messageBytes = 0;
+        let thoughtBytes = 0;
         let outputBytes = 0;
+        let outputWarningTriggered = false;
         for (;;) {
           const message = await session.nextUpdate();
           if (message.kind === "stop") {
@@ -384,7 +409,10 @@ async function runAcpClientWorkflow(
               rawText,
               warnings,
               ...(usage ? { usage } : {}),
+              messageBytes,
+              thoughtBytes,
               outputBytes,
+              outputWarningTriggered,
               stopReason: message.stopReason,
             };
           }
@@ -398,38 +426,74 @@ async function runAcpClientWorkflow(
             continue;
           }
           const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
-          const nextOutputBytes = outputBytes + chunkBytes;
+          const isMessage = update.sessionUpdate === "agent_message_chunk";
+          const nextMessageBytes = messageBytes + (isMessage ? chunkBytes : 0);
+          const nextThoughtBytes = thoughtBytes + (isMessage ? 0 : chunkBytes);
+          const nextOutputBytes = nextMessageBytes + nextThoughtBytes;
+          const nextOutputWarningTriggered: boolean =
+            outputWarningTriggered ||
+            (input.warnOutputBytes !== undefined &&
+              nextOutputBytes >= input.warnOutputBytes);
           if (
             input.maxOutputBytes !== undefined &&
             nextOutputBytes > input.maxOutputBytes
           ) {
+            const retainedRawText = isMessage
+              ? `${rawText}${utf8Prefix(
+                  update.content.text,
+                  input.maxOutputBytes - outputBytes,
+                )}`
+              : rawText;
             await ctx
               .notify(methods.agent.session.cancel, {
                 sessionId: session.sessionId,
               })
               .catch(() => undefined);
             const error = new AgentOutputLimitError(
-              rawText,
+              retainedRawText,
+              nextMessageBytes,
+              nextThoughtBytes,
               nextOutputBytes,
               input.maxOutputBytes,
+              nextOutputWarningTriggered,
             );
             abortController.abort(error);
             throw error;
           }
-          if (update.sessionUpdate === "agent_message_chunk") {
+          if (isMessage) {
             rawText += update.content.text;
           }
+          messageBytes = nextMessageBytes;
+          thoughtBytes = nextThoughtBytes;
           outputBytes = nextOutputBytes;
+          outputWarningTriggered = nextOutputWarningTriggered;
         }
       });
   });
 }
 
+function utf8Prefix(input: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(input);
+  const budget = Math.max(0, Math.min(maxBytes, encoded.byteLength));
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let end = budget; end > 0; end -= 1) {
+    try {
+      return decoder.decode(encoded.subarray(0, end));
+    } catch {
+      // Retry after backing off to a UTF-8 character boundary.
+    }
+  }
+  return "";
+}
+
 class AgentOutputLimitError extends Error {
   constructor(
     readonly rawText: string,
+    readonly messageBytes: number,
+    readonly thoughtBytes: number,
     readonly outputBytes: number,
     readonly maxOutputBytes: number,
+    readonly outputWarningTriggered: boolean,
   ) {
     super(`Agent output exceeded ${maxOutputBytes} bytes.`);
     this.name = "AgentOutputLimitError";

@@ -16,7 +16,7 @@ export function renderMarkdownResult(
     `**Mode:** ${tool}`,
     `**Completion:** ${formatCompletion(result)}`,
     `**Request fingerprint:** ${shortFingerprint(result.requestFingerprint)}`,
-    `**Agents:** ${result.agentOpinions.map((opinion) => `${title(opinion.agent)} ${opinion.status}`).join(", ")}`,
+    `**Agents:** ${result.agentOpinions.map((opinion) => `${title(opinion.agent)} ${opinion.status}${opinion.salvaged ? " (salvaged)" : ""}`).join(", ")}`,
     `**Review mode:** ${formatReviewMode(result)}`,
     ...(result.verificationMode
       ? [
@@ -151,7 +151,7 @@ export function renderMarkdownResult(
     lines.push(
       `### ${title(opinion.agent)}`,
       "",
-      `${opinion.summary} (${opinion.status})`,
+      `${opinion.summary} (${opinion.status}${opinion.salvaged ? ", salvaged" : ""})`,
       "",
     );
   }
@@ -216,20 +216,43 @@ function formatExecutionBudget(
 ): string[] {
   const budget = result.executionBudget;
   const agentOutputs = Object.entries(budget.agentOutputBytes);
+  const byteBreakdowns = new Map<
+    string,
+    { messageBytes: number; thoughtBytes: number }
+  >();
+  for (const call of result.audit.modelCalls) {
+    if (call.status !== "completed" || !call.agent) continue;
+    const current = byteBreakdowns.get(call.agent) ?? {
+      messageBytes: 0,
+      thoughtBytes: 0,
+    };
+    current.messageBytes += call.messageBytes ?? 0;
+    current.thoughtBytes += call.thoughtBytes ?? 0;
+    byteBreakdowns.set(call.agent, current);
+  }
   const outputLines =
     agentOutputs.length > 0
-      ? agentOutputs.map(
-          ([agent, bytes]) => `- ${title(agent)}: ${bytes} bytes`,
-        )
+      ? agentOutputs.map(([agent, bytes]) => {
+          const breakdown = byteBreakdowns.get(agent);
+          return `- ${title(agent)}: ${bytes} bytes${breakdown ? ` (message: ${breakdown.messageBytes}, thought: ${breakdown.thoughtBytes})` : ""}`;
+        })
       : ["- None reported."];
   const totalTokens = budget.tokenUsage.totals.totalTokens;
+  const plan = budget.modelCallPlan;
+  const outputLimits =
+    budget.effectiveWarnAgentOutputBytes === undefined
+      ? `${budget.maxAgentOutputBytes} bytes hard (soft warning disabled)`
+      : `${budget.effectiveWarnAgentOutputBytes} bytes soft / ${budget.maxAgentOutputBytes} bytes hard`;
   return [
     "",
     "## Execution Budget",
     "",
-    `- Model calls: ${budget.modelCalls.planned} planned / ${budget.modelCalls.consumed} consumed / ${budget.modelCalls.skipped} skipped`,
+    `- Model calls: ${budget.modelCalls.planned} planned / ${budget.modelCalls.consumed} consumed / ${budget.modelCalls.skipped} skipped / ${budget.maxModelCalls} ceiling`,
+    `- Potential calls: ${plan.potentialTotalCalls} total (${plan.requiredPrimaryCalls} primary, ${plan.potentialVerifierCalls} verifier, ${plan.potentialJudgeCalls} judge)`,
     `- Wall time: ${budget.wallTime.consumedMs}ms consumed / ${budget.wallTime.limitMs}ms limit`,
     `- Token usage: ${budget.tokenUsage.status} (${budget.tokenUsage.reportedCalls} reported, ${budget.tokenUsage.unknownCalls} unknown${totalTokens === undefined ? "" : `, ${totalTokens} total`})`,
+    `- Agent output limits: ${outputLimits}`,
+    `- Findings target: ${budget.maxFindingsPerAgent} per primary agent (soft)`,
     "- Agent output:",
     ...outputLines,
   ];

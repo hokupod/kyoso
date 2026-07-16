@@ -257,6 +257,127 @@ describe("review execution budget", () => {
       },
     });
     expect(result.executionBudget.tokenUsage.status).toBe("unknown");
+    expect(result.testsToAdd).toContain("preserved primary test");
+    expect(result.residualRisks).toContain("preserved primary risk");
+    expect(result.openQuestions).toContain("preserved primary question");
+  });
+
+  test("continues optional verification by default when token usage is unknown", async () => {
+    const manager = new ScriptedBudgetManager(false);
+    const base = baseConfig();
+    const config: KyosoConfig = {
+      ...base,
+      verification: { ...base.verification, enabled: true },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan: "Tenant boundary plan" },
+      { cwd: await tempCwd(), config, agentManager: manager },
+    );
+
+    expect(manager.calls.map((input) => input.role)).toEqual([
+      "implementation_reviewer",
+      "architecture_security_reviewer",
+      "finding_verifier",
+    ]);
+    expect(result.findings[0]?.verification?.status).toBe("confirmed");
+    expect(result.completion.status).toBe("complete");
+    expect(result.completion.reasons).not.toContain("token_usage_unknown");
+    expect(result.executionBudget.tokenUsage).toMatchObject({
+      status: "unknown",
+      reportedCalls: 0,
+      unknownCalls: 3,
+    });
+    expect(result.audit.warnings).toContain(
+      "Token usage was not reported for 3 completed call(s); budget enforcement continued using calls, wall time, and bytes.",
+    );
+  });
+
+  test("records a soft output warning without changing completion or decision", async () => {
+    const events: Record<string, unknown>[] = [];
+    const base = baseConfig();
+    const config: KyosoConfig = {
+      ...base,
+      reviewBudget: {
+        ...base.reviewBudget,
+        warnAgentOutputBytes: 4,
+        maxAgentOutputBytes: 10,
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new OutputWarningManager(),
+        traceWriterFactory: () => memoryTrace(events),
+      },
+    );
+
+    expect(result.completion.status).toBe("complete");
+    expect(result.decision).not.toBe("block");
+    expect(result.audit.warnings).toContain(
+      "Agent codex primary output reached the 4-byte soft threshold (message: 3, thought: 2, total: 5); execution continued.",
+    );
+    expect(result.audit.modelCalls).toContainEqual(
+      expect.objectContaining({
+        kind: "primary",
+        agent: "codex",
+        messageBytes: 3,
+        thoughtBytes: 2,
+        outputBytes: 5,
+        outputWarningTriggered: true,
+      }),
+    );
+    const warningIndex = events.findIndex(
+      (event) =>
+        event.type === "agent_output_warning" && event.agent === "codex",
+    );
+    const completedIndex = events.findIndex(
+      (event) =>
+        event.type === "model_call_completed" && event.agent === "codex",
+    );
+    expect(warningIndex).toBeGreaterThanOrEqual(0);
+    expect(warningIndex).toBeLessThan(completedIndex);
+    expect(result.summaryMarkdown).toContain(
+      "Agent output limits: 4 bytes soft / 10 bytes hard",
+    );
+    expect(result.summaryMarkdown).toContain(
+      "Codex: 5 bytes (message: 3, thought: 2)",
+    );
+  });
+
+  test("retains findings above the per-agent soft target", async () => {
+    const manager = new FindingsTargetManager();
+    const base = baseConfig();
+    const currentPlan = manager.labels.join("\n");
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan", currentPlan },
+      { cwd: await tempCwd(), config: base, agentManager: manager },
+    );
+
+    expect(result.findings).toHaveLength(11);
+    expect(result.completion.status).toBe("complete");
+    expect(result.decision).not.toBe("block");
+    expect(result.audit.warnings).toContain(
+      "Agent codex reported 11 findings, above the soft target of 10; all findings were retained.",
+    );
+    expect(result.audit.modelCalls).toContainEqual(
+      expect.objectContaining({
+        kind: "primary",
+        agent: "codex",
+        reportedFindings: 11,
+        findingsTargetExceeded: true,
+      }),
+    );
+    expect(manager.calls[0]?.prompt).toContain(
+      "aim for at most 10 findings in severity order",
+    );
   });
 
   test("stops before agent launch when the review-wide deadline has elapsed", async () => {
@@ -359,6 +480,9 @@ describe("review execution budget", () => {
         status: "skipped",
         reason: "model_call_budget",
       });
+      expect(result.audit.warnings).toContain(
+        "The potential model-call plan requires 3 calls, above maxModelCalls=2; 1 LLM judge call(s) will use deterministic fallback if higher-priority calls consume the available capacity.",
+      );
       expect(result.executionBudget.modelCallPlan).toEqual({
         requiredPrimaryCalls: 2,
         potentialVerifierCalls: 0,
@@ -548,9 +672,10 @@ class ScriptedBudgetManager extends BaseAcpAgentManager {
               },
             ]
           : [],
-      testsToAdd: [],
-      residualRisks: [],
-      openQuestions: [],
+      testsToAdd: input.agent === "codex" ? ["preserved primary test"] : [],
+      residualRisks: input.agent === "codex" ? ["preserved primary risk"] : [],
+      openQuestions:
+        input.agent === "codex" ? ["preserved primary question"] : [],
     };
     return {
       agent: input.agent,
@@ -558,6 +683,84 @@ class ScriptedBudgetManager extends BaseAcpAgentManager {
       status: "completed",
       rawText: JSON.stringify(opinion),
       ...(this.includeUsage ? { usage: usage() } : {}),
+      startedAt,
+      completedAt: new Date().toISOString(),
+    };
+  }
+}
+
+class OutputWarningManager extends BaseAcpAgentManager {
+  async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+    await input.onStarted?.();
+    const startedAt = new Date().toISOString();
+    return {
+      agent: input.agent,
+      role: input.role,
+      status: "completed",
+      rawText: JSON.stringify({
+        summary: `${input.agent} output warning test`,
+        findings: [],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+      messageBytes: input.agent === "codex" ? 3 : 2,
+      thoughtBytes: input.agent === "codex" ? 2 : 0,
+      outputBytes: input.agent === "codex" ? 5 : 2,
+      outputWarningTriggered: input.agent === "codex",
+      usage: usage(),
+      startedAt,
+      completedAt: new Date().toISOString(),
+    };
+  }
+}
+
+class FindingsTargetManager extends BaseAcpAgentManager {
+  readonly calls: AgentRunInput[] = [];
+  readonly labels = [
+    "Alpha clause",
+    "Bravo clause",
+    "Charlie clause",
+    "Delta clause",
+    "Echo clause",
+    "Foxtrot clause",
+    "Golf clause",
+    "Hotel clause",
+    "India clause",
+    "Juliet clause",
+    "Kilo clause",
+  ];
+
+  async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+    this.calls.push(input);
+    await input.onStarted?.();
+    const startedAt = new Date().toISOString();
+    const findings =
+      input.agent === "codex"
+        ? this.labels.map((label) => ({
+            severity: "low",
+            category: "test",
+            title: label.replace(" clause", ""),
+            evidence: `${label} has a concrete regression gap`,
+            recommendation: `add coverage for ${label}`,
+            changeRelation: "introduced",
+            evidenceQuality: "concrete",
+            evidenceRefs: [{ kind: "plan_clause", label }],
+            confidence: "high",
+          }))
+        : [];
+    return {
+      agent: input.agent,
+      role: input.role,
+      status: "completed",
+      rawText: JSON.stringify({
+        summary: `${input.agent} findings target test`,
+        findings,
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+      usage: usage(),
       startedAt,
       completedAt: new Date().toISOString(),
     };

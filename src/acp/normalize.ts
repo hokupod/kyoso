@@ -52,6 +52,43 @@ const evidenceQualities: EvidenceQuality[] = [
 ];
 const MAX_EVIDENCE_REFS = 20;
 const MAX_EVIDENCE_LINE = 1_000_000;
+const STRICT_ROOT_KEYS = new Set([
+  "summary",
+  "findings",
+  "testsToAdd",
+  "residualRisks",
+  "openQuestions",
+  "cisaSecureByDesign",
+]);
+const STRICT_FINDING_KEYS = new Set([
+  "severity",
+  "category",
+  "title",
+  "evidence",
+  "recommendation",
+  "disposition",
+  "changeRelation",
+  "evidenceQuality",
+  "evidenceRefs",
+  "files",
+  "confidence",
+  "cisaMapping",
+]);
+const STRICT_FILE_KEYS = new Set(["path", "lineStart", "lineEnd"]);
+const STRICT_EVIDENCE_REF_KEYS = new Set([
+  "kind",
+  "path",
+  "lineStart",
+  "lineEnd",
+  "label",
+]);
+const STRICT_CISA_KEYS = new Set([
+  "customerSecurityOutcomes",
+  "secureByDefault",
+  "transparencyAndAccountability",
+  "governance",
+  "notes",
+]);
 
 export function normalizeAgentOutput(
   agent: AgentName,
@@ -115,6 +152,23 @@ export function normalizeAgentOutput(
       role,
       `Structured parse failed: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+}
+
+export function parseAgentOutputStrict(
+  agent: AgentName,
+  role: AgentRole,
+  rawText: string,
+): NormalizedAgentOpinion | undefined {
+  const json = extractFirstJsonObject(rawText);
+  if (!json) return undefined;
+
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!isStrictAgentOpinion(parsed)) return undefined;
+    return normalizeAgentOutput(agent, role, json);
+  } catch {
+    return undefined;
   }
 }
 
@@ -245,6 +299,141 @@ function isEvidenceQuality(value: unknown): value is EvidenceQuality {
     typeof value === "string" &&
     evidenceQualities.includes(value as EvidenceQuality)
   );
+}
+
+function isStrictAgentOpinion(
+  value: unknown,
+): value is Omit<NormalizedAgentOpinion, "agent" | "role"> {
+  if (!isRecord(value) || !hasOnlyKeys(value, STRICT_ROOT_KEYS)) return false;
+  if (typeof value.summary !== "string") return false;
+  if (
+    !Array.isArray(value.findings) ||
+    !value.findings.every(isStrictFinding) ||
+    !isStringArray(value.testsToAdd) ||
+    !isStringArray(value.residualRisks) ||
+    !isStringArray(value.openQuestions)
+  ) {
+    return false;
+  }
+  return (
+    value.cisaSecureByDesign === undefined ||
+    isStrictCisaSecureByDesign(value.cisaSecureByDesign)
+  );
+}
+
+function isStrictFinding(value: unknown): boolean {
+  if (!isRecord(value) || !hasOnlyKeys(value, STRICT_FINDING_KEYS)) {
+    return false;
+  }
+  if (
+    !isSeverity(value.severity) ||
+    !isCategory(value.category) ||
+    !isNonEmptyString(value.title) ||
+    !isNonEmptyString(value.evidence) ||
+    !isNonEmptyString(value.recommendation) ||
+    !isConfidence(value.confidence)
+  ) {
+    return false;
+  }
+  if (
+    (value.disposition !== undefined && !isDisposition(value.disposition)) ||
+    (value.changeRelation !== undefined &&
+      !isChangeRelation(value.changeRelation)) ||
+    (value.evidenceQuality !== undefined &&
+      !isEvidenceQuality(value.evidenceQuality)) ||
+    (value.files !== undefined && !isStrictFindingFiles(value.files)) ||
+    (value.evidenceRefs !== undefined &&
+      !isStrictEvidenceRefs(value.evidenceRefs)) ||
+    (value.cisaMapping !== undefined && !isStringArray(value.cisaMapping))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isStrictFindingFiles(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        hasOnlyKeys(item, STRICT_FILE_KEYS) &&
+        isNonEmptyString(item.path) &&
+        isOptionalLineNumber(item.lineStart) &&
+        isOptionalLineNumber(item.lineEnd),
+    )
+  );
+}
+
+function isStrictEvidenceRefs(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_EVIDENCE_REFS &&
+    value.every((item) => {
+      if (!isRecord(item) || !hasOnlyKeys(item, STRICT_EVIDENCE_REF_KEYS)) {
+        return false;
+      }
+      if (
+        item.kind !== "file" &&
+        item.kind !== "diff_hunk" &&
+        item.kind !== "plan_clause"
+      ) {
+        return false;
+      }
+      if (
+        !isOptionalNonEmptyString(item.path) ||
+        !isOptionalNonEmptyString(item.label) ||
+        !isOptionalLineNumber(item.lineStart) ||
+        !isOptionalLineNumber(item.lineEnd)
+      ) {
+        return false;
+      }
+      if (item.kind === "file" || item.kind === "diff_hunk") {
+        return item.path !== undefined && item.lineStart !== undefined;
+      }
+      return item.label !== undefined || item.lineStart !== undefined;
+    })
+  );
+}
+
+function isStrictCisaSecureByDesign(value: unknown): boolean {
+  if (!isRecord(value) || !hasOnlyKeys(value, STRICT_CISA_KEYS)) return false;
+  for (const key of [
+    "customerSecurityOutcomes",
+    "secureByDefault",
+    "transparencyAndAccountability",
+    "governance",
+  ] as const) {
+    if (value[key] !== undefined && !normalizeGateStatus(value[key])) {
+      return false;
+    }
+  }
+  return value.notes === undefined || isStringArray(value.notes);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isOptionalNonEmptyString(value: unknown): boolean {
+  return value === undefined || isNonEmptyString(value);
+}
+
+function isOptionalLineNumber(value: unknown): boolean {
+  return value === undefined || normalizeLineNumber(value) !== undefined;
 }
 
 function normalizeStringList(value: unknown): string[] {

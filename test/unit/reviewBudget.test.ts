@@ -143,7 +143,13 @@ describe("review budget", () => {
     if (!codex || !claude) throw new Error("missing primary reservations");
     tracker.markStarted(codex);
     tracker.complete(codex, {
+      messageBytes: 40,
+      thoughtBytes: 60,
       outputBytes: 100,
+      outputWarningTriggered: true,
+      salvaged: true,
+      reportedFindings: 11,
+      findingsTargetExceeded: true,
       usage: { totalTokens: 20, inputTokens: 12, outputTokens: 8 },
     });
     tracker.markStarted(claude);
@@ -164,6 +170,17 @@ describe("review budget", () => {
     expect(snapshot.executionBudget.agentOutputBytes).toEqual({
       codex: 100,
       claude: 80,
+    });
+    expect(snapshot.modelCalls[0]).toMatchObject({
+      kind: "primary",
+      agent: "codex",
+      messageBytes: 40,
+      thoughtBytes: 60,
+      outputBytes: 100,
+      outputWarningTriggered: true,
+      salvaged: true,
+      reportedFindings: 11,
+      findingsTargetExceeded: true,
     });
   });
 

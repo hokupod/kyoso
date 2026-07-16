@@ -259,6 +259,7 @@ export type AgentRunInput = {
   workspaceDir: string;
   timeoutMs: number;
   deadlineAtEpochMs?: number;
+  warnOutputBytes?: number;
   maxOutputBytes?: number;
   networkMode: NetworkMode;
   // Called once after the agent process has actually started. Preflight failures
@@ -280,7 +281,13 @@ export type AgentRunResult = {
   };
   warnings?: string[];
   usage?: ModelTokenUsage;
+  messageBytes?: number;
+  thoughtBytes?: number;
   outputBytes?: number;
+  outputWarningTriggered?: boolean;
+  salvaged?: boolean;
+  reportedFindings?: number;
+  findingsTargetExceeded?: boolean;
   stopReason?: string;
   startedAt: string;
   completedAt?: string;
@@ -321,7 +328,13 @@ export type ReviewModelCallAudit = {
   agent?: AgentName;
   status: "completed" | "skipped";
   reason?: string;
+  messageBytes?: number;
+  thoughtBytes?: number;
   outputBytes?: number;
+  outputWarningTriggered?: boolean;
+  salvaged?: boolean;
+  reportedFindings?: number;
+  findingsTargetExceeded?: boolean;
   usage?: ModelTokenUsage;
   stopReason?: string;
 };
@@ -357,6 +370,7 @@ export type KyosoResult = {
     summary: string;
     status: "completed" | "failed" | "timeout" | "skipped";
     errorCode?: string;
+    salvaged?: boolean;
     rawText?: string;
   }>;
   audit: {

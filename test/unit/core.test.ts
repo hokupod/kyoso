@@ -11,6 +11,7 @@ import { readWorkspaceFile } from "../../src/acp/AcpAgentProcess.js";
 import {
   extractFirstJsonObject,
   normalizeAgentOutput,
+  parseAgentOutputStrict,
 } from "../../src/acp/normalize.js";
 import {
   buildAgentPrompt,
@@ -1869,6 +1870,84 @@ describe("agent JSON extraction", () => {
     expect(opinion.findings[0]?.title).toBe("Agent output could not be parsed");
   });
 
+  test("strictly parses a complete valid opinion without defaulting fields", () => {
+    const opinion = parseAgentOutputStrict(
+      "codex",
+      "implementation_reviewer",
+      JSON.stringify({
+        summary: "complete",
+        findings: [
+          {
+            severity: "high",
+            category: "authz",
+            title: "Tenant boundary bypass",
+            evidence: "tenant comes from input",
+            recommendation: "derive tenant from session",
+            disposition: "actionable",
+            changeRelation: "introduced",
+            evidenceQuality: "concrete",
+            evidenceRefs: [{ kind: "plan_clause", label: "Tenant boundary" }],
+            files: [{ path: "src/tenant.ts", lineStart: 10, lineEnd: 12 }],
+            confidence: "high",
+            cisaMapping: ["secure_by_default"],
+          },
+        ],
+        testsToAdd: ["reject cross-tenant input"],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+    );
+
+    expect(opinion).toMatchObject({
+      agent: "codex",
+      role: "implementation_reviewer",
+      summary: "complete",
+      findings: [{ title: "Tenant boundary bypass", severity: "high" }],
+    });
+  });
+
+  test("strict parsing rejects partial JSON and invalid required structure", () => {
+    const invalidOutputs = [
+      '{"summary":"partial","findings":[',
+      JSON.stringify({
+        summary: "missing open questions",
+        findings: [],
+        testsToAdd: [],
+        residualRisks: [],
+      }),
+      JSON.stringify({
+        summary: "defaultable finding",
+        findings: [
+          {
+            severity: "unexpected",
+            category: "test",
+            title: "",
+            evidence: "evidence",
+            recommendation: "recommendation",
+            confidence: "high",
+          },
+        ],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+      JSON.stringify({
+        summary: "unknown field",
+        findings: [],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+        extra: true,
+      }),
+    ];
+
+    for (const output of invalidOutputs) {
+      expect(
+        parseAgentOutputStrict("codex", "implementation_reviewer", output),
+      ).toBeUndefined();
+    }
+  });
+
   test("normalizes CISA gate values from agent output", () => {
     const opinion = normalizeAgentOutput(
       "claude",
@@ -1948,6 +2027,21 @@ describe("agent prompts", () => {
     "Write each finding title in concise English, regardless of the language used elsewhere. Titles are compared across agents for deduplication.";
   const baseStateInstruction =
     "Selected files show the PRE-CHANGE (base) state. The unified diff describes proposed changes on top of them. Do not report the difference between the selected files and the diff as an inconsistency.";
+
+  test("renders the findings limit as a soft target", () => {
+    const prompt = buildAgentPrompt(
+      "plan_review",
+      { goal: "review" },
+      "codex",
+      "implementation_reviewer",
+      { maxFindingsTarget: 10 },
+    );
+
+    expect(prompt).toContain("aim for at most 10 findings in severity order");
+    expect(prompt).toContain(
+      "do not hide a material finding solely to meet this target",
+    );
+  });
 
   test("renders typed review policy outside untrusted constraints", () => {
     const prompt = buildAgentPrompt(

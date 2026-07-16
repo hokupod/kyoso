@@ -11,9 +11,7 @@ export function validateReviewRequest(
     throw new KyosoRequestError("goal is required", "VALIDATION_ERROR");
   }
   validateReviewContract(request);
-  for (const file of request.selectedFiles ?? []) {
-    normalizeRelativePath(file.path);
-  }
+  validateSelectedFiles(request);
   if (tool === "diff_review" && !request.diff?.unifiedDiff) {
     throw new KyosoRequestError(
       "diff_review requires diff.unifiedDiff in MCP/core mode",
@@ -28,6 +26,16 @@ function validateReviewContract(request: KyosoReviewRequest): void {
   if (!isRecord(contract)) {
     throw new KyosoRequestError(
       "reviewContract must be an object",
+      "VALIDATION_ERROR",
+    );
+  }
+  const allowedKeys = new Set(["focus", "nonGoals", "acceptedRisks"]);
+  const unknownKeys = Object.keys(contract).filter(
+    (key) => !allowedKeys.has(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new KyosoRequestError(
+      `reviewContract contains unknown keys: ${unknownKeys.join(", ")}`,
       "VALIDATION_ERROR",
     );
   }
@@ -79,6 +87,33 @@ function validateReviewContract(request: KyosoReviewRequest): void {
       "reviewContract.acceptedRisks must contain valid finding fingerprints and bounded rationales",
       "VALIDATION_ERROR",
     );
+  }
+}
+
+function validateSelectedFiles(request: KyosoReviewRequest): void {
+  const selectedFiles = request.selectedFiles as unknown;
+  if (selectedFiles === undefined) return;
+  if (!Array.isArray(selectedFiles)) {
+    throw new KyosoRequestError(
+      "selectedFiles must be an array",
+      "VALIDATION_ERROR",
+    );
+  }
+  for (const file of selectedFiles) {
+    if (
+      !isRecord(file) ||
+      typeof file.path !== "string" ||
+      file.path.trim().length === 0 ||
+      typeof file.content !== "string" ||
+      (file.language !== undefined && typeof file.language !== "string") ||
+      (file.truncated !== undefined && typeof file.truncated !== "boolean")
+    ) {
+      throw new KyosoRequestError(
+        "selectedFiles entries require string path/content and valid optional metadata",
+        "VALIDATION_ERROR",
+      );
+    }
+    normalizeRelativePath(file.path);
   }
 }
 

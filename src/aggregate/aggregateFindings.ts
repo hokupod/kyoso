@@ -106,7 +106,7 @@ export function aggregateAgentResults(
         changeRelation: finding.changeRelation ?? "unknown",
         evidenceQuality: "insufficient",
         evidenceRefs: finding.evidenceRefs ?? [],
-        policyReasons: finding.policyReasons ?? [],
+        policyReasons: [],
         fingerprint: "",
         files: normalizeFiles(finding.files),
         sourceAgents: [result.agent],
@@ -350,9 +350,6 @@ function mergeFinding(existing: KyosoFinding, candidate: KyosoFinding): void {
         reference,
       ]),
     ).values(),
-  );
-  existing.policyReasons = Array.from(
-    new Set([...existing.policyReasons, ...candidate.policyReasons]),
   );
 }
 

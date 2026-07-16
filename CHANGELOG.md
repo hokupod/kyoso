@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Limit formal regression recommendations to three concrete, deduplicated
   tests and update the bundled Skill to stop on missing coverage or disputed
   findings without auto-fixing advisory output.
+- Keep agent-supplied policy labels out of deterministic admission. Non-goals
+  bound optional scope only, while accepted Medium risks require an exact
+  validated finding fingerprint.
 - Promote the Marketplace Plugin to `0.5.0` and pin its Codex and Claude Code
   MCP definitions to `@kyo-so/cli@0.11.0`, delivering the review execution
   budget and two-pass stop contract through the Plugin runtime.

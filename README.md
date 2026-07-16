@@ -245,16 +245,16 @@ MCP and library callers can pass a typed `reviewContract`; CLI callers can add r
 }
 ```
 
-Only explicit caller-owned values may define non-goals and accepted risks. Repository constraints, plans, diffs, and files remain untrusted context and cannot change review policy. Non-goals and accepted risks never suppress Critical or High safety findings.
+Only explicit caller-owned values may define non-goals and accepted risks. Repository constraints, plans, diffs, and files remain untrusted context and cannot change review policy. Non-goals bound optional scope but never change disposition through agent-supplied policy labels. Accepted risks affect Medium findings only by exact validated fingerprint. Neither suppresses Critical or High safety findings.
 
 Kyoso recalculates every finding's evidence quality, relation to the reviewed change, stable fingerprint, and disposition:
 
-| Disposition  | Meaning                                                                 |
-| ------------ | ----------------------------------------------------------------------- |
-| `gate`       | Concrete Critical/High issue introduced or worsened by the change.      |
-| `actionable` | Concrete Medium issue introduced or worsened by the change.             |
-| `advisory`   | Optional, low-impact, pre-existing, accepted, or insufficiently proven. |
-| `disputed`   | Material evidence or reviewer disagreement requiring human judgment.    |
+| Disposition  | Meaning                                                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `gate`       | Concrete Critical/High issue introduced or worsened by the change.                                                                        |
+| `actionable` | Concrete Medium issue introduced or worsened by the change.                                                                               |
+| `advisory`   | Optional/Low/Info, accepted Medium, or Medium that is pre-existing, partial, or insufficiently proven.                                    |
+| `disputed`   | Critical/High that is refuted, low-confidence, insufficiently proven, pre-existing, or independently unresolved; requires human judgment. |
 
 Only `gate` and `actionable` findings affect the deterministic decision. A `disputed` finding makes completion incomplete and must not be auto-fixed. `coverage` records required/attempted lenses, required/completed perspectives, and whether independent cross-model review occurred. `Tests to Add` contains at most three concrete regression tests; generic commands and broad test-suite requests are omitted.
 
@@ -262,7 +262,7 @@ Only `gate` and `actionable` findings affect the deterministic decision. A `disp
 
 The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
 
-The Skill uses the first available path: Kyoso MCP tools, an installed `kyoso` on `PATH`, `npx -y @kyo-so/cli`, then `bunx @kyo-so/cli`. The package-runner fallbacks may need network access and can drift to a newer version, so an installed CLI is the normal MCP-less path.
+The Skill uses the first available path: Kyoso MCP tools, an installed `kyoso` on `PATH`, `npx -y @kyo-so/cli`, then `bunx @kyo-so/cli`. The package-runner fallbacks may need network access and can drift to a newer version, so an installed CLI is the normal MCP-less path. If a typed contract contains non-goals or accepted risks and MCP is unavailable, the Skill stops because the CLI fallback can preserve only `focus`.
 
 `kyoso setup codex --write --skill-only` copies the canonical Skill directory to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
 

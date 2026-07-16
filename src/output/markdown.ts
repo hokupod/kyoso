@@ -200,9 +200,15 @@ export function defaultSummaryText(
     (finding) =>
       finding.disposition === "gate" || finding.disposition === "actionable",
   );
+  const advisoryFindings = result.findings.filter(
+    (finding) => finding.disposition === "advisory",
+  );
+  const disputedFindings = result.findings.filter(
+    (finding) => finding.disposition === "disputed",
+  );
   return result.findings.length === 0
     ? "No blocking findings were detected from the supplied context."
-    : `${decisionFindings.length} decision-active finding(s); ${result.findings.length - decisionFindings.length} advisory finding(s).`;
+    : `${decisionFindings.length} decision-active finding(s); ${advisoryFindings.length} advisory finding(s); ${disputedFindings.length} disputed finding(s).`;
 }
 
 function formatExecutionBudget(
@@ -293,7 +299,15 @@ function formatEvidenceRefs(
   return references
     .map((reference) => {
       const location = reference.path ?? reference.label ?? "n/a";
-      const line = reference.lineStart ? `:${reference.lineStart}` : "";
+      const line =
+        reference.lineStart === undefined
+          ? ""
+          : `:${reference.lineStart}${
+              reference.lineEnd !== undefined &&
+              reference.lineEnd !== reference.lineStart
+                ? `-${reference.lineEnd}`
+                : ""
+            }`;
       return `${reference.kind}=\`${location}${line}\``;
     })
     .join(", ");

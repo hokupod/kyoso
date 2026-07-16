@@ -36,6 +36,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `plan_review`
      - `security_review`
      - `diff_review`
+   - If the typed contract contains non-goals or accepted risks and MCP is unavailable, stop and explain that the CLI fallback cannot preserve those trusted fields. A focus-only contract may use the CLI fallback.
    - If the MCP tools are unavailable, use the first available CLI path with JSON output:
      1. An installed `kyoso` executable on `PATH`.
      2. `npx -y @kyo-so/cli@0.11.0`.
@@ -49,7 +50,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
 5. Check `coverage` before acting. If required lenses or perspectives are missing, stop and present the incomplete review.
 6. Act on finding dispositions exactly:
-   - `gate`: stop and present the blocking finding.
+   - `gate`: never auto-fix it; stop and present the decision-active finding. The returned decision remains authoritative because severity and review mode determine whether a gate yields `block` or `approve_with_changes`.
    - `actionable`: fix only concrete, change-related material findings.
    - `advisory`: report it; never implement it automatically.
    - `disputed`: stop and return the evidence conflict to the user; never auto-fix it.
@@ -61,7 +62,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
 
 - At one explicit review checkpoint, run one automatic review pass only.
 - Record the returned `requestFingerprint`. Do not run the same fingerprint again in the same task.
-- If `completion.status !== "complete"`, `coverage.missingLenses` is non-empty, or a finding is `disputed`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
+- If `completion.status !== "complete"`, `coverage.missingLenses` is non-empty, any required perspective is absent from `coverage.completedPerspectives`, or a finding is `disputed`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
 - A single confirmation pass is allowed only after fixing actionable, material findings from the first complete pass.
 - After the confirmation pass, stop even when findings remain. Do not start a third pass without the user's explicit approval.
 - Do not interpret `approve_with_changes` as permission to repeat until `approve`.

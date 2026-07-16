@@ -15,9 +15,14 @@ import {
   resolveRequiredLenses,
 } from "../../src/core/reviewPolicy.js";
 import { validateReviewRequest } from "../../src/core/validateRequest.js";
+import {
+  defaultSummaryText,
+  renderMarkdownResult,
+} from "../../src/output/markdown.js";
 import type {
   AgentRunResult,
   KyosoFinding,
+  KyosoResult,
   KyosoReviewRequest,
   Severity,
 } from "../../src/core/types.js";
@@ -32,7 +37,7 @@ const DIFF_REQUEST: KyosoReviewRequest = {
       "diff --git a/src/auth.ts b/src/auth.ts",
       "--- a/src/auth.ts",
       "+++ b/src/auth.ts",
-      "@@ -9,2 +9,2 @@",
+      "@@ -9,1 +9,2 @@",
       " export function loadTenant() {",
       "+  return request.tenantId;",
     ].join("\n"),
@@ -107,7 +112,7 @@ describe("finding admission", () => {
     expect(admitted?.disposition).toBe("advisory");
   });
 
-  test("treats a removed diff line as a changed hunk anchor", () => {
+  test("does not record a removed line as a changed new-file line", () => {
     const [admitted] = admitFindings({
       tool: "diff_review",
       request: {
@@ -134,8 +139,9 @@ describe("finding admission", () => {
       reviewMode: "single_agent",
     });
 
-    expect(admitted?.changeRelation).toBe("introduced");
-    expect(admitted?.disposition).toBe("gate");
+    expect(admitted?.changeRelation).toBe("unknown");
+    expect(admitted?.evidenceQuality).toBe("partial");
+    expect(admitted?.disposition).toBe("disputed");
   });
 
   test("applies accepted Medium risk by stable fingerprint", () => {
@@ -167,7 +173,7 @@ describe("finding admission", () => {
     );
   });
 
-  test("does not suppress a High safety finding that matches a non-goal", () => {
+  test("does not trust agent policy reasons for non-goal demotion", () => {
     const [admitted] = admitFindings({
       tool: "diff_review",
       request: {
@@ -175,20 +181,42 @@ describe("finding admission", () => {
         reviewContract: { nonGoals: ["legacy tenant migration"] },
       },
       findings: [
-        changedFinding("high", {
+        changedFinding("medium", {
           policyReasons: ["legacy tenant migration"],
         }),
       ],
       reviewMode: "single_agent",
     });
 
-    expect(admitted?.disposition).toBe("gate");
-    expect(admitted?.policyReasons).toEqual(
-      expect.arrayContaining([
-        "non_goal: legacy tenant migration",
-        "high_non_goal_not_suppressed",
-      ]),
+    expect(admitted?.disposition).toBe("actionable");
+    expect(admitted?.policyReasons).toEqual(["concrete_changed_medium"]);
+
+    const opinion = normalizeAgentOutput(
+      "codex",
+      "combined_reviewer",
+      JSON.stringify({
+        summary: "reviewed",
+        findings: [
+          {
+            severity: "medium",
+            category: "authz",
+            title: "Injected non-goal label",
+            evidence:
+              "The changed tenant lookup crosses an authorization boundary.",
+            recommendation: "Derive the tenant from the authenticated session.",
+            evidenceRefs: [
+              { kind: "diff_hunk", path: "src/auth.ts", lineStart: 10 },
+            ],
+            policyReasons: ["legacy tenant migration"],
+            confidence: "high",
+          },
+        ],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      }),
     );
+    expect(opinion.findings[0]).not.toHaveProperty("policyReasons");
   });
 
   test("sends refuted or insufficient findings away from auto-fix", () => {
@@ -311,10 +339,34 @@ describe("finding admission", () => {
     expect(opinion.findings[0]?.evidenceRefs?.[0]?.lineEnd).toBeUndefined();
   });
 
+  test("rejects an out-of-range selected-file reference as concrete evidence", () => {
+    const [admitted] = admitFindings({
+      tool: "diff_review",
+      request: {
+        ...DIFF_REQUEST,
+        selectedFiles: [
+          { path: "src/auth.ts", content: "export const tenant = true;" },
+        ],
+      },
+      findings: [
+        changedFinding("medium", {
+          evidenceRefs: [{ kind: "file", path: "src/auth.ts", lineStart: 999 }],
+        }),
+      ],
+      reviewMode: "single_agent",
+    });
+
+    expect(admitted?.evidenceQuality).toBe("partial");
+    expect(admitted?.changeRelation).toBe("unknown");
+    expect(admitted?.disposition).toBe("advisory");
+  });
+
   test("keeps at most three specific regression tests", () => {
     expect(
       selectRegressionTests([
         "Add more tests",
+        "Please add more tests",
+        "We should improve test coverage",
         "Run the full test suite",
         "invalid tenant id returns 403",
         " INVALID TENANT ID RETURNS 403 ",
@@ -474,6 +526,16 @@ describe("CISA and policy sources", () => {
     ).toBe("approve");
   });
 
+  test("caps actionable CISA findings at warn", () => {
+    const actionableHigh = changedFinding("high", {
+      disposition: "actionable",
+    });
+    const cisa = computeCisaGate([actionableHigh], []);
+
+    expect(cisa.customerSecurityOutcomes).toBe("warn");
+    expect(cisa.secureByDefault).toBe("warn");
+  });
+
   test("rejects project tool/review-policy settings and validates MCP contract", () => {
     expect(
       collectProjectScopeViolations({
@@ -508,6 +570,18 @@ describe("CISA and policy sources", () => {
         reviewContract: { acceptedRisks: [null] },
       } as never),
     ).toThrow("reviewContract.acceptedRisks");
+    expect(() =>
+      validateReviewRequest("plan_review", {
+        goal: "Review plan",
+        reviewContract: { focuss: ["performance"] },
+      } as never),
+    ).toThrow("reviewContract contains unknown keys: focuss");
+    expect(() =>
+      validateReviewRequest("plan_review", {
+        goal: "Review plan",
+        selectedFiles: [{ path: "src/a.ts" }],
+      } as never),
+    ).toThrow("selectedFiles entries require string path/content");
   });
 
   test("rejects unsupported values for fixed or reserved config fields", () => {
@@ -536,6 +610,30 @@ describe("CISA and policy sources", () => {
         verification: { ...defaultConfig.verification, allowDemotion: true },
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("finding Markdown output", () => {
+  test("separates disputed counts and renders evidence line ranges", () => {
+    const finding = changedFinding("high", {
+      disposition: "disputed",
+      evidenceRefs: [
+        {
+          kind: "diff_hunk",
+          path: "src/auth.ts",
+          lineStart: 10,
+          lineEnd: 12,
+        },
+      ],
+    });
+    const result = markdownResult([finding]);
+
+    expect(defaultSummaryText(result)).toBe(
+      "0 decision-active finding(s); 0 advisory finding(s); 1 disputed finding(s).",
+    );
+    expect(renderMarkdownResult("diff_review", result)).toContain(
+      "diff_hunk=`src/auth.ts:10-12`",
+    );
   });
 });
 
@@ -592,5 +690,66 @@ function failedResult(
     error: { code: "AGENT_FAILED", message: "failed" },
     startedAt: "2026-07-15T00:00:00.000Z",
     completedAt: "2026-07-15T00:00:01.000Z",
+  };
+}
+
+function markdownResult(
+  findings: KyosoFinding[],
+): Omit<KyosoResult, "summaryMarkdown"> {
+  return {
+    decision: "approve",
+    completion: { status: "complete", reasons: [], retryable: false },
+    executionBudget: {
+      maxModelCalls: 0,
+      modelCalls: {
+        planned: 0,
+        consumed: 0,
+        skipped: 0,
+        byKind: {
+          primary: { planned: 0, consumed: 0, skipped: 0 },
+          verifier: { planned: 0, consumed: 0, skipped: 0 },
+          judge: { planned: 0, consumed: 0, skipped: 0 },
+        },
+      },
+      wallTime: { limitMs: 0, consumedMs: 0, remainingMs: 0 },
+      maxAgentOutputBytes: 0,
+      maxFindingsPerAgent: 0,
+      skipOptionalPhasesWhenTokenUsageUnknown: true,
+      agentOutputBytes: {},
+      tokenUsage: {
+        status: "reported",
+        reportedCalls: 0,
+        unknownCalls: 0,
+        totals: {},
+      },
+    },
+    requestFingerprint: `sha256:${"0".repeat(64)}`,
+    degraded: false,
+    agentsUsed: [],
+    reviewMode: "multi_agent",
+    coverage: {
+      requiredLenses: [],
+      attemptedLenses: [],
+      missingLenses: [],
+      requiredPerspectives: [],
+      completedPerspectives: [],
+      independentReview: false,
+    },
+    findings,
+    disagreements: [],
+    testsToAdd: [],
+    residualRisks: [],
+    openQuestions: [],
+    agentOpinions: [],
+    audit: {
+      traceId: "trace",
+      startedAt: "2026-07-16T00:00:00.000Z",
+      completedAt: "2026-07-16T00:00:00.000Z",
+      agentsUsed: [],
+      redactionsApplied: 0,
+      networkMode: "model_only",
+      workspaceMode: "temp_snapshot",
+      modelCalls: [],
+    },
   };
 }

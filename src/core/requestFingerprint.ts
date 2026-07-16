@@ -7,7 +7,7 @@ import type {
   ReviewTool,
 } from "./types.js";
 
-export const REVIEW_CONTRACT_VERSION = "2026-07-15-v2";
+export const REVIEW_CONTRACT_VERSION = "2026-07-16-v3";
 
 export function createRequestFingerprint(input: {
   tool: ReviewTool;
@@ -15,6 +15,7 @@ export function createRequestFingerprint(input: {
   config: KyosoConfig;
   roles: Partial<Record<"codex" | "claude", AgentRole>>;
   budget: ReviewBudget;
+  entrypoint?: "cli" | "mcp" | "core";
 }): string {
   const reviewers = (["codex", "claude"] as const)
     .filter((agent) => input.config.agents[agent].enabled)
@@ -33,6 +34,7 @@ export function createRequestFingerprint(input: {
   const payload = {
     reviewContractVersion: REVIEW_CONTRACT_VERSION,
     tool: input.tool,
+    entrypoint: input.entrypoint ?? "core",
     request,
     reviewers,
     reviewPolicy: input.config.reviewPolicy,

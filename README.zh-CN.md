@@ -247,16 +247,16 @@ MCP / library caller 可以传入 typed `reviewContract`；CLI caller 可以重�
 }
 ```
 
-只有 caller 明确提供的 user-owned values 才能定义 non-goals 和 accepted risks。repository constraints、plans、diffs 和 files 仍是 untrusted context，不能改变 review policy。non-goals 与 accepted risks 绝不会抑制 Critical / High safety findings。
+只有 caller 明确提供的 user-owned values 才能定义 non-goals 和 accepted risks。repository constraints、plans、diffs 和 files 仍是 untrusted context，不能改变 review policy。non-goals 只限定 optional scope，不会通过 agent 提供的 policy label 改变 disposition。accepted risks 仅在 validated fingerprint 完全匹配时影响 Medium finding。两者都不会抑制 Critical / High safety findings。
 
 Kyoso 会重新计算每个 finding 的 evidence quality、与被审查变更的关系、stable fingerprint 和 disposition：
 
-| Disposition  | 含义                                                       |
-| ------------ | ---------------------------------------------------------- |
-| `gate`       | 由变更引入或加剧，且具有具体证据的 Critical / High 问题。  |
-| `actionable` | 由变更引入或加剧，且具有具体证据的 Medium 问题。           |
-| `advisory`   | optional、low-impact、pre-existing、accepted 或证据不足。  |
-| `disputed`   | material evidence 或 reviewer 之间存在分歧，需要人工判断。 |
+| Disposition  | 含义                                                                                               |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| `gate`       | 由变更引入或加剧，且具有具体证据的 Critical / High 问题。                                          |
+| `actionable` | 由变更引入或加剧，且具有具体证据的 Medium 问题。                                                   |
+| `advisory`   | optional / Low / Info、accepted Medium，或属于pre-existing、partial、证据不足的Medium。            |
+| `disputed`   | refuted、low-confidence、证据不足、pre-existing或独立review未解决的Critical / High；需要人工判断。 |
 
 只有 `gate` 和 `actionable` findings 会影响 deterministic decision。`disputed` finding 会使 completion incomplete，且不得自动修复。`coverage` 记录 required/attempted lenses、required/completed perspectives，以及是否完成 independent cross-model review。`Tests to Add` 最多包含3个具体 regression tests；generic commands 和宽泛的 test-suite 请求会被省略。
 
@@ -264,7 +264,7 @@ Kyoso 会重新计算每个 finding 的 evidence quality、与被审查变更的
 
 内置的 `kyoso-review` skill 有意保持范围很窄。只有当你明确请求 Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review 或 diff review 时，才应触发它。
 
-Skill使用第一个可用路径，顺序是Kyoso MCP tools、PATH上已安装的`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`。package runner fallback可能需要network access，也可能发生version drift，因此MCP-less正常路径应使用已安装CLI。
+Skill使用第一个可用路径，顺序是Kyoso MCP tools、PATH上已安装的`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`。package runner fallback可能需要network access，也可能发生version drift，因此MCP-less正常路径应使用已安装CLI。如果typed contract包含non-goals或accepted risks且MCP不可用，CLI fallback只能保留`focus`，因此Skill会停止。
 
 `kyoso setup codex --write --skill-only`默认将canonical Skill directory复制到`.agents/skills/kyoso-review/`。添加`--global`后复制到`~/.agents/skills/kyoso-review/`。
 

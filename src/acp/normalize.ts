@@ -95,7 +95,6 @@ export function normalizeAgentOutput(
               ? finding.evidenceQuality
               : undefined,
             evidenceRefs: normalizeEvidenceRefs(finding.evidenceRefs),
-            policyReasons: normalizeStringList(finding.policyReasons),
             files: normalizeFindingFiles(finding.files),
             confidence: isConfidence(finding.confidence)
               ? finding.confidence

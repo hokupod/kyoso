@@ -213,7 +213,6 @@ export type NormalizedAgentOpinion = {
     changeRelation?: ChangeRelation;
     evidenceQuality?: EvidenceQuality;
     evidenceRefs?: EvidenceRef[];
-    policyReasons?: string[];
     files?: Array<{ path: string; lineStart?: number; lineEnd?: number }>;
     confidence: "high" | "medium" | "low";
     cisaMapping?: string[];

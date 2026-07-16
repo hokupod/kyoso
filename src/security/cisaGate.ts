@@ -76,11 +76,10 @@ export function computeCisaGate(
       continue;
     }
     const status: GateStatus =
-      finding.severity === "critical" || finding.severity === "high"
+      finding.disposition === "gate" &&
+      (finding.severity === "critical" || finding.severity === "high")
         ? "fail"
-        : finding.severity === "medium" || finding.severity === "low"
-          ? "warn"
-          : "pass";
+        : "warn";
 
     if (finding.category === "secret") {
       applyDimension(gate, policy, "customerSecurityOutcomes", status);

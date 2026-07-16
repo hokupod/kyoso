@@ -141,6 +141,7 @@ export async function runReview(
         config,
         roles: resolveAgentRoles(config),
         budget: config.reviewBudget,
+        entrypoint: options.entrypoint,
       });
       const trace = traceWriterFactory({
         enabled: config.audit.enabled,
@@ -304,6 +305,7 @@ export async function runReview(
         config: loaded.config,
         roles: resolveAgentRoles(loaded.config),
         budget: reviewBudget,
+        entrypoint: options.entrypoint,
       });
       await writeReviewBudgetPlanned({
         trace,
@@ -379,6 +381,7 @@ export async function runReview(
         config: loaded.config,
         roles: resolveAgentRoles(loaded.config),
         budget: reviewBudget,
+        entrypoint: options.entrypoint,
       });
       await writeReviewBudgetPlanned({
         trace,
@@ -422,6 +425,7 @@ export async function runReview(
       config: loaded.config,
       roles: agentRoles,
       budget: reviewBudget,
+      entrypoint: options.entrypoint,
     });
     await writeReviewBudgetPlanned({
       trace,

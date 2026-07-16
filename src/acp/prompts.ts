@@ -106,7 +106,6 @@ Return JSON matching KyosoAgentOpinion:
       "evidenceRefs": [
         { "kind": "diff_hunk", "path": "src/example.ts", "lineStart": 10, "lineEnd": 12 }
       ],
-      "policyReasons": [],
       "files": [
         { "path": "src/example.ts", "lineStart": 10, "lineEnd": 12 }
       ],
@@ -133,7 +132,7 @@ Allowed disposition candidate values: gate, actionable, advisory, disputed. Kyos
 Allowed changeRelation candidate values: introduced, worsened, pre_existing, unknown.
 Allowed evidenceQuality candidate values: concrete, partial, insufficient. Kyoso recalculates the final value deterministically.
 Allowed evidenceRefs kind values: file, diff_hunk, plan_clause. File and diff_hunk references require path and lineStart; plan_clause requires an exact label or lineStart.
-When a finding matches a declared non-goal, copy that exact non-goal string into policyReasons. Do not invent policy reasons.
+Non-goals only bound optional scope expansion. Do not output policy reasons or use a non-goal to omit a Critical or High safety finding; Kyoso computes final policy reasons itself.
 Allowed cisaMapping values: customer_security_outcomes, secure_by_default, transparency_and_accountability, governance.
 Allowed CISA gate values: pass, warn, fail, not_applicable.
 `;

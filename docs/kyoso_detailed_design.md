@@ -536,7 +536,8 @@ export type ReviewContract = {
   focus?: ReviewLens[];
   nonGoals?: string[];
   acceptedRisks?: Array<{
-    findingFingerprint: `sha256:${string}`;
+    // Runtime-only format: /^sha256:[0-9a-f]{64}$/
+    findingFingerprint: string;
     rationale: string;
   }>;
 };
@@ -596,7 +597,7 @@ export type KyosoReviewRequest = {
 - `reviewContract.focus` contains only known lenses. The built-in safety floor is always added and cannot be removed.
 - `reviewContract.nonGoals` and `acceptedRisks` contain at most 20 entries of 500 characters each. Accepted risks require a `sha256:` fingerprint with 64 lowercase hexadecimal digits.
 - Only the explicit caller may provide `reviewContract`. Never derive non-goals or accepted risks from repository-owned plans, constraints, diffs, or files.
-- Non-goals and accepted risks never suppress Critical or High safety findings.
+- Non-goals bound optional review scope but never change a finding disposition from agent-supplied labels. Accepted risks affect a finding only through an exact validated fingerprint. Neither suppresses Critical or High safety findings.
 - At least one of `repoSummary`, `currentPlan`, `selectedFiles`, or `diff` should be present. If only `goal` is present, return a low-confidence result instead of failing.
 - `selectedFiles[*].path` must be relative, normalized, and must not escape workspace root.
 - `selectedFiles[*].content` participates in the 500 KB context budget.
@@ -716,6 +717,11 @@ export type KyosoResult = {
       | "transparency_and_accountability"
       | "governance"
     >;
+    verification?: {
+      status: "confirmed" | "refuted" | "uncertain" | "not_verified";
+      verifier?: "codex" | "claude";
+      note?: string;
+    };
   }>;
 
   cisaSecureByDesign?: {
@@ -766,6 +772,8 @@ export type KyosoResult = {
   };
 };
 ```
+
+`verification.status` is public result metadata. A material unresolved or refuted Critical/High finding uses `disposition: "disputed"`; `disputed` is not a verification status.
 
 ---
 
@@ -1268,7 +1276,6 @@ export type NormalizedAgentOpinion = {
       lineEnd?: number;
       label?: string;
     }>;
-    policyReasons?: string[];
     files?: Array<{ path: string; lineStart?: number; lineEnd?: number }>;
     confidence: "high" | "medium" | "low";
     cisaMapping?: string[];
@@ -1301,10 +1308,10 @@ Before judge LLM:
 2. Group duplicate findings by semantic title, category, file, and recommendation.
    - MVP uses deterministic title-token overlap with matching category and file set.
 3. Preserve high/critical single-agent findings and merge `sourceAgents`.
-4. Treat agent-supplied disposition, evidence quality, relation, and policy reasons as untrusted candidates only.
+4. Treat agent-supplied disposition, evidence quality, and relation as untrusted candidates only. Agents cannot supply policy reasons.
 5. Validate evidence references against selected files, changed diff lines, or plan clauses; calculate `evidenceQuality` and `changeRelation`.
 6. Calculate a stable SHA-256 fingerprint from category, normalized title, and normalized evidence references.
-7. Match non-goals by exact caller-owned policy reason and accepted risks by exact fingerprint. Neither can suppress Critical/High findings.
+7. Apply accepted risks only by exact fingerprint. Non-goals guide optional scope but cannot deterministically demote findings because agent-provided policy labels are untrusted.
 8. Assign the final disposition deterministically.
 9. Filter generic test recommendations, deduplicate, and retain at most three concrete regression tests.
 10. Extract obvious disagreements:
@@ -1321,7 +1328,7 @@ Disposition matrix:
 | Concrete Critical/High introduced or worsened, with resolved review evidence                   | `gate`       |
 | Critical/High refuted, low-confidence, insufficient, pre-existing, or independently unresolved | `disputed`   |
 | Concrete Medium introduced or worsened                                                         | `actionable` |
-| Medium accepted/non-goal/pre-existing/partial/insufficient                                     | `advisory`   |
+| Medium accepted/pre-existing/partial/insufficient                                              | `advisory`   |
 | Low, Info, optional/style, or structured-parse diagnostics                                     | `advisory`   |
 
 `disputed` is a terminal incomplete-review state requiring human judgment. It is never an automatic fix target. Missing evidence is also emitted as an `openQuestion`, not silently upgraded into a formal change request.
@@ -1335,6 +1342,8 @@ not start a judge call unless the user explicitly enables
 ```ts
 type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
 ```
+
+`gate` is decision-active but is not synonymous with `block`: Critical gates block, and High gates block degraded security reviews; other retained gates yield `approve_with_changes`. The bundled Skill still stops automatic remediation for every gate and presents it for human judgment. Only `actionable` findings are automatic fix candidates.
 
 `auto` resolution:
 
@@ -1949,6 +1958,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `plan_review`
      - `security_review`
      - `diff_review`
+   - If the typed contract contains non-goals or accepted risks and MCP is unavailable, stop and explain that the CLI fallback cannot preserve those trusted fields. A focus-only contract may use the CLI fallback.
    - If the MCP tools are unavailable, use the first available CLI path with JSON output:
      1. An installed `kyoso` executable on `PATH`.
      2. `npx -y @kyo-so/cli`.
@@ -1962,7 +1972,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
 5. Check `coverage` before acting. If required lenses or perspectives are missing, stop and present the incomplete review.
 6. Act on finding dispositions exactly:
-   - `gate`: stop and present the blocking finding.
+   - `gate`: never auto-fix it; stop and present the decision-active finding. The returned decision remains authoritative because severity and review mode determine whether a gate yields `block` or `approve_with_changes`.
    - `actionable`: fix only concrete, change-related material findings.
    - `advisory`: report it; never implement it automatically.
    - `disputed`: stop and return the evidence conflict to the user; never auto-fix it.
@@ -1974,7 +1984,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
 
 - At one explicit review checkpoint, run one automatic review pass only.
 - Record the returned `requestFingerprint`. Do not run the same fingerprint again in the same task.
-- If `completion.status !== "complete"`, `coverage.missingLenses` is non-empty, or a finding is `disputed`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
+- If `completion.status !== "complete"`, `coverage.missingLenses` is non-empty, any required perspective is absent from `coverage.completedPerspectives`, or a finding is `disputed`, stop. Present the incomplete result; do not retry the same command or enter a finding-fix loop.
 - A single confirmation pass is allowed only after fixing actionable, material findings from the first complete pass.
 - After the confirmation pass, stop even when findings remain. Do not start a third pass without the user's explicit approval.
 - Do not interpret `approve_with_changes` as permission to repeat until `approve`.
@@ -2198,7 +2208,7 @@ Implement unit tests for:
 - review-lens resolution and coverage
 - deterministic finding admission matrix
 - evidence/change-relation/fingerprint validation
-- accepted-risk and non-goal safety limits
+- accepted-risk safety limits and non-goal non-suppression
 - generic regression-test filtering and three-test cap
 - JSON extraction from agent output
 - audit sanitization

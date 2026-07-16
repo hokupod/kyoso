@@ -123,7 +123,20 @@ describe("review budget", () => {
     expect(createRequestFingerprint({ ...input, request: first })).toBe(
       createRequestFingerprint({ ...input, request: second }),
     );
-    expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-15-v2");
+    expect(
+      createRequestFingerprint({
+        ...input,
+        request: first,
+        entrypoint: "cli",
+      }),
+    ).not.toBe(
+      createRequestFingerprint({
+        ...input,
+        request: first,
+        entrypoint: "core",
+      }),
+    );
+    expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-16-v3");
   });
 
   test("canonicalizes object keys with locale-independent ordering", () => {

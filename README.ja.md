@@ -247,16 +247,16 @@ MCP / library caller は型付き `reviewContract`、CLI caller は反復可能�
 }
 ```
 
-non-goals と accepted risks は、caller が明示した user-owned value だけを使用します。repository constraints、plans、diffs、files は untrusted context のままで、review policy を変更できません。non-goals と accepted risks は Critical / High の safety finding を抑制しません。
+non-goals と accepted risks は、caller が明示した user-owned value だけを使用します。repository constraints、plans、diffs、files は untrusted context のままで、review policy を変更できません。non-goals は optional scope を限定しますが、agent由来のpolicy labelでdispositionを変更しません。accepted risksは検証済みfingerprintとの完全一致でのみMedium findingへ影響します。どちらもCritical / Highのsafety findingを抑制しません。
 
 Kyoso は各 finding の evidence quality、対象変更との関係、stable fingerprint、disposition を再計算します。
 
-| Disposition  | 意味                                                                            |
-| ------------ | ------------------------------------------------------------------------------- |
-| `gate`       | 変更が導入または悪化させた、具体的根拠のある Critical / High。                  |
-| `actionable` | 変更が導入または悪化させた、具体的根拠のある Medium。                           |
-| `advisory`   | optional、low-impact、pre-existing、accepted、または根拠不足。                  |
-| `disputed`   | material な根拠または reviewer 間の不一致があり、人の判断を必要とする finding。 |
+| Disposition  | 意味                                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `gate`       | 変更が導入または悪化させた、具体的根拠のある Critical / High。                                                   |
+| `actionable` | 変更が導入または悪化させた、具体的根拠のある Medium。                                                            |
+| `advisory`   | optional / Low / Info、accepted Medium、またはpre-existing・partial・根拠不足のMedium。                          |
+| `disputed`   | refuted、low-confidence、根拠不足、pre-existing、または独立review未解決のCritical / High。人の判断を必要とする。 |
 
 deterministic decision に影響するのは `gate` と `actionable` だけです。`disputed` は completion を incomplete にし、自動修正してはいけません。`coverage` は required/attempted lenses、required/completed perspectives、独立した cross-model review の有無を記録します。`Tests to Add` は具体的な regression test を最大3件に制限し、generic command や広範な test-suite 要求は除外します。
 
@@ -264,7 +264,7 @@ deterministic decision に影響するのは `gate` と `actionable` だけで�
 
 同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
 
-Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。
+Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。typed contractにnon-goalsまたはaccepted risksがありMCPを利用できない場合、CLI fallbackは`focus`しか保持できないためSkillは停止します。
 
 `kyoso setup codex --write --skill-only`はcanonical Skill directoryを既定で`.agents/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.agents/skills/kyoso-review/`へコピーします。
 

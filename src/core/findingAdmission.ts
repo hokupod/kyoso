@@ -34,7 +34,6 @@ export function admitFindings(input: {
 }): KyosoFinding[] {
   const diffLines = changedDiffLines(input.request.diff?.unifiedDiff);
   return input.findings.map((finding) => {
-    const candidatePolicyReasons = [...finding.policyReasons];
     const evidenceRefs = normalizeEvidenceRefs(finding);
     const fingerprint = findingFingerprint(finding, evidenceRefs);
     const evidenceQuality = determineEvidenceQuality(
@@ -53,17 +52,11 @@ export function admitFindings(input: {
     const acceptedRisk = input.request.reviewContract?.acceptedRisks?.find(
       (risk) => risk.findingFingerprint === fingerprint,
     );
-    const matchedNonGoal = input.request.reviewContract?.nonGoals?.find(
-      (nonGoal) =>
-        candidatePolicyReasons.includes(nonGoal) ||
-        candidatePolicyReasons.includes(`non_goal:${nonGoal}`),
-    );
     const policyReasons: string[] = [];
 
     if (acceptedRisk) {
       policyReasons.push(`accepted_risk: ${acceptedRisk.rationale}`);
     }
-    if (matchedNonGoal) policyReasons.push(`non_goal: ${matchedNonGoal}`);
 
     const disposition = determineDisposition({
       finding,
@@ -71,7 +64,6 @@ export function admitFindings(input: {
       changeRelation,
       reviewMode: input.reviewMode,
       acceptedRisk: acceptedRisk !== undefined,
-      matchedNonGoal: matchedNonGoal !== undefined,
       policyReasons,
     });
 
@@ -145,7 +137,6 @@ function determineDisposition(input: {
   changeRelation: ChangeRelation;
   reviewMode: ReviewMode;
   acceptedRisk: boolean;
-  matchedNonGoal: boolean;
   policyReasons: string[];
 }): FindingDisposition {
   const { finding } = input;
@@ -172,8 +163,6 @@ function determineDisposition(input: {
   if (highSeverity) {
     if (input.acceptedRisk)
       input.policyReasons.push("high_risk_not_suppressed");
-    if (input.matchedNonGoal)
-      input.policyReasons.push("high_non_goal_not_suppressed");
     if (finding.verification?.status === "refuted") {
       input.policyReasons.push("verification_refuted");
       return "disputed";
@@ -210,7 +199,6 @@ function determineDisposition(input: {
   }
 
   if (input.acceptedRisk) return "advisory";
-  if (input.matchedNonGoal) return "advisory";
   if (input.changeRelation === "pre_existing") {
     input.policyReasons.push("pre_existing_medium");
     return "advisory";
@@ -357,9 +345,8 @@ function referenceExists(
   const selected = request.selectedFiles?.find(
     (file) => normalizePath(file.path) === normalizePath(reference.path ?? ""),
   );
-  if (selected && lineWithinText(reference.lineStart, selected.content))
-    return true;
-  return diffLines.has(normalizePath(reference.path));
+  if (selected) return lineWithinText(reference.lineStart, selected.content);
+  return overlapsChangedDiff(reference, diffLines);
 }
 
 function overlapsChangedDiff(
@@ -380,19 +367,34 @@ function changedDiffLines(diff: string | undefined): Map<string, Set<number>> {
   const changed = new Map<string, Set<number>>();
   if (!diff) return changed;
   let path: string | undefined;
+  let oldLine: number | undefined;
   let newLine: number | undefined;
   for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      path = undefined;
+      oldLine = undefined;
+      newLine = undefined;
+      continue;
+    }
+    if (line.startsWith("--- ")) continue;
     if (line.startsWith("+++ ")) {
       const rawPath = line.slice(4).split("\t", 1)[0] ?? "";
       path = rawPath === "/dev/null" ? undefined : normalizePath(rawPath);
       continue;
     }
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (hunk) {
-      newLine = Number(hunk[1]);
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
       continue;
     }
-    if (!path || newLine === undefined || line.startsWith("\\")) continue;
+    if (
+      !path ||
+      oldLine === undefined ||
+      newLine === undefined ||
+      line.startsWith("\\")
+    )
+      continue;
     if (line.startsWith("+")) {
       const lines = changed.get(path) ?? new Set<number>();
       lines.add(newLine);
@@ -401,11 +403,10 @@ function changedDiffLines(diff: string | undefined): Map<string, Set<number>> {
       continue;
     }
     if (line.startsWith("-")) {
-      const lines = changed.get(path) ?? new Set<number>();
-      lines.add(newLine);
-      changed.set(path, lines);
+      oldLine += 1;
       continue;
     }
+    oldLine += 1;
     newLine += 1;
   }
   return changed;
@@ -422,10 +423,12 @@ function isGenericTestRecommendation(test: string): boolean {
   const normalized = test.trim().toLowerCase();
   return (
     normalized.length === 0 ||
-    /^(?:add|write|include|increase) (?:more )?(?:unit |integration |regression |security )?tests?\.?$/.test(
+    /^(?:(?:please|we should|you should|we need to|you need to|need to|must) )?(?:add|write|include|increase) (?:more )?(?:unit |integration |regression |security )?tests?\.?$/.test(
       normalized,
     ) ||
-    /^(?:improve|increase) (?:test )?coverage\.?$/.test(normalized) ||
+    /^(?:(?:please|we should|you should|we need to|you need to|need to|must) )?(?:improve|increase) (?:test )?coverage\.?$/.test(
+      normalized,
+    ) ||
     /^(?:run|execute) (?:the )?(?:(?:full|entire|complete) (?:test )?suite|all tests?)\.?$/.test(
       normalized,
     ) ||

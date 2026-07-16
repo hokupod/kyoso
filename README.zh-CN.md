@@ -50,7 +50,7 @@ Kyoso 不会应用代码更改。
 
 Plugin包含Skill和pin到已发布Kyoso CLI精确版本的MCP定义，但不包含CLI本体。MCP首次启动需要访问npm网络。已缓存的package可能可以offline启动，但不作保证。manifest中的`Read` capability仅是显示metadata，不会授予额外filesystem权限。
 
-`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Marketplace Plugin `0.5.0` pin 到 `@kyo-so/cli@0.11.0`。
+`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Marketplace Plugin `0.6.0` pin 到 `@kyo-so/cli@0.12.0`。
 
 Plugin中的Skill将内置的`kyoso` MCP server声明为dependency，因此显式Kyoso review会通过MCP而不是CLI fallback。如果禁用内置Plugin MCP，应将Plugin Skill视为不可用：重新启用MCP，或移除Plugin并改用CLI＋Skill-only。Plugin不是CLI fallback mode。
 

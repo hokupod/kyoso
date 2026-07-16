@@ -50,7 +50,7 @@ backend が 1 つだけ有効な場合は、2 role の ensemble の代わりに 
 
 PluginはSkillと公開済みのKyoso CLIの完全一致versionへpinしたMCP定義を同梱しますが、CLI本体は同梱しません。MCPの初回起動ではnpmへのnetwork accessが必要です。cache済みpackageでoffline起動できる場合はありますが、保証しません。manifestの`Read` capabilityは表示metadataであり、filesystem認可を追加するものではありません。
 
-`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Marketplace Plugin `0.5.0` は `@kyo-so/cli@0.11.0` へpinしています。
+`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Marketplace Plugin `0.6.0` は `@kyo-so/cli@0.12.0` へpinしています。
 
 PluginのSkillは同梱の`kyoso` MCP serverをdependencyとして宣言するため、Kyoso reviewの明示的な実行はCLI fallbackではなくMCPへ誘導されます。同梱Plugin MCPを無効化した場合は、Plugin Skillを利用不可として扱います。MCPを再有効化するか、Pluginを削除してCLI＋Skill-onlyへ移行してください。PluginはCLI fallback modeではありません。
 

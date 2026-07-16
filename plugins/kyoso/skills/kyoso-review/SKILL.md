@@ -39,8 +39,8 @@ Do not use this skill for every coding task. It is intended for deliberate revie
    - If the typed contract contains non-goals or accepted risks and MCP is unavailable, stop and explain that the CLI fallback cannot preserve those trusted fields. A focus-only contract may use the CLI fallback.
    - If the MCP tools are unavailable, use the first available CLI path with JSON output:
      1. An installed `kyoso` executable on `PATH`.
-     2. `npx -y @kyo-so/cli@0.11.0`.
-     3. `bunx @kyo-so/cli@0.11.0`.
+     2. `npx -y @kyo-so/cli@0.12.0`.
+     3. `bunx @kyo-so/cli@0.12.0`.
    - Append the review command to the selected CLI path:
      - `plan_review` -> `plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
      - `security_review` -> `security --goal <text> [--diff <path>] [--file <path>] --json`

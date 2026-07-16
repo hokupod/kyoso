@@ -36,6 +36,8 @@ import type {
   KyosoReviewRequest,
   NetworkMode,
   NormalizedAgentOpinion,
+  ReviewCoverage,
+  ReviewLens,
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
@@ -70,6 +72,18 @@ import {
   type ModelCallReservation,
 } from "./reviewBudget.js";
 import {
+  admitFindings,
+  buildAdmissionOpenQuestions,
+  findingFingerprint,
+  selectRegressionTests,
+} from "./findingAdmission.js";
+import {
+  buildReviewCoverage,
+  isCoverageIncomplete,
+  resolveRequiredLenses,
+  unavailableReviewCoverage,
+} from "./reviewPolicy.js";
+import {
   applyVerificationVerdicts,
   countVerificationStatuses,
   groupVerificationTargetsByVerifier,
@@ -85,6 +99,7 @@ export type RunReviewOptions = LoadConfigOptions & {
   agentManager?: AcpAgentManager;
   env?: NodeJS.ProcessEnv;
   mcpNetworkMode?: NetworkMode;
+  entrypoint?: "cli" | "mcp" | "core";
   traceWriterFactory?: (options: TraceWriterOptions) => TraceWriter;
 };
 
@@ -126,6 +141,7 @@ export async function runReview(
         config,
         roles: resolveAgentRoles(config),
         budget: config.reviewBudget,
+        entrypoint: options.entrypoint,
       });
       const trace = traceWriterFactory({
         enabled: config.audit.enabled,
@@ -153,9 +169,15 @@ export async function runReview(
           traceId,
           startedAt,
           networkMode: config.network.defaultMode,
+          cisaPolicy: config.securityReview.cisaSecureByDesign,
           warning: error.message,
           budgetTracker,
           requestFingerprint,
+          coverage: unavailableReviewCoverage(
+            requestForRecursionFingerprint(request),
+            "recursive invocation blocked before agent execution",
+            config.reviewPolicy.additionalLenses,
+          ),
           finding: {
             id: "KYOSO-1",
             severity: "critical",
@@ -164,6 +186,12 @@ export async function runReview(
             evidence: error.message,
             recommendation:
               "Do not expose Kyoso MCP tools to Kyoso child agents.",
+            disposition: "gate",
+            changeRelation: "unknown",
+            evidenceQuality: "concrete",
+            evidenceRefs: [],
+            policyReasons: ["kyoso_policy", "recursive_invocation"],
+            fingerprint: "",
             sourceAgents: ["kyoso_policy"],
             confidence: "high",
           },
@@ -263,6 +291,64 @@ export async function runReview(
         "NETWORK_MODE_DISABLED",
       );
     }
+
+    const disabledPolicy = disabledReviewPolicy(
+      tool,
+      loaded.config,
+      options.entrypoint,
+    );
+    if (disabledPolicy) {
+      const redactedRequest = requestForRecursionFingerprint(request);
+      const requestFingerprint = createRequestFingerprint({
+        tool,
+        request: redactedRequest,
+        config: loaded.config,
+        roles: resolveAgentRoles(loaded.config),
+        budget: reviewBudget,
+        entrypoint: options.entrypoint,
+      });
+      await writeReviewBudgetPlanned({
+        trace,
+        traceId,
+        budgetTracker,
+        requestFingerprint,
+      });
+      const warning = disabledPolicy.warning;
+      return await buildPolicyBlockResult({
+        tool,
+        trace,
+        traceId,
+        startedAt,
+        configHash: loaded.configHash,
+        networkMode,
+        cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
+        warning,
+        budgetTracker,
+        requestFingerprint,
+        coverage: unavailableReviewCoverage(
+          redactedRequest,
+          disabledPolicy.coverageReason,
+          loaded.config.reviewPolicy.additionalLenses,
+        ),
+        finding: {
+          id: "KYOSO-1",
+          severity: "critical",
+          category: "other",
+          title: disabledPolicy.title,
+          evidence: warning,
+          recommendation: disabledPolicy.recommendation,
+          disposition: "gate",
+          changeRelation: "unknown",
+          evidenceQuality: "concrete",
+          evidenceRefs: [],
+          policyReasons: ["kyoso_policy", disabledPolicy.policyReason],
+          fingerprint: "",
+          sourceAgents: ["kyoso_policy"],
+          confidence: "high",
+        },
+        redactionsApplied: 0,
+      });
+    }
     if (
       networkMode === "unrestricted" &&
       loaded.config.network.warnOnUnrestricted
@@ -295,6 +381,7 @@ export async function runReview(
         config: loaded.config,
         roles: resolveAgentRoles(loaded.config),
         budget: reviewBudget,
+        entrypoint: options.entrypoint,
       });
       await writeReviewBudgetPlanned({
         trace,
@@ -309,6 +396,8 @@ export async function runReview(
         startedAt,
         configHash: loaded.configHash,
         networkMode,
+        cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
+        additionalLenses: loaded.config.reviewPolicy.additionalLenses,
         secretScan,
         warnings,
         budgetTracker,
@@ -336,6 +425,7 @@ export async function runReview(
       config: loaded.config,
       roles: agentRoles,
       budget: reviewBudget,
+      entrypoint: options.entrypoint,
     });
     await writeReviewBudgetPlanned({
       trace,
@@ -406,6 +496,19 @@ export async function runReview(
     );
     const degraded =
       completed.length !== attempted.length || enabledAgents.length === 0;
+    const coverage = buildReviewCoverage({
+      request: built.request,
+      additionalLenses: loaded.config.reviewPolicy.additionalLenses,
+      agentResults: normalizedAgentResults,
+    });
+    if (
+      isCoverageIncomplete(coverage, {
+        multiAgentRequired: loaded.config.reviewPolicy.multiAgentRequired,
+      })
+    ) {
+      budgetTracker.markIncomplete("coverage_incomplete");
+      warnings.push(formatCoverageWarning(coverage, loaded.config));
+    }
     let aggregate = aggregateAgentResults(normalizedAgentResults, {
       reviewMode,
     });
@@ -456,12 +559,28 @@ export async function runReview(
             recommendation: noPrimaryAgents
               ? "Enable at least one primary reviewer before running Kyoso."
               : "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
+            disposition: "gate",
+            changeRelation: "unknown",
+            evidenceQuality: "concrete",
+            evidenceRefs: [],
+            policyReasons: ["kyoso_policy", "coverage_incomplete"],
+            fingerprint: "",
             sourceAgents: ["kyoso_policy"],
             confidence: "high",
           },
         ],
       };
     }
+
+    aggregate = {
+      ...aggregate,
+      findings: admitFindings({
+        tool,
+        request: built.request,
+        findings: aggregate.findings,
+        reviewMode,
+      }),
+    };
 
     await trace.write({
       type: "aggregation_completed",
@@ -493,17 +612,30 @@ export async function runReview(
       );
     }
 
+    aggregate = {
+      ...aggregate,
+      findings: admitFindings({
+        tool,
+        request: built.request,
+        findings: aggregate.findings,
+        reviewMode,
+      }),
+    };
+
     if (
-      aggregate.findings.some(
-        (finding) => finding.verification?.status === "refuted",
-      )
+      aggregate.findings.some((finding) => finding.disposition === "disputed")
     ) {
       budgetTracker.markIncomplete("disputed_finding");
     }
 
+    const cisaPolicy = loaded.config.securityReview.cisaSecureByDesign;
     const cisa =
-      tool === "security_review"
-        ? computeCisaGate(aggregate.findings, normalizedAgentResults)
+      tool === "security_review" && cisaPolicy.enabled
+        ? computeCisaGate(
+            aggregate.findings,
+            normalizedAgentResults,
+            cisaPolicy,
+          )
         : undefined;
     const budgetBeforeJudge = budgetTracker.snapshot();
     const decision =
@@ -512,7 +644,7 @@ export async function runReview(
         : decide({
             tool,
             findings: aggregate.findings,
-            cisa,
+            cisa: cisaPolicy.gate ? cisa : undefined,
             degraded,
             secretScan: { detected: secretScan.detected, blocked: false },
           });
@@ -526,20 +658,24 @@ export async function runReview(
       degraded,
       agentsUsed,
       reviewMode,
+      coverage,
       ...(verificationMode ? { verificationMode } : {}),
       findings: aggregate.findings,
       cisaSecureByDesign: cisa,
       disagreements: aggregate.disagreements,
-      testsToAdd:
-        tool === "security_review" && aggregate.testsToAdd.length === 0
-          ? ["Add security regression tests for the reviewed behavior."]
-          : aggregate.testsToAdd,
+      testsToAdd: selectRegressionTests(aggregate.testsToAdd),
       residualRisks:
         tool === "security_review" && aggregate.residualRisks.length === 0
           ? [
               "No residual risks were reported by completed agents; verify security assumptions before release.",
             ]
           : aggregate.residualRisks,
+      openQuestions: Array.from(
+        new Set([
+          ...aggregate.openQuestions,
+          ...buildAdmissionOpenQuestions(aggregate.findings),
+        ]),
+      ),
       agentOpinions: normalizedAgentResults.map((result) =>
         agentOpinionSummary(
           result,
@@ -854,6 +990,12 @@ async function runFindingVerification(input: {
       input.request,
       group.verifier,
       group.targets.map((target) => target.finding),
+      {
+        requiredLenses: resolveRequiredLenses(
+          input.request,
+          input.config.reviewPolicy.additionalLenses,
+        ),
+      },
     ),
     workspaceDir: input.workspaceDir,
     timeoutMs: Math.min(
@@ -1256,6 +1398,10 @@ async function runAgents(input: {
 
   const startedWrites: Promise<void>[] = [];
   let acceptingStartedEvents = true;
+  const requiredLenses = resolveRequiredLenses(
+    input.request,
+    input.config.reviewPolicy.additionalLenses,
+  );
   const agentInputs = enabledAgents.map((agent) => {
     const agentConfig = input.config.agents[agent];
     const role = agentRoles[agent] ?? agentConfig.role;
@@ -1268,7 +1414,10 @@ async function runAgents(input: {
       agent,
       role,
       tool: input.tool,
-      prompt: buildAgentPrompt(input.tool, input.request, agent, role),
+      prompt: buildAgentPrompt(input.tool, input.request, agent, role, {
+        requiredLenses,
+        cisaEnabled: input.config.securityReview.cisaSecureByDesign.enabled,
+      }),
       workspaceDir: input.workspaceDir,
       timeoutMs: Math.min(
         input.request.options?.maxAgentTimeoutMs ?? Number.POSITIVE_INFINITY,
@@ -1523,6 +1672,81 @@ function resolveAgentRoles(
   return roles;
 }
 
+function isReviewToolEnabled(tool: ReviewTool, config: KyosoConfig): boolean {
+  if (tool === "plan_review") return config.tools.planReview;
+  if (tool === "security_review") return config.tools.securityReview;
+  return config.tools.diffReview;
+}
+
+function disabledReviewPolicy(
+  tool: ReviewTool,
+  config: KyosoConfig,
+  entrypoint: RunReviewOptions["entrypoint"],
+):
+  | {
+      warning: string;
+      title: string;
+      coverageReason: string;
+      policyReason: string;
+      recommendation: string;
+    }
+  | undefined {
+  if (entrypoint === "cli" && !config.entrypoints.cli) {
+    return {
+      warning: "CLI reviews are disabled by user-global entrypoints policy.",
+      title: "CLI review entrypoint disabled by user policy",
+      coverageReason: "CLI entrypoint disabled before agent execution",
+      policyReason: "user_global_entrypoint_disabled",
+      recommendation:
+        "Enable entrypoints.cli in the user-global config before retrying.",
+    };
+  }
+  if (entrypoint === "mcp" && !config.entrypoints.mcp) {
+    return {
+      warning: "MCP reviews are disabled by user-global entrypoints policy.",
+      title: "MCP review entrypoint disabled by user policy",
+      coverageReason: "MCP entrypoint disabled before agent execution",
+      policyReason: "user_global_entrypoint_disabled",
+      recommendation:
+        "Enable entrypoints.mcp in the user-global config before retrying.",
+    };
+  }
+  if (!isReviewToolEnabled(tool, config)) {
+    return {
+      warning: `${tool} is disabled by user-global tools policy.`,
+      title: "Review tool disabled by user policy",
+      coverageReason: "review tool disabled before agent execution",
+      policyReason: "user_global_tool_disabled",
+      recommendation:
+        "Enable the review tool in the user-global config before retrying.",
+    };
+  }
+  return undefined;
+}
+
+function formatCoverageWarning(
+  coverage: ReviewCoverage,
+  config: KyosoConfig,
+): string {
+  const missingPerspectives = coverage.requiredPerspectives.filter(
+    (role) => !coverage.completedPerspectives.includes(role),
+  );
+  const reasons = [
+    ...(coverage.missingLenses.length > 0
+      ? [
+          `missing lenses: ${coverage.missingLenses.map((item) => item.lens).join(", ")}`,
+        ]
+      : []),
+    ...(missingPerspectives.length > 0
+      ? [`missing perspectives: ${missingPerspectives.join(", ")}`]
+      : []),
+    ...(config.reviewPolicy.multiAgentRequired && !coverage.independentReview
+      ? ["independent multi-agent review is required"]
+      : []),
+  ];
+  return `Review coverage is incomplete (${reasons.join("; ")}).`;
+}
+
 function defaultAgentManager(
   config: KyosoConfig,
   parentEnv: NodeJS.ProcessEnv,
@@ -1603,18 +1827,22 @@ async function buildSecretBlockResult(input: {
   startedAt: string;
   configHash?: string;
   networkMode: "model_only" | "unrestricted";
+  cisaPolicy: KyosoConfig["securityReview"]["cisaSecureByDesign"];
+  additionalLenses: ReviewLens[];
   secretScan: SecretScanResult;
   warnings: string[];
   budgetTracker: ReviewBudgetTracker;
   requestFingerprint: string;
 }): Promise<KyosoResult> {
-  const finding = buildSecretFinding(input.secretScan, {
-    id: "KYOSO-1",
-    blocked: true,
-  });
+  const finding = finalizePolicyFinding(
+    buildSecretFinding(input.secretScan, {
+      id: "KYOSO-1",
+      blocked: true,
+    }),
+  );
   const cisa: CisaSecureByDesignResult | undefined =
-    input.tool === "security_review"
-      ? computeCisaGate([finding], [])
+    input.tool === "security_review" && input.cisaPolicy.enabled
+      ? computeCisaGate([finding], [], input.cisaPolicy)
       : undefined;
   const completedAt = new Date().toISOString();
   const budget = input.budgetTracker.snapshot();
@@ -1626,6 +1854,11 @@ async function buildSecretBlockResult(input: {
     degraded: false,
     agentsUsed: [],
     reviewMode: "multi_agent",
+    coverage: unavailableReviewCoverage(
+      input.secretScan.redactedRequest,
+      "secret scan blocked review before agent execution",
+      input.additionalLenses,
+    ),
     findings: [finding],
     cisaSecureByDesign: cisa,
     disagreements: [],
@@ -1641,6 +1874,7 @@ async function buildSecretBlockResult(input: {
             "Secret material was detected in review input; rotate affected credentials if they may have been exposed.",
           ]
         : [],
+    openQuestions: [],
     agentOpinions: [
       {
         agent: "codex",
@@ -1709,6 +1943,12 @@ function buildSecretFinding(
     recommendation: options.blocked
       ? "Remove the secret from the request or source file, rotate it if exposed, then retry with redacted input."
       : "Remove the secret from source input and rotate it if it was exposed; Kyoso continued only with redacted content.",
+    disposition: options.blocked ? "gate" : "actionable",
+    changeRelation: "unknown",
+    evidenceQuality: "concrete",
+    evidenceRefs: [],
+    policyReasons: ["kyoso_policy", "secret_detected"],
+    fingerprint: "",
     sourceAgents: ["kyoso_policy"],
     confidence: "high",
     cisaMapping: [
@@ -1716,6 +1956,14 @@ function buildSecretFinding(
       "secure_by_default",
       "governance",
     ],
+  };
+}
+
+function finalizePolicyFinding(finding: KyosoFinding): KyosoFinding {
+  return {
+    ...finding,
+    fingerprint:
+      finding.fingerprint || findingFingerprint(finding, finding.evidenceRefs),
   };
 }
 
@@ -1733,14 +1981,17 @@ async function buildPolicyBlockResult(input: {
   startedAt: string;
   configHash?: string;
   networkMode: "model_only" | "unrestricted";
+  cisaPolicy: KyosoConfig["securityReview"]["cisaSecureByDesign"];
   warning: string;
   finding: KyosoFinding;
   redactionsApplied: number;
+  coverage: ReviewCoverage;
   budgetTracker: ReviewBudgetTracker;
   requestFingerprint: string;
 }): Promise<KyosoResult> {
   const completedAt = new Date().toISOString();
   const budget = input.budgetTracker.snapshot();
+  const finding = finalizePolicyFinding(input.finding);
   const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
     decision: "block",
     completion: budget.completion,
@@ -1749,10 +2000,11 @@ async function buildPolicyBlockResult(input: {
     degraded: false,
     agentsUsed: [],
     reviewMode: "multi_agent",
-    findings: [input.finding],
+    coverage: input.coverage,
+    findings: [finding],
     cisaSecureByDesign:
-      input.tool === "security_review"
-        ? computeCisaGate([input.finding], [])
+      input.tool === "security_review" && input.cisaPolicy.enabled
+        ? computeCisaGate([finding], [], input.cisaPolicy)
         : undefined,
     disagreements: [],
     testsToAdd:
@@ -1760,6 +2012,7 @@ async function buildPolicyBlockResult(input: {
         ? ["Add coverage for this Kyoso policy block path."]
         : [],
     residualRisks: input.tool === "security_review" ? [input.warning] : [],
+    openQuestions: [],
     agentOpinions: [],
     audit: {
       traceId: input.traceId,

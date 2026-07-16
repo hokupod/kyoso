@@ -111,6 +111,21 @@ export async function runDoctor(options: {
       `  trusted config: ${formatTrustStatus(loaded.configTrustStatus)}`,
     );
   }
+
+  lines.push("", "Review policy");
+  lines.push(
+    `  CLI entrypoint: ${loaded.config.entrypoints.cli ? "enabled" : "disabled"}`,
+    `  MCP entrypoint: ${loaded.config.entrypoints.mcp ? "enabled" : "disabled"}`,
+    `  plan_review: ${loaded.config.tools.planReview ? "enabled" : "disabled"}`,
+    `  security_review: ${loaded.config.tools.securityReview ? "enabled" : "disabled"}`,
+    `  diff_review: ${loaded.config.tools.diffReview ? "enabled" : "disabled"}`,
+    `  additional lenses: ${loaded.config.reviewPolicy.additionalLenses.join(", ") || "none"}`,
+    `  independent multi-agent required: ${loaded.config.reviewPolicy.multiAgentRequired}`,
+    `  first-class client: ${loaded.config.firstClassClient} (metadata only)`,
+    `  mediated web: ${loaded.config.network.mediatedWeb.enabled ? "enabled" : "reserved, disabled"}`,
+    `  audit file contents: ${loaded.config.audit.includeFileContents ? "enabled" : "reserved, disabled"}`,
+    `  verification severity demotion: disabled (allowDemotion=${loaded.config.verification.allowDemotion} is reserved and has no effect)`,
+  );
   if (loaded.configHash) lines.push(`  config hash: ${loaded.configHash}`);
   for (const warning of loaded.warnings) lines.push(`  warning: ${warning}`);
   if (configValidationFallback) {
@@ -260,6 +275,17 @@ export async function runDoctor(options: {
     `  blockOnDetectedSecret: ${loaded.config.secrets.blockOnDetectedSecret}`,
   );
   lines.push(`  network default: ${loaded.config.network.defaultMode}`);
+  const cisaPolicy = loaded.config.securityReview.cisaSecureByDesign;
+  lines.push(
+    `  CISA enabled: ${cisaPolicy.enabled}`,
+    `  CISA gate: ${cisaPolicy.gate}`,
+    `  CISA dimensions: ${
+      Object.entries(cisaPolicy.dimensions)
+        .filter(([, enabled]) => enabled)
+        .map(([dimension]) => dimension)
+        .join(", ") || "none"
+    }`,
+  );
 
   lines.push("", "Audit");
   lines.push(`  directory: ${loaded.config.audit.directory}`);
@@ -347,6 +373,20 @@ function doctorConfigValidationFallback(
       affectedPath: sanitizeTextForDisplay(error.projectPath),
       trustedConfigExecution:
         error.layer === "project_ts" ? "authorization" : undefined,
+    };
+  }
+
+  if (
+    error instanceof Error &&
+    /Project TOML config .*tools\.(?:planReview|securityReview|diffReview)/s.test(
+      error.message,
+    )
+  ) {
+    return {
+      warning:
+        "project TOML contains tools.* settings that are now user-global-only. Doctor is using safe defaults for diagnostics.",
+      hint: "move tools.planReview, tools.securityReview, and tools.diffReview to the user-global config, then run `kyoso doctor` again",
+      affectedLayer: "project_toml",
     };
   }
 

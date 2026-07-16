@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { MAX_AGENT_OUTPUT_BYTES } from "../core/constants.js";
+import { REVIEW_LENSES } from "../core/reviewPolicy.js";
 
 export const CODEX_OPENROUTER_PROVIDER = "openrouter" as const;
 export const CODEX_DEFAULT_PROVIDER = "default" as const;
@@ -84,11 +85,15 @@ export const kyosoConfigSchema = z
       mcp: z.boolean(),
       cli: z.boolean(),
     }),
-    firstClassClient: z.string(),
+    firstClassClient: z.literal("codex"),
     tools: z.object({
       planReview: z.boolean(),
       securityReview: z.boolean(),
       diffReview: z.boolean(),
+    }),
+    reviewPolicy: z.object({
+      additionalLenses: z.array(z.enum(REVIEW_LENSES)),
+      multiAgentRequired: z.boolean(),
     }),
     agents: z.object({
       codex: codexAgentSchema,
@@ -97,7 +102,7 @@ export const kyosoConfigSchema = z
     workspace: z.object({
       mode: z.literal("temp_snapshot"),
       root: z.string(),
-      readOnly: z.boolean(),
+      readOnly: z.literal(true),
       maxContextBytes: z.number().int().positive(),
       maxDiffBytes: z.number().int().positive(),
       deny: z.array(z.string()),
@@ -111,7 +116,7 @@ export const kyosoConfigSchema = z
       defaultMode: z.enum(["model_only", "unrestricted"]),
       allowUnrestricted: z.boolean(),
       warnOnUnrestricted: z.boolean(),
-      mediatedWeb: z.object({ enabled: z.boolean() }),
+      mediatedWeb: z.object({ enabled: z.literal(false) }),
     }),
     securityReview: z.object({
       cisaSecureByDesign: z.object({
@@ -142,7 +147,7 @@ export const kyosoConfigSchema = z
       format: z.literal("jsonl"),
       directory: z.string(),
       includeRawAgentOutput: z.boolean(),
-      includeFileContents: z.boolean(),
+      includeFileContents: z.literal(false),
     }),
   })
   .superRefine((config, context) => {
@@ -188,6 +193,8 @@ export const kyosoConfigKnownLeafPaths = [
   "tools.planReview",
   "tools.securityReview",
   "tools.diffReview",
+  "reviewPolicy.additionalLenses",
+  "reviewPolicy.multiAgentRequired",
   ...agentConfigLeafPaths("codex"),
   ...agentConfigLeafPaths("claude"),
   "workspace.mode",
@@ -239,6 +246,7 @@ export const kyosoConfigSecuritySensitivePrefixes = [
   "audit",
   "judge",
   "network",
+  "reviewPolicy",
   "secrets",
   "securityReview",
   "verification",

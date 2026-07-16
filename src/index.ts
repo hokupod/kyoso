@@ -1,7 +1,11 @@
 export { defineConfig } from "./config/defineConfig.js";
 export { runReview } from "./core/runReview.js";
 export type {
+  ChangeRelation,
   CisaSecureByDesignResult,
+  EvidenceQuality,
+  EvidenceRef,
+  FindingDisposition,
   GateStatus,
   KyosoDecision,
   KyosoFinding,
@@ -12,7 +16,10 @@ export type {
   ReviewBudget,
   ReviewBudgetRequest,
   ReviewCompletion,
+  ReviewContract,
+  ReviewCoverage,
   ReviewExecutionBudget,
+  ReviewLens,
   ReviewModelCallAudit,
   ReviewTool,
 } from "./core/types.js";

@@ -22,6 +22,7 @@ describe("e2e surfaces", () => {
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
     expect(stdout.match(/\[--set <key>=<value>\]\.\.\./g)).toHaveLength(3);
+    expect(stdout.match(/\[--focus <lens>\]\.\.\./g)).toHaveLength(3);
     expect(stdout).toContain(
       "[--set <key>=<value>]... [--json] [--allow-secret-redaction]",
     );
@@ -29,6 +30,73 @@ describe("e2e surfaces", () => {
       "setup codex|claude-code --skill-only [--write] [--global] [--force]",
     );
     expect(stdout).toContain("[--with-openrouter]");
+  });
+
+  test("CLI maps repeatable typed focus into review coverage", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-focus-cli-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-focus-home-"));
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review focused plan",
+        "--focus",
+        "performance",
+        "--focus",
+        "documentation",
+        "--ignore-config",
+        "--json",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_STATE_HOME: join(home, "state"),
+          KYOSO_TEST_FAKE_AGENTS: "1",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const result = JSON.parse(stdout);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    expect(result.coverage.requiredLenses).toEqual(
+      expect.arrayContaining(["performance", "documentation"]),
+    );
+  });
+
+  test("CLI rejects an unknown focus lens", async () => {
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "run",
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "review",
+        "--focus",
+        "security",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stderr, exitCode] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Invalid --focus value "security".');
   });
 
   test("CLI parses --skill-only without producing an MCP step", async () => {

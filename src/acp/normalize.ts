@@ -1,12 +1,17 @@
 import type {
   AgentName,
   AgentRole,
+  ChangeRelation,
   CisaSecureByDesignResult,
+  EvidenceQuality,
+  EvidenceRef,
+  FindingDisposition,
   FindingCategory,
   GateStatus,
   NormalizedAgentOpinion,
   Severity,
 } from "../core/types.js";
+import { selectRegressionTests } from "../core/findingAdmission.js";
 import { sanitizeText } from "../security/sanitizeText.js";
 
 const severities: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -28,6 +33,25 @@ const categories: FindingCategory[] = [
   "cisa_secure_by_design",
   "other",
 ];
+const dispositions: FindingDisposition[] = [
+  "gate",
+  "actionable",
+  "advisory",
+  "disputed",
+];
+const changeRelations: ChangeRelation[] = [
+  "introduced",
+  "worsened",
+  "pre_existing",
+  "unknown",
+];
+const evidenceQualities: EvidenceQuality[] = [
+  "concrete",
+  "partial",
+  "insufficient",
+];
+const MAX_EVIDENCE_REFS = 20;
+const MAX_EVIDENCE_LINE = 1_000_000;
 
 export function normalizeAgentOutput(
   agent: AgentName,
@@ -61,6 +85,16 @@ export function normalizeAgentOutput(
               finding.recommendation,
               "Review manually.",
             ),
+            disposition: isDisposition(finding.disposition)
+              ? finding.disposition
+              : undefined,
+            changeRelation: isChangeRelation(finding.changeRelation)
+              ? finding.changeRelation
+              : undefined,
+            evidenceQuality: isEvidenceQuality(finding.evidenceQuality)
+              ? finding.evidenceQuality
+              : undefined,
+            evidenceRefs: normalizeEvidenceRefs(finding.evidenceRefs),
             files: normalizeFindingFiles(finding.files),
             confidence: isConfidence(finding.confidence)
               ? finding.confidence
@@ -68,13 +102,8 @@ export function normalizeAgentOutput(
             cisaMapping: normalizeStringList(finding.cisaMapping),
           }))
         : [],
-      testsToAdd: normalizeStringList(parsed.testsToAdd),
-      residualRisks: Array.from(
-        new Set([
-          ...normalizeStringList(parsed.residualRisks),
-          ...normalizeStringList(parsed.openQuestions),
-        ]),
-      ),
+      testsToAdd: selectRegressionTests(normalizeStringList(parsed.testsToAdd)),
+      residualRisks: normalizeStringList(parsed.residualRisks),
       openQuestions: normalizeStringList(parsed.openQuestions),
       cisaSecureByDesign: normalizeCisaSecureByDesign(
         parsed.cisaSecureByDesign,
@@ -197,6 +226,27 @@ function isConfidence(value: unknown): value is "high" | "medium" | "low" {
   return value === "high" || value === "medium" || value === "low";
 }
 
+function isDisposition(value: unknown): value is FindingDisposition {
+  return (
+    typeof value === "string" &&
+    dispositions.includes(value as FindingDisposition)
+  );
+}
+
+function isChangeRelation(value: unknown): value is ChangeRelation {
+  return (
+    typeof value === "string" &&
+    changeRelations.includes(value as ChangeRelation)
+  );
+}
+
+function isEvidenceQuality(value: unknown): value is EvidenceQuality {
+  return (
+    typeof value === "string" &&
+    evidenceQualities.includes(value as EvidenceQuality)
+  );
+}
+
 function normalizeStringList(value: unknown): string[] {
   return Array.isArray(value)
     ? value
@@ -239,8 +289,43 @@ function normalizeFindingFiles(
   return files.length > 0 ? files : undefined;
 }
 
+function normalizeEvidenceRefs(value: unknown): EvidenceRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const references = value.slice(0, MAX_EVIDENCE_REFS).flatMap((item) => {
+    if (
+      !isRecord(item) ||
+      (item.kind !== "file" &&
+        item.kind !== "diff_hunk" &&
+        item.kind !== "plan_clause")
+    ) {
+      return [];
+    }
+    const reference: EvidenceRef = { kind: item.kind };
+    if (typeof item.path === "string" && item.path.trim().length > 0) {
+      reference.path = sanitizeText(item.path);
+    }
+    const lineStart = normalizeLineNumber(item.lineStart);
+    const lineEnd = normalizeLineNumber(item.lineEnd);
+    if (lineStart !== undefined) reference.lineStart = lineStart;
+    if (
+      lineStart !== undefined &&
+      lineEnd !== undefined &&
+      lineEnd >= lineStart
+    )
+      reference.lineEnd = lineEnd;
+    if (typeof item.label === "string" && item.label.trim().length > 0) {
+      reference.label = sanitizeText(item.label);
+    }
+    return [reference];
+  });
+  return references.length > 0 ? references : undefined;
+}
+
 function normalizeLineNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_EVIDENCE_LINE
     ? value
     : undefined;
 }

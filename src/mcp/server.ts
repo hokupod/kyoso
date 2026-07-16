@@ -14,6 +14,7 @@ export function listKyosoMcpTools(): string[] {
 }
 
 export function createMcpServer(options: RunReviewOptions = {}): McpServer {
+  const reviewOptions: RunReviewOptions = { ...options, entrypoint: "mcp" };
   const server = new McpServer(
     { name: "kyoso", version: KYOSO_VERSION },
     { instructions: KYOSO_MCP_INSTRUCTIONS },
@@ -28,7 +29,11 @@ export function createMcpServer(options: RunReviewOptions = {}): McpServer {
     },
     async (request) =>
       formatMcpResponse(
-        await runReview("plan_review", request as KyosoReviewRequest, options),
+        await runReview(
+          "plan_review",
+          request as KyosoReviewRequest,
+          reviewOptions,
+        ),
       ),
   );
 
@@ -44,7 +49,7 @@ export function createMcpServer(options: RunReviewOptions = {}): McpServer {
         await runReview(
           "security_review",
           request as KyosoReviewRequest,
-          options,
+          reviewOptions,
         ),
       ),
   );
@@ -58,7 +63,11 @@ export function createMcpServer(options: RunReviewOptions = {}): McpServer {
     },
     async (request) =>
       formatMcpResponse(
-        await runReview("diff_review", request as KyosoReviewRequest, options),
+        await runReview(
+          "diff_review",
+          request as KyosoReviewRequest,
+          reviewOptions,
+        ),
       ),
   );
 

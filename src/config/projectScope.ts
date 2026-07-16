@@ -4,6 +4,9 @@ const PROJECT_GLOBAL_ONLY_MESSAGE =
 const PROJECT_GLOBAL_ONLY_REASONS: Record<string, string> = {
   "agents.codex.allowProjectProvider":
     "must be a user-global exact project-directory allowlist",
+  "tools.planReview": "must be a user-global tool availability policy",
+  "tools.securityReview": "must be a user-global tool availability policy",
+  "tools.diffReview": "must be a user-global tool availability policy",
 };
 
 type ProjectScopeOptions = {
@@ -95,19 +98,15 @@ function projectGlobalOnlyReason(path: string[]): string | undefined {
   if (path[0] === "reviewBudget") {
     return "must be a user-global review budget ceiling";
   }
+  if (path[0] === "reviewPolicy") {
+    return "must be a user-global review policy";
+  }
   return undefined;
 }
 
 function isAllowedProjectPath(path: string[]): boolean {
   const [top, second, third, fourth] = path;
   if (isAllowedConfigOverridePath(path)) return true;
-  if (
-    top === "tools" &&
-    path.length === 2 &&
-    ["planReview", "securityReview", "diffReview"].includes(second ?? "")
-  ) {
-    return true;
-  }
   if (
     top === "workspace" &&
     path.length === 2 &&

@@ -1,7 +1,27 @@
 import * as z from "zod/v4";
+import { REVIEW_LENSES } from "../core/reviewPolicy.js";
 
 export const kyosoReviewRequestSchema = z.object({
   goal: z.string().min(1),
+  reviewContract: z
+    .object({
+      focus: z
+        .array(z.enum(REVIEW_LENSES))
+        .max(REVIEW_LENSES.length)
+        .optional(),
+      nonGoals: z.array(z.string().min(1).max(500)).max(20).optional(),
+      acceptedRisks: z
+        .array(
+          z.object({
+            findingFingerprint: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+            rationale: z.string().min(1).max(500),
+          }),
+        )
+        .max(20)
+        .optional(),
+    })
+    .strict()
+    .optional(),
   repoSummary: z.string().optional(),
   currentPlan: z.string().optional(),
   selectedFiles: z

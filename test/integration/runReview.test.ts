@@ -85,6 +85,163 @@ describe("runReview", () => {
     expect(manager.calls[0]?.timeoutMs).toBe(1_234);
   });
 
+  test("rejects a user-global disabled tool before agent execution", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      tools: { ...baseConfig.tools, planReview: false },
+    };
+    const manager = new FakeAgentManager();
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review disabled tool" },
+      { cwd, config, agentManager: manager },
+    );
+
+    expect(manager.calls).toHaveLength(0);
+    expect(result.decision).toBe("block");
+    expect(result.findings[0]?.policyReasons).toContain(
+      "user_global_tool_disabled",
+    );
+    expect(result.coverage.missingLenses.length).toBeGreaterThan(0);
+  });
+
+  test("rejects a user-global disabled entrypoint before agent execution", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      entrypoints: { ...baseConfig.entrypoints, cli: false },
+    };
+    const manager = new FakeAgentManager();
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review disabled CLI" },
+      { cwd, config, entrypoint: "cli", agentManager: manager },
+    );
+
+    expect(manager.calls).toHaveLength(0);
+    expect(result.findings[0]?.policyReasons).toContain(
+      "user_global_entrypoint_disabled",
+    );
+  });
+
+  test("enforces user-global independent multi-agent policy", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      reviewPolicy: {
+        ...baseConfig.reviewPolicy,
+        multiAgentRequired: true,
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      { cwd, config, agentManager: new FakeAgentManager() },
+    );
+
+    expect(result.coverage.completedPerspectives).toEqual([
+      "implementation_reviewer",
+      "architecture_security_reviewer",
+    ]);
+    expect(result.coverage.independentReview).toBe(false);
+    expect(result.completion.reasons).toContain("coverage_incomplete");
+    expect(result.decision).toBe("block");
+  });
+
+  test("enforces CISA enabled and gate settings at runtime", async () => {
+    const cwd = await tempCwd();
+    const rawText = JSON.stringify({
+      summary: "auth review",
+      findings: [
+        {
+          severity: "high",
+          category: "authz",
+          title: "Tenant boundary bypass",
+          evidence:
+            "The plan trusts a request tenant id and permits cross-tenant reads.",
+          recommendation:
+            "Derive the tenant id from the authenticated session before loading data.",
+          changeRelation: "introduced",
+          evidenceRefs: [
+            { kind: "plan_clause", label: "Tenant boundary plan" },
+          ],
+          confidence: "high",
+        },
+      ],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    });
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const gateDisabled: KyosoConfig = {
+      ...baseConfig,
+      securityReview: {
+        cisaSecureByDesign: {
+          ...baseConfig.securityReview.cisaSecureByDesign,
+          gate: false,
+        },
+      },
+    };
+    const cisaDisabled: KyosoConfig = {
+      ...baseConfig,
+      securityReview: {
+        cisaSecureByDesign: {
+          ...baseConfig.securityReview.cisaSecureByDesign,
+          enabled: false,
+        },
+      },
+    };
+
+    const displayedOnly = await runReview(
+      "security_review",
+      { goal: "review auth", currentPlan: "Tenant boundary plan" },
+      { cwd, config: gateDisabled, agentManager: rawTextAgentManager(rawText) },
+    );
+    const disabled = await runReview(
+      "security_review",
+      { goal: "review auth", currentPlan: "Tenant boundary plan" },
+      {
+        cwd: await tempCwd(),
+        config: cisaDisabled,
+        agentManager: rawTextAgentManager(rawText),
+      },
+    );
+    const disabledPreflight = await runReview(
+      "security_review",
+      {
+        goal: "review secret",
+        selectedFiles: [
+          {
+            path: "src/config.ts",
+            content:
+              "export const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz123456';",
+          },
+        ],
+      },
+      {
+        cwd: await tempCwd(),
+        config: cisaDisabled,
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    expect(displayedOnly.cisaSecureByDesign?.customerSecurityOutcomes).toBe(
+      "fail",
+    );
+    expect(displayedOnly.decision).toBe("approve_with_changes");
+    expect(disabled.cisaSecureByDesign).toBeUndefined();
+    expect(disabled.decision).toBe("approve_with_changes");
+    expect(disabledPreflight.cisaSecureByDesign).toBeUndefined();
+    expect(disabledPreflight.decision).toBe("block");
+  });
+
   test("secret detection blocks before agents run", async () => {
     const cwd = await tempCwd();
     const manager = new FakeAgentManager();
@@ -486,6 +643,11 @@ describe("runReview", () => {
     expect(result.agentsUsed).toEqual(["claude"]);
     expect(result.audit.agentsUsed).toEqual(["claude"]);
     expect(result.agentOpinions[0]?.role).toBe("combined_reviewer");
+    expect(result.coverage.completedPerspectives).toEqual([
+      "implementation_reviewer",
+      "architecture_security_reviewer",
+    ]);
+    expect(result.coverage.independentReview).toBe(false);
     expect(result.disagreements).toEqual([]);
     expect(result.summaryMarkdown).toContain("single-agent");
     expect(result.summaryMarkdown).toContain("cross-model verification");
@@ -599,6 +761,7 @@ describe("runReview", () => {
     ]);
     expect(result.reviewMode).toBe("multi_agent");
     expect(result.agentsUsed).toEqual(["codex", "claude"]);
+    expect(result.coverage.independentReview).toBe(true);
     expect(result.summaryMarkdown).toContain("**Review mode:** multi-agent");
     expect(result.summaryMarkdown).toContain("- None.");
     expect(result.summaryMarkdown).not.toContain("N/A - single-agent review");
@@ -735,7 +898,7 @@ model = "openai/o4-mini"
     );
   });
 
-  test("security review includes CISA gate and tests", async () => {
+  test("security review keeps raw CISA status advisory and bounds tests", async () => {
     const cwd = await tempCwd();
     const result = await runReview(
       "security_review",
@@ -746,10 +909,11 @@ model = "openai/o4-mini"
         agentManager: new FakeAgentManager(),
       },
     );
-    expect(result.cisaSecureByDesign?.governance).toBe("warn");
+    expect(result.cisaSecureByDesign?.governance).toBe("pass");
     expect(result.testsToAdd.length).toBeGreaterThan(0);
     expect(result.residualRisks.length).toBeGreaterThan(0);
     expect(result.findings[0]?.crossValidation).toBe("single_source");
+    expect(result.findings[0]?.disposition).toBe("advisory");
     expect(
       (JSON.parse(JSON.stringify(result)) as typeof result).findings[0]
         ?.crossValidation,
@@ -860,8 +1024,8 @@ model = "openai/o4-mini"
         verifierRawText: verifierRaw("KYOSO-1", "uncertain", "unclear"),
         expectedStatus: "uncertain",
         expectedConfidence: "medium",
-        expectedDecision: "approve_with_changes",
-        expectedCompletion: "complete",
+        expectedDecision: "block",
+        expectedCompletion: "incomplete",
       },
       {
         name: "malformed",
@@ -994,7 +1158,7 @@ model = "openai/o4-mini"
     expect(result.findings[0]?.verification?.status).toBe("refuted");
   });
 
-  test("raw agent JSON CISA gate participates in decision", async () => {
+  test("raw agent JSON CISA status remains advisory without findings", async () => {
     const cwd = await tempCwd();
     const rawText = JSON.stringify({
       summary: "raw cisa failure",
@@ -1019,8 +1183,11 @@ model = "openai/o4-mini"
       },
     );
 
-    expect(result.decision).toBe("block");
-    expect(result.cisaSecureByDesign?.customerSecurityOutcomes).toBe("fail");
+    expect(result.decision).toBe("approve");
+    expect(result.cisaSecureByDesign?.customerSecurityOutcomes).toBe("pass");
+    expect(result.cisaSecureByDesign?.notes.join("\n")).toContain(
+      "Agent-reported advisory",
+    );
     expect(result.testsToAdd).toContain("raw agent security test");
     expect(result.residualRisks).toContain("raw agent residual risk");
     expect(result.agentOpinions[0]?.summary).toBe("raw cisa failure");
@@ -1038,6 +1205,10 @@ model = "openai/o4-mini"
           title: "Tenant boundary bypass",
           evidence: "tenant id is trusted from client input",
           recommendation: "derive tenant id from the authenticated session",
+          changeRelation: "introduced",
+          evidenceRefs: [
+            { kind: "plan_clause", label: "Tenant boundary plan" },
+          ],
           confidence: "high",
         },
       ],
@@ -1081,7 +1252,7 @@ model = "openai/o4-mini"
     try {
       const result = await runReview(
         "plan_review",
-        { goal: "review plan" },
+        { goal: "review plan", currentPlan: "Tenant boundary plan" },
         {
           cwd,
           config,
@@ -1118,6 +1289,10 @@ model = "openai/o4-mini"
           title: "Tenant boundary bypass",
           evidence: hostileEvidence,
           recommendation: "derive tenant id from the authenticated session",
+          changeRelation: "introduced",
+          evidenceRefs: [
+            { kind: "plan_clause", label: "Tenant boundary plan" },
+          ],
           confidence: "high",
         },
       ],
@@ -1127,7 +1302,7 @@ model = "openai/o4-mini"
     });
     const baseline = await runReview(
       "plan_review",
-      { goal: "review plan" },
+      { goal: "review plan", currentPlan: "Tenant boundary plan" },
       {
         cwd,
         config: kyosoConfigSchema.parse(defaultConfig),
@@ -1184,7 +1359,7 @@ model = "openai/o4-mini"
     try {
       const result = await runReview(
         "plan_review",
-        { goal: "review plan" },
+        { goal: "review plan", currentPlan: "Tenant boundary plan" },
         {
           cwd,
           config,
@@ -1220,9 +1395,10 @@ model = "openai/o4-mini"
       expect(result.summaryMarkdown).toContain("## Cross-Model Analysis");
       expect(result.summaryMarkdown).toContain("Provider: openai");
       expect(result.summaryMarkdown).toContain(
-        "Blind spots (advisory; does not affect the decision):",
+        "Potential coverage gaps (advisory; based only on reviewer output):",
       );
       expect(prompt).toContain("agentFindings");
+      expect(prompt).toContain("The raw goal and diff are not provided");
       expect(
         agentFindings[0]?.findings[0]?.evidence.length,
       ).toBeLessThanOrEqual(300);
@@ -1792,6 +1968,10 @@ model = "openai/o4-mini"
       },
     );
     expect(result.degraded).toBe(true);
+    expect(result.coverage.completedPerspectives).toEqual([
+      "implementation_reviewer",
+    ]);
+    expect(result.completion.reasons).toContain("coverage_incomplete");
     expect(
       result.agentOpinions.find((opinion) => opinion.agent === "claude")
         ?.status,
@@ -2651,6 +2831,8 @@ function highFinding(
     title: "Tenant boundary bypass",
     evidence: "tenant id is trusted from client input",
     recommendation: "derive tenant id from the authenticated session",
+    changeRelation: "introduced",
+    evidenceRefs: [{ kind: "plan_clause", label: "do it" }],
     confidence: "medium",
     ...overrides,
   };

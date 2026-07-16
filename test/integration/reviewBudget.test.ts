@@ -117,6 +117,7 @@ describe("review execution budget", () => {
       "plan_review",
       {
         goal: "review plan",
+        currentPlan: "Tenant boundary plan",
         options: { reviewBudget: { maxModelCalls: 3 } },
       },
       { cwd: await tempCwd(), config, agentManager: manager },
@@ -147,6 +148,7 @@ describe("review execution budget", () => {
       "plan_review",
       {
         goal: "review plan",
+        currentPlan: "Tenant boundary plan",
         options: { reviewBudget: { maxModelCalls: 2 } },
       },
       { cwd: await tempCwd(), config, agentManager: manager },
@@ -161,7 +163,11 @@ describe("review execution budget", () => {
       decision: "block",
       completion: {
         status: "incomplete",
-        reasons: ["coverage_incomplete", "model_call_budget"],
+        reasons: [
+          "coverage_incomplete",
+          "disputed_finding",
+          "model_call_budget",
+        ],
         retryable: false,
       },
     });
@@ -176,7 +182,7 @@ describe("review execution budget", () => {
 
     const result = await runReview(
       "plan_review",
-      { goal: "review plan" },
+      { goal: "review plan", currentPlan: "Tenant boundary plan" },
       { cwd: await tempCwd(), config, agentManager: manager },
     );
 
@@ -189,7 +195,11 @@ describe("review execution budget", () => {
       decision: "block",
       completion: {
         status: "incomplete",
-        reasons: ["coverage_incomplete", "token_usage_unknown"],
+        reasons: [
+          "coverage_incomplete",
+          "disputed_finding",
+          "token_usage_unknown",
+        ],
         retryable: false,
       },
     });
@@ -407,6 +417,10 @@ class ScriptedBudgetManager extends BaseAcpAgentManager {
                 title: "Tenant boundary bypass",
                 evidence: "tenant id is trusted from input",
                 recommendation: "derive tenant from session",
+                changeRelation: "introduced",
+                evidenceRefs: [
+                  { kind: "plan_clause", label: "Tenant boundary plan" },
+                ],
                 confidence: "medium",
               },
             ]

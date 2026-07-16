@@ -10,6 +10,47 @@ export type JudgeProvider = "auto" | "openai" | "anthropic" | "none";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
+export type ReviewLens =
+  | "correctness"
+  | "regression"
+  | "security_boundaries"
+  | "secrets_and_injection"
+  | "data_integrity"
+  | "public_contract"
+  | "supply_chain"
+  | "privacy"
+  | "resource_amplification"
+  | "architecture"
+  | "performance"
+  | "tests"
+  | "documentation"
+  | "maintainability";
+
+export type ReviewContract = {
+  focus?: ReviewLens[];
+  nonGoals?: string[];
+  acceptedRisks?: Array<{
+    findingFingerprint: string;
+    rationale: string;
+  }>;
+};
+
+export type FindingDisposition =
+  "gate" | "actionable" | "advisory" | "disputed";
+
+export type ChangeRelation =
+  "introduced" | "worsened" | "pre_existing" | "unknown";
+
+export type EvidenceQuality = "concrete" | "partial" | "insufficient";
+
+export type EvidenceRef = {
+  kind: "file" | "diff_hunk" | "plan_clause";
+  path?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  label?: string;
+};
+
 export type ReviewBudget = {
   maxModelCalls: number;
   maxTotalWallTimeMs: number;
@@ -70,6 +111,7 @@ export type CisaDimension =
 
 export type KyosoReviewRequest = {
   goal: string;
+  reviewContract?: ReviewContract;
   repoSummary?: string;
   currentPlan?: string;
   selectedFiles?: Array<{
@@ -106,6 +148,12 @@ export type KyosoFinding = {
   title: string;
   evidence: string;
   recommendation: string;
+  disposition: FindingDisposition;
+  changeRelation: ChangeRelation;
+  evidenceQuality: EvidenceQuality;
+  evidenceRefs: EvidenceRef[];
+  policyReasons: string[];
+  fingerprint: string;
   files?: Array<{
     path: string;
     lineStart?: number;
@@ -123,6 +171,8 @@ export type KyosoFinding = {
 };
 
 export type CisaSecureByDesignResult = {
+  gateEnabled: boolean;
+  enabledDimensions: CisaDimension[];
   customerSecurityOutcomes: GateStatus;
   secureByDefault: GateStatus;
   transparencyAndAccountability: GateStatus;
@@ -140,6 +190,15 @@ export type AgentRole =
 
 export type ReviewMode = "multi_agent" | "single_agent";
 
+export type ReviewCoverage = {
+  requiredLenses: ReviewLens[];
+  attemptedLenses: ReviewLens[];
+  missingLenses: Array<{ lens: ReviewLens; reason: string }>;
+  requiredPerspectives: AgentRole[];
+  completedPerspectives: AgentRole[];
+  independentReview: boolean;
+};
+
 export type NormalizedAgentOpinion = {
   agent: AgentName;
   role: string;
@@ -150,6 +209,10 @@ export type NormalizedAgentOpinion = {
     title: string;
     evidence: string;
     recommendation: string;
+    disposition?: FindingDisposition;
+    changeRelation?: ChangeRelation;
+    evidenceQuality?: EvidenceQuality;
+    evidenceRefs?: EvidenceRef[];
     files?: Array<{ path: string; lineStart?: number; lineEnd?: number }>;
     confidence: "high" | "medium" | "low";
     cisaMapping?: string[];
@@ -249,6 +312,7 @@ export type KyosoResult = {
   degraded: boolean;
   agentsUsed: AgentName[];
   reviewMode: ReviewMode;
+  coverage: ReviewCoverage;
   verificationMode?: "cross_agent" | "skipped_single_agent";
   summaryMarkdown: string;
   findings: KyosoFinding[];
@@ -264,6 +328,7 @@ export type KyosoResult = {
   crossModelAnalysis?: CrossModelAnalysis;
   testsToAdd: string[];
   residualRisks: string[];
+  openQuestions: string[];
   agentOpinions: Array<{
     agent: AgentName;
     role: string;

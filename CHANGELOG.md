@@ -7,8 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Typed review contracts with caller-owned focus, non-goals, accepted-risk
+  fingerprints, a non-removable safety floor, conditional lenses, and explicit
+  review coverage across required perspectives.
+- Deterministic finding admission metadata for disposition, change relation,
+  evidence quality/references, policy reasons, stable fingerprints, and open
+  questions.
+
 ### Changed
 
+- Base decisions on admitted `gate` and `actionable` findings. Material
+  disagreement is now `disputed` and makes review completion incomplete;
+  advisory and pre-existing findings no longer become automatic change work.
+- Derive CISA gate dimensions from admitted findings while retaining agent
+  CISA notes as advisory evidence, and enforce the configured enabled, gate, and
+  dimension switches.
+- Move `tools.*` and `reviewPolicy.*` to user-global policy, enforce disabled
+  entrypoints/tools before agent startup, and report fixed/reserved config
+  values explicitly.
+- Limit formal regression recommendations to three concrete, deduplicated
+  tests and update the bundled Skill to stop on missing coverage or disputed
+  findings without auto-fixing advisory output.
+- Keep agent-supplied policy labels out of deterministic admission. Non-goals
+  bound optional scope only, while accepted Medium risks require an exact
+  validated finding fingerprint.
 - Promote the Marketplace Plugin to `0.5.0` and pin its Codex and Claude Code
   MCP definitions to `@kyo-so/cli@0.11.0`, delivering the review execution
   budget and two-pass stop contract through the Plugin runtime.

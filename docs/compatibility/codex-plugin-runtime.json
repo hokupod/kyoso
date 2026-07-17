@@ -3,9 +3,9 @@
   "minimumSupportedCodexVersion": "0.144.0-alpha.4",
   "expectedContract": {
     "distribution": {
-      "pluginVersion": "0.6.0",
+      "pluginVersion": "0.7.0",
       "mcpCommand": "npx",
-      "mcpPackagePin": "@kyo-so/cli@0.12.0"
+      "mcpPackagePin": "@kyo-so/cli@0.13.0"
     },
     "marketplace": {
       "name": "kyoso",

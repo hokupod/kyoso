@@ -457,10 +457,16 @@ function summarizeDistributionFixture() {
   const mcp = readJson(
     join(repositoryRoot, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
   );
+  const packageArgument = mcp.kyoso.args.find((argument) =>
+    argument.startsWith("--package="),
+  );
+  if (!packageArgument) {
+    throw new Error("Plugin MCP package argument was not found");
+  }
   return {
     pluginVersion: manifest.version,
     mcpCommand: mcp.kyoso.command,
-    mcpPackagePin: mcp.kyoso.args[1],
+    mcpPackagePin: packageArgument.slice("--package=".length),
   };
 }
 

@@ -54,7 +54,7 @@ describe("Codex Plugin fixture", () => {
     expect(mcp).toEqual({
       kyoso: {
         command: "npx",
-        args: ["-y", distribution.mcpPackagePin, "mcp"],
+        args: ["-y", `--package=${distribution.mcpPackagePin}`, "kyoso", "mcp"],
         env_vars: [
           "OPENAI_API_KEY",
           "CODEX_API_KEY",
@@ -71,6 +71,12 @@ describe("Codex Plugin fixture", () => {
     expect(claudeManifest.mcpServers.kyoso.env).toEqual({
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
     });
+    expect(claudeManifest.mcpServers.kyoso.args).toEqual([
+      "-y",
+      `--package=${distribution.mcpPackagePin}`,
+      "kyoso",
+      "mcp",
+    ]);
     expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
@@ -93,7 +99,7 @@ describe("Codex Plugin fixture", () => {
     const mcp = await readJson(
       join(root, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
     );
-    const cliPackagePin = mcp.kyoso.args[1];
+    const cliPackagePin = mcp.kyoso.args[1].slice("--package=".length);
     const canonicalSnapshot = await directorySnapshot(canonical);
 
     expect(await hashSkillDirectory(canonical)).toBe(CURRENT_SKILL_DIGEST);
@@ -517,20 +523,30 @@ describe("Codex Plugin fixture", () => {
             {
               name: "different Claude pin",
               mutate(manifest) {
-                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.9.0";
+                manifest.mcpServers.kyoso.args[1] = "--package=@kyo-so/cli@0.9.0";
               },
               expected: [
-                "plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args[1]",
+                "Claude plugin MCP package pin",
                 "@kyo-so/cli@0.9.0",
               ],
             },
             {
               name: "non-SemVer Claude pin",
               mutate(manifest) {
-                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@latest";
+                manifest.mcpServers.kyoso.args[1] = "--package=@kyo-so/cli@latest";
               },
               expected: [
                 "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+              ],
+            },
+            {
+              name: "ambiguous positional Claude command",
+              mutate(manifest) {
+                const pin = manifest.mcpServers.kyoso.args[1].slice("--package=".length);
+                manifest.mcpServers.kyoso.args = ["-y", pin, "mcp"];
+              },
+              expected: [
+                'Claude plugin MCP args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]',
               ],
             },
             {
@@ -644,8 +660,8 @@ describe("Codex Plugin fixture", () => {
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
             const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
-            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
-            const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
+            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@"));
+            const pinVersion = pinArgument.slice("--package=@kyo-so/cli@".length);
             const packagePath = join(fixture, "package.json");
             const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
             packageMetadata.version = pinVersion;
@@ -752,8 +768,8 @@ describe("Codex Plugin fixture", () => {
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
             const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
             const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
-            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@"));
-            const pinVersion = pinArgument.slice("@kyo-so/cli@".length);
+            const pinArgument = mcp.kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@"));
+            const pinVersion = pinArgument.slice("--package=@kyo-so/cli@".length);
             const pinParts = pinVersion.split("-")[0].split(".");
             const aheadVersion = [pinParts[0], pinParts[1], String(Number(pinParts[2]) + 1)].join(".");
             const packagePath = join(fixture, "package.json");
@@ -868,7 +884,7 @@ describe("Codex Plugin fixture", () => {
             throw new Error("Plugin promotion must update exactly seven files");
           }
           if (
-            !mcp || JSON.parse(mcp.next).kyoso.args[1] !== packagePin
+            !mcp || JSON.parse(mcp.next).kyoso.args[1] !== "--package=" + packagePin
           ) {
             throw new Error("Plugin promotion did not update the relocated MCP pin");
           }
@@ -882,7 +898,7 @@ describe("Codex Plugin fixture", () => {
           const nextClaudeMarketplace = JSON.parse(claudeMarketplace.next);
           if (
             nextClaudeManifest.version !== pluginVersion ||
-            nextClaudeManifest.mcpServers.kyoso.args[1] !== packagePin
+            nextClaudeManifest.mcpServers.kyoso.args[1] !== "--package=" + packagePin
           ) {
             throw new Error("Plugin promotion did not update the Claude manifest version and pin");
           }

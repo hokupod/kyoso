@@ -185,8 +185,8 @@ jobs:
           set -euo pipefail
 
           RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          CODEX_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.codex-plugin/mcp.json", "utf8")).kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@")).slice("@kyo-so/cli@".length)')"
-          CLAUDE_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.claude-plugin/plugin.json", "utf8")).mcpServers.kyoso.args.find((argument) => argument.startsWith("@kyo-so/cli@")).slice("@kyo-so/cli@".length)')"
+          CODEX_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.codex-plugin/mcp.json", "utf8")).kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@")).slice("--package=@kyo-so/cli@".length)')"
+          CLAUDE_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.claude-plugin/plugin.json", "utf8")).mcpServers.kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@")).slice("--package=@kyo-so/cli@".length)')"
 
           is_semver_older() {
             node -e '

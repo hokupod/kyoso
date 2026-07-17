@@ -30,6 +30,7 @@ const pluginRootRelativePath = "plugins/kyoso";
 const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
 const unpinnedCliFallbacks = ["`npx -y @kyo-so/cli`", "`bunx @kyo-so/cli`"];
+const pluginMcpPackageArgumentPrefix = "--package=";
 const pluginMcpDependencyBlock = [
   "dependencies:",
   "  tools:",
@@ -115,6 +116,18 @@ export function distributionPaths(root = repositoryRoot) {
     pluginSkill: join(root, pluginSkillRelativePath),
     runtimeContract: join(root, "src", "cli", "pluginRuntimeContract.ts"),
   };
+}
+
+export function buildPluginMcpArgs(cliPackagePin) {
+  if (!parsePackagePin(cliPackagePin)) {
+    throw new Error("Plugin MCP args require an exact @kyo-so/cli SemVer pin");
+  }
+  return [
+    "-y",
+    `${pluginMcpPackageArgumentPrefix}${cliPackagePin}`,
+    pluginMcpServerName,
+    "mcp",
+  ];
 }
 
 /**
@@ -612,15 +625,16 @@ function validateClaudeManifest(manifest, paths, failures) {
   }
   if (
     !Array.isArray(server.args) ||
-    server.args.length !== 3 ||
+    server.args.length !== 4 ||
     server.args[0] !== "-y" ||
-    server.args[2] !== "mcp"
+    server.args[2] !== pluginMcpServerName ||
+    server.args[3] !== "mcp"
   ) {
     failures.push(
-      'Claude plugin MCP args must be ["-y", "@kyo-so/cli@VERSION", "mcp"]',
+      'Claude plugin MCP args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]',
     );
   }
-  const pin = parsePackagePin(server.args?.[1]);
+  const pin = parsePluginMcpPackagePin(server.args);
   if (!pin) {
     failures.push(
       "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
@@ -734,7 +748,7 @@ function validateClaudePinConsistency(pin, claudePin, failures) {
   const claudePackagePin = packagePin(claudePin);
   if (claudePackagePin !== codexPackagePin) {
     failures.push(
-      `plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args[1] ${formatValue(claudePackagePin)} must match plugins/kyoso/.codex-plugin/mcp.json kyoso.args[1] ${formatValue(codexPackagePin)}`,
+      `Claude plugin MCP package pin ${formatValue(claudePackagePin)} must match Codex plugin MCP package pin ${formatValue(codexPackagePin)}`,
     );
   }
 }
@@ -784,15 +798,16 @@ function validateMcp(mcp, failures) {
   }
   if (
     !Array.isArray(server.args) ||
-    server.args.length !== 3 ||
+    server.args.length !== 4 ||
     server.args[0] !== "-y" ||
-    server.args[2] !== "mcp"
+    server.args[2] !== pluginMcpServerName ||
+    server.args[3] !== "mcp"
   ) {
     failures.push(
-      'Plugin MCP args must be ["-y", "@kyo-so/cli@VERSION", "mcp"]',
+      'Plugin MCP args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]',
     );
   }
-  const pin = parsePackagePin(server.args?.[1]);
+  const pin = parsePluginMcpPackagePin(server.args);
   if (!pin) {
     failures.push("Plugin MCP package pin must be an exact @kyo-so/cli SemVer");
   }
@@ -1205,6 +1220,19 @@ function parsePackagePin(value) {
   return { packageName, packageVersion };
 }
 
+function parsePluginMcpPackagePin(args) {
+  const packageArgument = args?.[1];
+  if (
+    !isNonEmptyString(packageArgument) ||
+    !packageArgument.startsWith(pluginMcpPackageArgumentPrefix)
+  ) {
+    return undefined;
+  }
+  return parsePackagePin(
+    packageArgument.slice(pluginMcpPackageArgumentPrefix.length),
+  );
+}
+
 function readPluginPackagePin(path) {
   let mcp;
   try {
@@ -1214,7 +1242,7 @@ function readPluginPackagePin(path) {
       `Plugin MCP config could not be read: ${errorMessage(error)}`,
     );
   }
-  const pin = parsePackagePin(mcp?.[pluginMcpServerName]?.args?.[1]);
+  const pin = parsePluginMcpPackagePin(mcp?.[pluginMcpServerName]?.args);
   if (!pin) {
     throw new Error(
       "Plugin MCP package pin must be an exact @kyo-so/cli SemVer",

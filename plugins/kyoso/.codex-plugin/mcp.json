@@ -1,7 +1,7 @@
 {
   "kyoso": {
     "command": "npx",
-    "args": ["-y", "@kyo-so/cli@0.13.1", "mcp"],
+    "args": ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
     "env_vars": [
       "OPENAI_API_KEY",
       "CODEX_API_KEY",

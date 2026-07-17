@@ -1,6 +1,6 @@
 {
   "name": "kyoso",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Multi-agent review gates powered by Codex and Claude.",
   "author": {
     "name": "hokupod",
@@ -14,7 +14,7 @@
   "mcpServers": {
     "kyoso": {
       "command": "npx",
-      "args": ["-y", "@kyo-so/cli@0.13.1", "mcp"],
+      "args": ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
       "env": {
         "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}"
       }

@@ -10,6 +10,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildPluginMcpArgs,
   distributionPaths,
   repositoryRoot,
   transformCanonicalToPlugin,
@@ -149,10 +150,10 @@ export function createUpdates(
     packagePin,
   ).toString("utf8");
 
-  mcp.kyoso.args[1] = packagePin;
+  mcp.kyoso.args = buildPluginMcpArgs(packagePin);
   manifest.version = pluginVersion;
   claudeManifest.version = pluginVersion;
-  claudeManifest.mcpServers.kyoso.args[1] = packagePin;
+  claudeManifest.mcpServers.kyoso.args = buildPluginMcpArgs(packagePin);
   claudeMarketplace.plugins[0].version = pluginVersion;
   claudeMarketplace.metadata.version = pluginVersion;
   compatibility.expectedContract.distribution.mcpPackagePin = packagePin;

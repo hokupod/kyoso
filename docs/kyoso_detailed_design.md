@@ -2168,7 +2168,7 @@ Claude Code resolves the inline `mcpServers` declaration in
 mirror, but only the Codex manifest carries Codex-specific metadata and only
 the Claude manifest carries the Claude-compatible MCP shape.
 
-Marketplace Plugin `0.7.0` pins `@kyo-so/cli@0.13.0`. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`, and its Claude MCP definition declares only the matching placeholder. These surfaces expose the variable name without storing a credential value; Kyoso forwards the value only to a Codex child that explicitly selects OpenRouter and treats an unexpanded placeholder as missing.
+Marketplace Plugin `0.7.1` pins `@kyo-so/cli@0.13.1`. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`, and its Claude MCP definition declares only the matching placeholder. These surfaces expose the variable name without storing a credential value; Kyoso forwards the value only to a Codex child that explicitly selects OpenRouter and treats an unexpanded placeholder as missing.
 
 The distribution contract has these required invariants, checked by
 `plugin:verify` in normal CI and promotion verification:
@@ -2203,7 +2203,7 @@ reintroduction of the root file.
 
 ## 23. Client configuration examples
 
-These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. The `--with-openrouter` additions below therefore apply only when `kyoso setup` creates a new manual entry; Marketplace Plugin `0.7.0` has its separate pinned `@kyo-so/cli@0.13.0` contract described in §22.4.
+These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. The `--with-openrouter` additions below therefore apply only when `kyoso setup` creates a new manual entry; Marketplace Plugin `0.7.1` has its separate pinned `@kyo-so/cli@0.13.1` contract described in §22.4.
 
 ### 23.1 Codex config example
 

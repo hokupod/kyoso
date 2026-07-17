@@ -123,7 +123,7 @@
   "probes": [
     {
       "codexVersion": "0.144.0-alpha.4",
-      "verifiedAt": "2026-07-16",
+      "verifiedAt": "2026-07-17",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",
@@ -133,7 +133,7 @@
     },
     {
       "codexVersion": "0.144.1",
-      "verifiedAt": "2026-07-16",
+      "verifiedAt": "2026-07-17",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",

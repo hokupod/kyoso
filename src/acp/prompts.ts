@@ -16,7 +16,11 @@ export function buildAgentPrompt(
   request: KyosoReviewRequest,
   agent: AgentName,
   role: AgentRole,
-  policy: { requiredLenses?: ReviewLens[]; cisaEnabled?: boolean } = {},
+  policy: {
+    requiredLenses?: ReviewLens[];
+    cisaEnabled?: boolean;
+    maxFindingsTarget?: number;
+  } = {},
 ): string {
   const requiredLenses =
     policy.requiredLenses ?? resolveRequiredLenses(request);
@@ -31,6 +35,11 @@ export function buildAgentPrompt(
     "A formal finding requires a concrete file/line, diff hunk, or plan clause; an actual failure or exploit path; a change relation; and an executable recommendation.",
     "Put insufficiently supported hypotheses in openQuestions instead of findings.",
     "Do not create formal findings for style, formatting, generic hardening, unrelated pre-existing issues, duplicate tests, implementation-detail tests, or exhaustive boundary matrices.",
+    ...(policy.maxFindingsTarget === undefined
+      ? []
+      : [
+          `Avoid duplicates and aim for at most ${policy.maxFindingsTarget} findings in severity order, but do not hide a material finding solely to meet this target.`,
+        ]),
     "Recommend only specific regression scenarios tied to changed behavior, with at most three testsToAdd entries.",
     "Critical and High safety issues must still be reported when they match a non-goal.",
     "Write each finding title in concise English, regardless of the language used elsewhere. Titles are compared across agents for deduplication.",

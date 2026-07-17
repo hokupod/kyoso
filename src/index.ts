@@ -11,6 +11,8 @@ export type {
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
+  ModelExecutionIdentity,
+  ModelProviderRoute,
   ModelTokenUsage,
   NetworkMode,
   ReviewBudget,

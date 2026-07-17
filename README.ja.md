@@ -419,24 +419,40 @@ single-agent mode では、残った backend が `combined_reviewer` として1�
 
 ### Execution budget and review stopping
 
-各 review には、model call数、総 wall time、streaming中のagent text（message / thought chunk）、agentあたりのfinding数に user-global の hard ceiling があります。
+各 review には、model call数、総 wall time、streaming中のagent text（message / thought chunk）に user-global の hard ceiling があります。streaming textにはより低いsoft warning thresholdがあり、agentあたりのfinding数はsoft targetです。
 
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
-maxAgentOutputBytes = 65536
+maxTotalWallTimeMs = 660000
+warnAgentOutputBytes = 524288
+maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
-skipOptionalPhasesWhenTokenUsageUnknown = true
+skipOptionalPhasesWhenTokenUsageUnknown = false
 ```
 
-`reviewBudget` は user-global 専用です。project `kyoso.toml` と `--set` では変更できません。MCP / library request は `options.reviewBudget` で ceiling を下げることだけができ、引き上げはできません。Kyoso は primary reviewer を両方予約してから開始し、残りのcallだけを verification に使い、LLM Judge は advisory として扱います。既定のJudge modeは `deterministic_only` です。
+`reviewBudget` は user-global 専用です。project `kyoso.toml` と `--set` では変更できません。MCP / library request は `options.reviewBudget` で ceiling を下げることだけができ、引き上げはできません。512 KiBのwarningはnon-blocking、1 MiBのlimitはcallをcancelし、10件のfinding targetを超えたmaterial findingも破棄しません。token usage不明時は既定でwarningを出して継続し、user-globalで明示的に`true`を設定した場合だけ厳格なoptional-phase skipを維持します。Kyoso は primary reviewer を両方予約してから開始し、残りのcallだけを verification に使い、LLM Judge は advisory として扱います。既定のJudge modeは `deterministic_only` です。
 
-結果には `completion`、`executionBudget`、`requestFingerprint` が含まれます。Markdown と Audit は call数、wall time、output bytes、reported / unknown token usage を示します。`completion.status` が `incomplete` の場合、Kyoso は `retryable: false` の通常の `block` 結果を返します。これは code defect の断定ではなく、review coverage が未完了であることを意味します。同じ fingerprint を自動 retry しないでください。同一review checkpointでは、bundled Skill は初回1 passと material fix後の確認1 passだけを許可し、3回目には明示的な user approval が必要です。
+結果には `completion`、`executionBudget`、`requestFingerprint` が含まれます。Markdown と Audit は call数、wall time、message / thought / total output bytes、reported / partial / unknown token usage を示します。完了したmodel callは`executionIdentity`も提示でき、Kyosoのrouteとrequested modelをprovider-reported identityから分離します。requested-only valueをprovider報告値として表示しません。`completion.status` が `incomplete` の場合、Kyoso は `retryable: false` の通常の `block` 結果を返します。これは code defect の断定ではなく、review coverage が未完了であることを意味します。同じ fingerprint を自動 retry しないでください。同一review checkpointでは、bundled Skill は初回1 passと material fix後の確認1 passだけを許可し、3回目には明示的な user approval が必要です。
 
 ### Timeouts
 
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒(`reviewBudget.maxTotalWallTimeMs`)で、各phaseはdeadlineを延長せず残り時間を使います。MCP clients は tool calls に少なくとも480秒を許可してください。
+Default agent timeout は Codex / Claude ともに600秒です。verification round の default は 90 秒です。review全体のdeadlineは既定660秒(`reviewBudget.maxTotalWallTimeMs`)で、defaultの並列primary phase後に標準の60秒のfinalization余裕を確保します。各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許し、direct provider credentialが利用できる場合だけ加算します。
+
+このrepositoryのprimary 15分＋verification 15分のdogfooding presetでは、次のuser-global overrideを使います。
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+Codex Pluginと新規生成するmanual Codex registrationは`tool_timeout_sec = 2160`を使い、Kyosoの35分deadlineより60秒長く待機します。既存manual registrationは`kyoso setup`が保持するため、手動更新が必要です。Claude Code Plugin manifestはclient tool timeoutを設定しないため、同値をミリ秒で指定してClaude Codeを起動し、clientを再起動してください。
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+client timeoutを延ばしてもKyoso内部のreview-wide deadlineは延長されません。ほかのpresetでは、client timeoutを`reviewBudget.maxTotalWallTimeMs`より長くしてください。
 
 ### Verification
 
@@ -473,6 +489,20 @@ Judge defaults は意図的に lightweight models を使用します。より強
 
 `audit.directory`はlogicalなrelative directory（既定: `.kyoso/traces`）であり、workspace内のdirectoryではありません。既存のworkspace `.kyoso/traces`は自動で移行・削除されません。
 
+installed packageからabsoluteなtrusted trace directoryを明示して、read-onlyのbudget reportを生成します。
+
+```bash
+kyoso-budget-report --trace-dir /absolute/path/to/traces --json
+```
+
+source checkoutではpackage scriptを使います。
+
+```bash
+bun run audit:budget-report -- --trace-dir /absolute/path/to/traces --json
+```
+
+reportはregularな`.jsonl`だけを再帰的に読み、symlinkをskipし、trace pathを推測しません。callをagent、kind、provider route、requested model、requested / reported identity status別に集計し、全callと正常系を分けたnearest-rankのp50 / p95 / p99 / max byte分布、token usage reporting率、output warning / limit率、completion / skip理由を表示します。正常系callは`resultStatus = "completed"`かつ`errorCode`なしを明示したeventだけです。曖昧なhistorical eventは全call統計だけに残します。top-levelのbyte分布とoutput warning / hard limitのcall率はprimaryとverifierだけを対象にし、judge callは全call数とexecution別集計へ残しつつ再較正指標を薄めません。warning call率には同じtrace / kind / agentのcompleted callへ対応付けられたwarning eventだけを含め、重複・孤立warning eventは別に表示します。JSONは固定された入力上限を`inputLimits`へ出し、file、byte、line、event、call、review、warning、group、reason、directoryのいずれかが上限を超えた場合は切り詰めずに停止します。走査は、検証済みcurrent directoryを指定rootのdevice / inodeへ固定した専用workerで行い、recursive descentでもdirectory identityを再検証するため、lexical rootを差し替えて元に戻しても読み取り先は変わりません。fileはsymlinkをfollowしないnon-blocking openで読み、discovery時のsizeを超えて消費しません。platformがこれらのopen capabilityを提供できなければreportを中止します。metadata sanitizeはdefense in depthであるため、operatorがtrustedと判断したtrace directoryだけを指定してください。bytesからtokenや費用を推定換算しません。再較正ではsoft warningを正常系p99の2倍以上に置き、hard breakerをwarningより十分高くして正常系発火率をほぼ0に保ち、policy変更前にprovider / model別のtoken usage unknown率を確認します。
+
 Raw agent output は既定で無効です。`audit.includeFileContents` は reserved で `false` に固定され、この設定から file contents が保存されることはありません。`audit.includeRawAgentOutput`を有効にすると、traces に sensitive review output が残る場合があります。local retention policy に従って古い traces を削除してください。Windowsまたは安全なfilesystem capabilityを証明できない環境では、Audit trace writeは無効のままで、reviewはsanitized warningを返します([Safety Model](#safety-model) を参照)。
 
 ## Safety Model
@@ -506,7 +536,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 
 ## Troubleshooting
 
-- MCP timeout: review全体のdeadlineをカバーできるよう、client tool timeouts を少なくとも 480 秒に設定してください。Kyoso defaults は [Timeouts](#timeouts) を参照してください。
+- MCP timeout: client timeoutはreview-wide deadlineより長くしてください。35分presetではCodexに2160秒、Claude Codeに`MCP_TOOL_TIMEOUT=2160000`を設定します。[Timeouts](#timeouts)を参照してください。
 - Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 - OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。Marketplace Plugin `0.4.0`以降はこの変数名をKyoso processへ転送し、それ以前のversionは転送しません。既存MCP registrationはsetupで再書換えされません。

@@ -19,6 +19,7 @@ import type {
   AgentRunInput,
   AgentRunResult,
   KyosoReviewRequest,
+  ModelExecutionIdentity,
   NormalizedAgentOpinion,
 } from "../../src/core/types.js";
 import { auditTracePath } from "../helpers/auditState.js";
@@ -703,17 +704,40 @@ describe("runReview", () => {
     const result = await runReview(
       "plan_review",
       { goal: "review plan" },
-      { cwd, config, agentManager: new FakeAgentManager() },
+      {
+        cwd,
+        config,
+        agentManager: fakeAgentManagerWithIdentity({
+          providerRoute: "openrouter",
+          requestedModel: "openai/o4-mini",
+          reportingStatus: "requested_only",
+        }),
+      },
     );
     const traceEvents = await readTraceEvents(cwd, config, result);
     const started = traceEvents.find((event) => event.type === "agent_started");
+    const completed = traceEvents.find(
+      (event) =>
+        event.type === "model_call_completed" && event.kind === "primary",
+    );
     const traceText = JSON.stringify(traceEvents);
+    const identity: ModelExecutionIdentity = {
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    };
 
     expect(started).toMatchObject({
       agent: "codex",
       model: "openai/o4-mini",
       provider: "openrouter",
+      executionIdentity: identity,
     });
+    expect(completed?.executionIdentity).toEqual(identity);
+    expect(result.audit.modelCalls[0]?.executionIdentity).toEqual(identity);
+    expect(result.summaryMarkdown).toContain(
+      "primary/codex: route=openrouter, requested=openai/o4-mini, reporting=requested_only",
+    );
     expect(traceText).not.toContain(key);
     expect(JSON.stringify(result)).not.toContain(key);
   });
@@ -736,13 +760,44 @@ describe("runReview", () => {
     const result = await runReview(
       "plan_review",
       { goal: "review plan" },
-      { cwd, config, agentManager: new FakeAgentManager() },
+      {
+        cwd,
+        config,
+        agentManager: fakeAgentManagerWithIdentity({
+          providerRoute: "codex_default",
+          requestedModel: "gpt-5.5",
+          reportingStatus: "requested_only",
+        }),
+      },
     );
     const traceEvents = await readTraceEvents(cwd, config, result);
     const started = traceEvents.find((event) => event.type === "agent_started");
 
-    expect(started).toMatchObject({ agent: "codex", model: "gpt-5.5" });
+    expect(started).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.5",
+      executionIdentity: {
+        providerRoute: "codex_default",
+        requestedModel: "gpt-5.5",
+        reportingStatus: "requested_only",
+      },
+    });
     expect(started).not.toHaveProperty("provider");
+  });
+
+  test("keeps custom managers without execution identity backward compatible", async () => {
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("codex"),
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    expect(result.audit.modelCalls[0]?.executionIdentity).toBeUndefined();
+    expect(result.summaryMarkdown).toContain("primary/codex: identity=unknown");
   });
 
   test("two-agent review keeps configured roles and multi-agent mode", async () => {
@@ -1098,6 +1153,10 @@ model = "openai/o4-mini"
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
       ...baseConfig,
+      reviewBudget: {
+        ...baseConfig.reviewBudget,
+        maxFindingsPerAgent: 1,
+      },
       verification: {
         ...baseConfig.verification,
         enabled: true,
@@ -1122,6 +1181,15 @@ model = "openai/o4-mini"
     expect(
       result.findings.map((finding) => finding.verification?.status),
     ).toEqual(["confirmed", "not_verified"]);
+    expect(result.findings).toHaveLength(2);
+    expect(result.completion).toMatchObject({
+      status: "incomplete",
+      reasons: expect.arrayContaining(["coverage_incomplete"]),
+    });
+    expect(result.decision).toBe("block");
+    expect(result.audit.warnings).toContain(
+      "Agent codex reported 2 findings, above the soft target of 1; all findings were retained.",
+    );
   });
 
   test("verification allowDemotion true remains annotate-only in phase 1", async () => {
@@ -1232,6 +1300,7 @@ model = "openai/o4-mini"
       requestBody = String(init?.body ?? "");
       return new Response(
         JSON.stringify({
+          model: "gpt-5.4-mini-2026-06-15",
           choices: [
             {
               message: {
@@ -1257,7 +1326,10 @@ model = "openai/o4-mini"
           cwd,
           config,
           agentManager: rawTextAgentManager(rawText),
-          env: { OPENAI_API_KEY: "test-key" },
+          env: {
+            OPENAI_API_KEY: "test-key",
+            KYOSO_OPENAI_JUDGE_MODEL: "gpt-5.4-mini-requested",
+          },
         },
       );
 
@@ -1270,6 +1342,30 @@ model = "openai/o4-mini"
       expect(result.findings[0]?.title).toBe("Tenant boundary bypass");
       expect(requestBody).not.toContain(rawOnlyMarker);
       expect(requestBody).not.toContain("summaryMarkdown");
+      const judgeIdentity: ModelExecutionIdentity = {
+        providerRoute: "openai",
+        requestedModel: "gpt-5.4-mini-requested",
+        reportedModel: "gpt-5.4-mini-2026-06-15",
+        reportingStatus: "reported",
+      };
+      expect(
+        result.audit.modelCalls.find((call) => call.kind === "judge")
+          ?.executionIdentity,
+      ).toEqual(judgeIdentity);
+      const events = await readTraceEvents(cwd, config, result);
+      expect(
+        events.find(
+          (event) =>
+            event.type === "model_call_completed" && event.kind === "judge",
+        )?.executionIdentity,
+      ).toEqual(judgeIdentity);
+      expect(
+        events.find((event) => event.type === "judge_completed")
+          ?.executionIdentity,
+      ).toEqual(judgeIdentity);
+      expect(result.summaryMarkdown).toContain(
+        "judge: route=openai, requested=gpt-5.4-mini-requested, reportedModel=gpt-5.4-mini-2026-06-15, reporting=reported",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1414,6 +1510,71 @@ model = "openai/o4-mini"
     }
   });
 
+  test("records Anthropic judge requested and reported models", async () => {
+    const cwd = await tempCwd();
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "anthropic",
+        timeoutMs: 1_000,
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let requestBody = "";
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          model: "claude-haiku-4-5-20260701",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                summaryText: "Anthropic judge summary",
+                disagreementComments: [],
+              }),
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await runReview(
+        "plan_review",
+        { goal: "review plan" },
+        {
+          cwd,
+          config,
+          agentManager: new FakeAgentManager(),
+          env: {
+            ANTHROPIC_API_KEY: "test-key",
+            KYOSO_ANTHROPIC_JUDGE_MODEL: "claude-haiku-requested",
+          },
+        },
+      );
+
+      expect(JSON.parse(requestBody)).toMatchObject({
+        model: "claude-haiku-requested",
+      });
+      expect(
+        result.audit.modelCalls.find((call) => call.kind === "judge")
+          ?.executionIdentity,
+      ).toEqual({
+        providerRoute: "anthropic",
+        requestedModel: "claude-haiku-requested",
+        reportedModel: "claude-haiku-4-5-20260701",
+        reportingStatus: "reported",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("fallback judges do not add cross-model analysis", async () => {
     const cwd = await tempCwd();
     const deterministic = await runReview(
@@ -1457,6 +1618,14 @@ model = "openai/o4-mini"
       );
       expect(failed.crossModelAnalysis).toBeUndefined();
       expect(failed.summaryMarkdown).not.toContain("## Cross-Model Analysis");
+      expect(
+        failed.audit.modelCalls.find((call) => call.kind === "judge")
+          ?.executionIdentity,
+      ).toEqual({
+        providerRoute: "openai",
+        requestedModel: "gpt-5.4-mini",
+        reportingStatus: "requested_only",
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1816,6 +1985,91 @@ model = "openai/o4-mini"
     expect(started).toEqual(["codex"]);
   });
 
+  test("retains identity after start but omits it for preflight skips", async () => {
+    const identity: ModelExecutionIdentity = {
+      providerRoute: "codex_default",
+      requestedModel: "gpt-5.5",
+      reportingStatus: "requested_only",
+    };
+    const timeoutConfig = singleAgentConfig("codex");
+    const timeoutCwd = await tempCwd();
+    const timeout = await runReview(
+      "plan_review",
+      { goal: "review timeout" },
+      {
+        cwd: timeoutCwd,
+        config: timeoutConfig,
+        agentManager: fakeAgentManagerWithIdentity(identity, {
+          codex: "timeout",
+        }),
+      },
+    );
+    const timeoutEvents = await readTraceEvents(
+      timeoutCwd,
+      timeoutConfig,
+      timeout,
+    );
+    const timeoutCompleted = timeoutEvents.find(
+      (event) => event.type === "model_call_completed",
+    );
+
+    expect(timeout.audit.modelCalls[0]?.executionIdentity).toEqual(identity);
+    expect(timeoutCompleted?.executionIdentity).toEqual(identity);
+
+    const preflightConfig = singleAgentConfig("codex");
+    const preflight = await runReview(
+      "plan_review",
+      { goal: "review preflight" },
+      {
+        cwd: await tempCwd(),
+        config: preflightConfig,
+        agentManager: fakeAgentManagerWithIdentity(identity, {
+          codex: "preflight_failure",
+        }),
+      },
+    );
+
+    expect(preflight.audit.modelCalls[0]).toMatchObject({
+      status: "skipped",
+      reason: "AGENT_CONFIG_INVALID",
+    });
+    expect(preflight.audit.modelCalls[0]?.executionIdentity).toBeUndefined();
+  });
+
+  test("sanitizes untrusted execution identity before trace and response output", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("codex");
+    const leaked = `sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`;
+    const result = await runReview(
+      "plan_review",
+      { goal: "review identity metadata" },
+      {
+        cwd,
+        config,
+        agentManager: fakeAgentManagerWithIdentity({
+          providerRoute: "openrouter",
+          requestedModel: "openai/o4-mini\nforged",
+          reportedProvider: "https://foreign.example.test/v1",
+          reportedModel: `token=${leaked}`,
+          reportingStatus: "reported",
+        }),
+      },
+    );
+    const trace = JSON.stringify(await readTraceEvents(cwd, config, result));
+    const response = JSON.stringify(result);
+
+    expect(result.audit.modelCalls[0]?.executionIdentity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini forged",
+      reportingStatus: "requested_only",
+    });
+    for (const serialized of [trace, response]) {
+      expect(serialized).not.toContain(leaked);
+      expect(serialized).not.toContain("foreign.example.test");
+      expect(serialized).not.toContain("\nforged");
+    }
+  });
+
   test("waits for agent-started audit writes before recording completion", async () => {
     const eventTypes: string[] = [];
     const traceWriterFactory = (_options: TraceWriterOptions): TraceWriter => ({
@@ -2150,6 +2404,91 @@ export default {};
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
   });
 
+  test("retains strictly salvaged primary output while keeping coverage incomplete", async () => {
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const base = singleAgentConfig("codex");
+    const probeConfig: KyosoConfig = {
+      ...base,
+      agents: {
+        ...base.agents,
+        codex: {
+          ...base.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          env: { FAKE_ACP_MODE: "valid_then_thought" },
+        },
+      },
+    };
+    const manager = new SubprocessAcpAgentManager(probeConfig);
+    const probe = await manager.runAgent({
+      traceId: "tr_salvage_probe",
+      agent: "codex",
+      role: "combined_reviewer",
+      tool: "plan_review",
+      prompt: "probe",
+      workspaceDir: await tempCwd(),
+      timeoutMs: 5_000,
+      networkMode: "model_only",
+    });
+    const messageBytes = probe.messageBytes;
+    if (messageBytes === undefined) {
+      throw new Error("fake ACP probe did not report message bytes");
+    }
+    const config: KyosoConfig = {
+      ...probeConfig,
+      reviewBudget: {
+        ...probeConfig.reviewBudget,
+        warnAgentOutputBytes: Math.max(1, messageBytes - 1),
+        maxAgentOutputBytes: messageBytes,
+      },
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review plan" },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+
+    expect(result).toMatchObject({
+      decision: "block",
+      completion: {
+        status: "incomplete",
+        reasons: expect.arrayContaining([
+          "agent_output_limit",
+          "coverage_incomplete",
+        ]),
+      },
+    });
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({ title: "Salvaged complete finding" }),
+    );
+    expect(result.testsToAdd).toContain(
+      "verify a complete primary finding remains after thought output crosses the hard limit",
+    );
+    expect(result.residualRisks).toContain("salvaged risk");
+    expect(result.openQuestions).toContain("salvaged question");
+    expect(result.agentOpinions[0]).toMatchObject({
+      agent: "codex",
+      status: "failed",
+      errorCode: "AGENT_OUTPUT_LIMIT",
+      salvaged: true,
+      summary: "salvaged output",
+    });
+    expect(result.coverage.completedPerspectives).toEqual([]);
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      kind: "primary",
+      agent: "codex",
+      salvaged: true,
+      messageBytes,
+      thoughtBytes: 8,
+      outputBytes: messageBytes + 8,
+    });
+  });
+
   test("marks non-end ACP stop reasons as incomplete", async () => {
     const baseConfig = kyosoConfigSchema.parse(defaultConfig);
     const config: KyosoConfig = {
@@ -2248,6 +2587,22 @@ export default {};
     expect(result.agentOpinions[0]?.summary).toContain(
       "MODEL_PROVIDER=kyoso-openrouter",
     );
+    const identity: ModelExecutionIdentity = {
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    };
+    expect(result.audit.modelCalls[0]?.executionIdentity).toEqual(identity);
+    const events = await readTraceEvents(cwd, config, result);
+    expect(
+      events.find((event) => event.type === "agent_started")?.executionIdentity,
+    ).toEqual(identity);
+    expect(
+      events.find(
+        (event) =>
+          event.type === "model_call_completed" && event.kind === "primary",
+      )?.executionIdentity,
+    ).toEqual(identity);
     expect(JSON.stringify(result)).not.toContain("from-options-env");
   });
 
@@ -2558,6 +2913,23 @@ effort = "${rawEffortValue}"
     expect(result.findings[0]?.verification?.note).toContain(
       "KYOSO_CHILD_AGENT=1",
     );
+    expect(
+      result.audit.modelCalls.find((call) => call.kind === "verifier")
+        ?.executionIdentity,
+    ).toEqual({
+      providerRoute: "claude_default",
+      reportingStatus: "unknown",
+    });
+    const traceEvents = await readTraceEvents(process.cwd(), config, result);
+    expect(
+      traceEvents.find(
+        (event) =>
+          event.type === "agent_started" && event.role === "finding_verifier",
+      )?.executionIdentity,
+    ).toEqual({
+      providerRoute: "claude_default",
+      reportingStatus: "unknown",
+    });
     expect(result.decision).toBe("block");
     expect(result.completion).toMatchObject({
       status: "incomplete",
@@ -2735,6 +3107,26 @@ function rawTextAgentManager(rawText: string) {
       return Promise.all(inputs.map((input) => this.runAgent(input)));
     },
   };
+}
+
+function fakeAgentManagerWithIdentity(
+  identity: ModelExecutionIdentity,
+  scenarios: Partial<Record<"codex" | "claude", FakeAgentScenario>> = {},
+) {
+  const base = new FakeAgentManager(scenarios);
+  const manager = {
+    calls: base.calls,
+    runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+      return base.runAgent({
+        ...input,
+        onStarted: () => input.onStarted?.(identity),
+      });
+    },
+    runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+      return Promise.all(inputs.map((input) => manager.runAgent(input)));
+    },
+  };
+  return manager;
 }
 
 function failedAgentManager(errorDetail: string) {

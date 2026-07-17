@@ -131,6 +131,7 @@ export async function loadConfig(
   if (!options.ignoreConfig) {
     if (await exists(globalConfigPath)) {
       const globalConfig = await loadTomlConfigFile(globalConfigPath);
+      validateExplicitReviewBudgetThresholds(globalConfig, defaultConfig);
       const globalConfigWarnings = collectGlobalConfigWarnings(
         globalConfigPath,
         globalConfig,
@@ -548,6 +549,7 @@ async function loadProjectTsConfig(input: {
 
   if (trustDecision.execute) {
     const userConfig = await loadUserConfig(canonicalPath, source);
+    validateExplicitReviewBudgetThresholds(userConfig, input.baseConfig);
     const projectChangesOpenRouterRoute = projectConfigChangesOpenRouterRoute(
       userConfig,
       input.baseConfig,
@@ -677,6 +679,45 @@ function deepMerge(base: unknown, override: unknown): unknown {
     result[key] = deepMerge(result[key], value);
   }
   return result;
+}
+
+function validateExplicitReviewBudgetThresholds(
+  config: unknown,
+  baseConfig: unknown,
+): void {
+  const reviewBudget = readRecord(config, "reviewBudget");
+  if (
+    !reviewBudget ||
+    !Object.prototype.hasOwnProperty.call(reviewBudget, "warnAgentOutputBytes")
+  ) {
+    return;
+  }
+
+  const warnAgentOutputBytes = reviewBudget.warnAgentOutputBytes;
+  const maxAgentOutputBytes = Object.prototype.hasOwnProperty.call(
+    reviewBudget,
+    "maxAgentOutputBytes",
+  )
+    ? reviewBudget.maxAgentOutputBytes
+    : readRecord(baseConfig, "reviewBudget")?.maxAgentOutputBytes;
+  if (
+    typeof warnAgentOutputBytes === "number" &&
+    typeof maxAgentOutputBytes === "number" &&
+    warnAgentOutputBytes >= maxAgentOutputBytes
+  ) {
+    throw new Error(
+      "reviewBudget.warnAgentOutputBytes must be less than reviewBudget.maxAgentOutputBytes.",
+    );
+  }
+}
+
+function readRecord(
+  value: unknown,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const nested = value[key];
+  return isRecord(nested) ? nested : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

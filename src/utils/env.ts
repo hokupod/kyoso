@@ -3,6 +3,8 @@ import {
   CODEX_OPENROUTER_PROVIDER,
   type CodexProvider,
 } from "../config/schema.js";
+import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
+import type { ModelExecutionIdentity } from "../core/types.js";
 
 const MINIMAL_ENV_KEYS = [
   "PATH",
@@ -61,19 +63,66 @@ export class ChildEnvPreflightError extends Error {
   }
 }
 
+type ChildEnvOptions = {
+  agent?: "codex" | "claude";
+  model?: string;
+  provider?: CodexProvider;
+  preferApiKey?: boolean;
+  onCredentialPlaceholderDiscarded?: (key: string) => void;
+  onOpenRouterCredentialWithheld?: (key: string) => void;
+  onOpenRouterProvidersDiscarded?: (count: number) => void;
+};
+
+export type ChildLaunchContext = {
+  env: NodeJS.ProcessEnv;
+  executionIdentity: ModelExecutionIdentity;
+};
+
 export function buildChildEnv(
   parentEnv: NodeJS.ProcessEnv,
   whitelist: string[],
   explicit: Record<string, string>,
-  options: {
-    agent?: "codex" | "claude";
-    model?: string;
-    provider?: CodexProvider;
-    preferApiKey?: boolean;
-    onCredentialPlaceholderDiscarded?: (key: string) => void;
-    onOpenRouterCredentialWithheld?: (key: string) => void;
-    onOpenRouterProvidersDiscarded?: (count: number) => void;
-  } = {},
+  options: ChildEnvOptions = {},
+): NodeJS.ProcessEnv {
+  return options.agent
+    ? buildChildLaunchContext(parentEnv, whitelist, explicit, {
+        ...options,
+        agent: options.agent,
+      }).env
+    : buildChildEnvironment(parentEnv, whitelist, explicit, options);
+}
+
+export function buildChildLaunchContext(
+  parentEnv: NodeJS.ProcessEnv,
+  whitelist: string[],
+  explicit: Record<string, string>,
+  options: ChildEnvOptions & { agent: "codex" | "claude" },
+): ChildLaunchContext {
+  const env = buildChildEnvironment(parentEnv, whitelist, explicit, options);
+  const openRouterSelected =
+    options.agent === "codex" && options.provider === CODEX_OPENROUTER_PROVIDER;
+  const requestedModel =
+    options.agent === "claude"
+      ? env.ANTHROPIC_MODEL
+      : readCodexRequestedModel(env.CODEX_CONFIG);
+  return {
+    env,
+    executionIdentity: createModelExecutionIdentity({
+      providerRoute: openRouterSelected
+        ? "openrouter"
+        : options.agent === "codex"
+          ? "codex_default"
+          : "claude_default",
+      requestedModel,
+    }),
+  };
+}
+
+function buildChildEnvironment(
+  parentEnv: NodeJS.ProcessEnv,
+  whitelist: string[],
+  explicit: Record<string, string>,
+  options: ChildEnvOptions = {},
 ): NodeJS.ProcessEnv {
   if (!parentEnv.PATH) {
     throw new Error("PATH is required to launch ACP child agents.");
@@ -134,6 +183,21 @@ export function buildChildEnv(
     applyClaudeAuthPreference(env, options.preferApiKey === true);
   }
   return env;
+}
+
+function readCodexRequestedModel(
+  value: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isPlainObject(parsed) || typeof parsed.model !== "string") {
+      return undefined;
+    }
+    return parsed.model;
+  } catch {
+    return undefined;
+  }
 }
 
 function canCopyEnvValue(

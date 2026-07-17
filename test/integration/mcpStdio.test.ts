@@ -147,6 +147,89 @@ defautMode = "unrestricted"
     }
   }, 15_000);
 
+  test("returns subprocess execution identity in MCP JSON and Markdown", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-identity-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-mcp-home-"));
+    const configHome = join(home, "xdg");
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+enabled = false
+
+[agents.claude]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+model = "claude-mcp-requested"
+timeoutMs = 5000
+
+[agents.claude.env]
+FAKE_ACP_MODE = "happy"
+FAKE_ACP_FINDING_SEVERITY = "none"
+FAKE_ACP_REPORTED_PROVIDER = "anthropic"
+FAKE_ACP_REPORTED_MODEL = "claude-mcp-reported"
+`,
+      "utf8",
+    );
+    const client = startMcp(cwd, {
+      args: [],
+      env: {
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+        KYOSO_TEST_FAKE_AGENTS: "",
+      },
+    });
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: {
+            goal: "review plan",
+            currentPlan: "do it",
+            selectedFiles: [
+              { path: "src/foo.ts", content: "export const foo = 1;" },
+            ],
+            options: { maxAgentTimeoutMs: 5_000 },
+          },
+        },
+      });
+      const callResponse = await client.waitForResponse(3, 15_000);
+      const callResult = callResponse.result as {
+        content?: Array<{ type?: string; text?: string }>;
+      };
+      const texts = callResult.content?.map((item) => item.text ?? "") ?? [];
+      const jsonResult = JSON.parse(texts[1] ?? "{}") as {
+        audit?: {
+          modelCalls?: Array<{ executionIdentity?: unknown }>;
+        };
+      };
+      const identity = {
+        providerRoute: "claude_default",
+        requestedModel: "claude-mcp-requested",
+        reportedProvider: "anthropic",
+        reportedModel: "claude-mcp-reported",
+        reportingStatus: "reported",
+      };
+
+      expect(jsonResult.audit?.modelCalls?.[0]?.executionIdentity).toEqual(
+        identity,
+      );
+      expect(texts[0]).toContain(
+        "primary/claude: route=claude_default, requested=claude-mcp-requested, reportedProvider=anthropic, reportedModel=claude-mcp-reported, reporting=reported",
+      );
+      expect(client.parseErrors).toEqual([]);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 20_000);
+
   test("rejects security-sensitive unknown config in MCP calls by default", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-reject-unknown-"));
     const home = await mkdtemp(join(tmpdir(), "kyoso-mcp-home-"));

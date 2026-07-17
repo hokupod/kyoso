@@ -12,7 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const requiredPrefixes = ["dist/", ".agents/skills/kyoso-review/", "examples/"];
-const requiredFiles = ["README.md", "LICENSE", "package.json"];
+const requiredFiles = [
+  "README.md",
+  "LICENSE",
+  "package.json",
+  "scripts/review-budget-report.mjs",
+];
 const forbiddenPrefixes = [
   "src/",
   "ai/",
@@ -106,6 +111,19 @@ try {
     failures.push("CLI bin file is not executable: dist/bin/kyoso.js");
   }
 
+  const budgetReportBinFile = packageEntries.find(
+    (entry) => entry.path === "scripts/review-budget-report.mjs",
+  );
+  if (!budgetReportBinFile) {
+    failures.push(
+      "missing budget-report bin file: scripts/review-budget-report.mjs",
+    );
+  } else if (!/x/.test(budgetReportBinFile.mode)) {
+    failures.push(
+      "budget-report bin file is not executable: scripts/review-budget-report.mjs",
+    );
+  }
+
   for (const prefix of forbiddenPrefixes) {
     if (filePaths.some((path) => path.startsWith(prefix))) {
       failures.push(`forbidden package prefix included: ${prefix}`);
@@ -116,6 +134,22 @@ try {
   const binContent = readTarEntry(tarballPath, "package/dist/bin/kyoso.js");
   if (!binContent.startsWith("#!/usr/bin/env node\n")) {
     failures.push("CLI bin file is missing the Node shebang.");
+  }
+  const budgetReportBinContent = readTarEntry(
+    tarballPath,
+    "package/scripts/review-budget-report.mjs",
+  );
+  if (!budgetReportBinContent.startsWith("#!/usr/bin/env node\n")) {
+    failures.push("budget-report bin file is missing the Node shebang.");
+  }
+  const packedManifest = JSON.parse(
+    readTarEntry(tarballPath, "package/package.json"),
+  );
+  if (
+    packedManifest.bin?.["kyoso-budget-report"] !==
+    "scripts/review-budget-report.mjs"
+  ) {
+    failures.push("package manifest is missing the kyoso-budget-report bin.");
   }
 
   for (const entry of tarEntries) {
@@ -133,6 +167,16 @@ try {
     } catch (error) {
       failures.push(
         `packed MCP smoke failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (failures.length === 0) {
+    try {
+      verifyPackedBudgetReport(tarballPath, tempDir);
+    } catch (error) {
+      failures.push(
+        `packed budget-report smoke failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -192,6 +236,68 @@ function readTarEntry(tarballPath, entry) {
   }
 
   return result.stdout;
+}
+
+function verifyPackedBudgetReport(tarballPath, tempDir) {
+  const extractDir = join(tempDir, "budget-report-extract");
+  mkdirSync(extractDir, { recursive: true });
+  const extract = spawnSync("tar", ["-xf", tarballPath, "-C", extractDir], {
+    encoding: "utf8",
+  });
+  if (extract.status !== 0) {
+    throw new Error(extract.stderr || "failed to extract budget report");
+  }
+
+  const traceDir = join(tempDir, "budget-report-traces");
+  mkdirSync(traceDir, { recursive: true });
+  writeFileSync(
+    join(traceDir, "trace.jsonl"),
+    `${JSON.stringify({
+      type: "model_call_completed",
+      traceId: "tr_pack_verify",
+      kind: "primary",
+      agent: "codex",
+      resultStatus: "completed",
+      messageBytes: 10,
+      thoughtBytes: 20,
+      outputBytes: 30,
+      usage: { totalTokens: 12 },
+      executionIdentity: {
+        providerRoute: "codex_default",
+        reportingStatus: "unknown",
+      },
+    })}\n`,
+    "utf8",
+  );
+  const binPath = join(
+    extractDir,
+    "package",
+    "scripts",
+    "review-budget-report.mjs",
+  );
+  const run = spawnSync("node", [binPath, "--trace-dir", traceDir, "--json"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  if (run.error) throw run.error;
+  if (run.status !== 0) {
+    throw new Error(run.stderr || `budget report exited ${run.status}`);
+  }
+  if (run.stdout.trim().length === 0) {
+    throw new Error(
+      `budget report returned no output${run.stderr ? `; stderr: ${run.stderr.trim()}` : ""}`,
+    );
+  }
+  const report = JSON.parse(run.stdout);
+  if (
+    report.source?.jsonlFiles !== 1 ||
+    report.calls?.completed !== 1 ||
+    report.calls?.normalPath !== 1 ||
+    report.bytes?.normalPath?.outputBytes?.p99 !== 30
+  ) {
+    throw new Error("packed budget report returned an unexpected schema");
+  }
 }
 
 // One-shot spawnSync on purpose: an async spawn() issued after the many

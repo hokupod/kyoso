@@ -417,24 +417,40 @@ This mode does not provide independent cross-model validation and may retain sel
 
 ### Execution budget and review stopping
 
-Every review has a user-global hard ceiling for model calls, total wall time, streamed agent text (message and thought chunks), and findings per agent:
+Every review has user-global hard ceilings for model calls, total wall time, and streamed agent text (message and thought chunks). Streamed text also has a lower soft-warning threshold, while findings per agent is a soft target:
 
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
-maxAgentOutputBytes = 65536
+maxTotalWallTimeMs = 660000
+warnAgentOutputBytes = 524288
+maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
-skipOptionalPhasesWhenTokenUsageUnknown = true
+skipOptionalPhasesWhenTokenUsageUnknown = false
 ```
 
-`reviewBudget` is user-global only: project `kyoso.toml` and `--set` cannot change it. MCP and library requests may lower a ceiling through `options.reviewBudget`, never raise it. Kyoso reserves both primary reviewers before starting either one, uses any residual calls for verification, and treats the LLM judge as advisory. The default judge mode is `deterministic_only`.
+`reviewBudget` is user-global only: project `kyoso.toml` and `--set` cannot change it. MCP and library requests may lower a ceiling through `options.reviewBudget`, never raise it. The 512 KiB warning is non-blocking, the 1 MiB limit cancels the call, and the ten-finding target does not discard additional material findings. Unknown token usage warns and continues by default; an explicit user-global `true` preserves strict optional-phase skipping. Kyoso reserves both primary reviewers before starting either one, uses any residual calls for verification, and treats the LLM judge as advisory. The default judge mode is `deterministic_only`.
 
-The result includes `completion`, `executionBudget`, and `requestFingerprint`; Markdown and Audit show call counts, wall time, output bytes, and reported or unknown token usage. If `completion.status` is `incomplete`, Kyoso returns a normal `block` result with `retryable: false`: the block means review coverage is incomplete, not that a code defect was established. Do not automatically retry the same fingerprint. At one review checkpoint, the bundled Skill permits one initial pass and one confirmation pass only after material fixes; a third pass requires explicit user approval.
+The result includes `completion`, `executionBudget`, and `requestFingerprint`; Markdown and Audit show call counts, wall time, message/thought/total output bytes, and reported, partial, or unknown token usage. Each completed model call can also expose `executionIdentity`, separating the Kyoso route and requested model from provider-reported identity; requested-only values are never presented as provider reports. If `completion.status` is `incomplete`, Kyoso returns a normal `block` result with `retryable: false`: the block means review coverage is incomplete, not that a code defect was established. Do not automatically retry the same fingerprint. At one review checkpoint, the bundled Skill permits one initial pass and one confirmation pass only after material fixes; a third pass requires explicit user approval.
 
 ### Timeouts
 
-Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. The review-wide deadline defaults to 480 seconds (`reviewBudget.maxTotalWallTimeMs`), and each phase uses the remaining deadline rather than extending it. MCP clients should allow at least 480 seconds for tool calls.
+Default agent timeouts are 600 seconds for both Codex and Claude; the verification round defaults to 90 seconds. The review-wide deadline defaults to 660 seconds (`reviewBudget.maxTotalWallTimeMs`), leaving the standard 60-second finalization margin after the default parallel primary phase. Each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
+
+This repository's 15-minute primary plus 15-minute verification dogfooding preset uses the following user-global override:
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+The Codex Plugin and newly generated manual Codex registrations use `tool_timeout_sec = 2160`, leaving 60 seconds beyond that 35-minute Kyoso deadline. Existing manual registrations are preserved by `kyoso setup` and must be updated manually. The Claude Code Plugin manifest does not set a client tool timeout; launch Claude Code with the equivalent millisecond value, then restart the client:
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+Increasing the client timeout does not extend Kyoso's internal review-wide deadline. For other presets, keep the client timeout longer than `reviewBudget.maxTotalWallTimeMs`.
 
 ### Verification
 
@@ -471,6 +487,20 @@ On supported POSIX runtimes, Audit traces are written below the user state base 
 
 `audit.directory` is a logical relative directory (default: `.kyoso/traces`), not a directory in the workspace. Existing workspace `.kyoso/traces` files are not migrated or deleted automatically.
 
+Generate a read-only budget report from the installed package by supplying an absolute trusted trace directory explicitly:
+
+```bash
+kyoso-budget-report --trace-dir /absolute/path/to/traces --json
+```
+
+From a source checkout, use the package script:
+
+```bash
+bun run audit:budget-report -- --trace-dir /absolute/path/to/traces --json
+```
+
+The report recursively reads regular `.jsonl` files only, skips symlinks, and never infers a trace path. It groups calls by agent, kind, provider route, requested model, and requested/reported identity status; reports separate all-call and normal-path nearest-rank p50/p95/p99/max byte distributions, token-usage reporting rates, output-warning/limit rates, and completion/skip reasons; and never converts bytes into estimated tokens or cost. A normal-path call explicitly has `resultStatus = "completed"` and no `errorCode`; ambiguous historical events remain in all-call statistics only. Top-level byte distributions and output-warning/hard-limit call rates use primary and verifier calls; judge calls remain in all-call and per-execution totals but do not dilute recalibration metrics. Warning call rates include only warning events correlated to a completed call with the same trace, kind, and agent; duplicate or orphan warning events are reported separately. The JSON exposes fixed ingestion bounds as `inputLimits`, and the command aborts instead of truncating when file, byte, line, event, call, review, warning, group, reason, or directory bounds are exceeded. Traversal runs in a dedicated worker whose validated current directory is bound to the supplied root's device and inode; recursive descent revalidates each directory identity, so replacing and restoring the lexical root cannot redirect reads. File reads use no-follow, non-blocking opens and never consume beyond the discovered size; the report aborts when the platform cannot provide those open capabilities. Metadata sanitization is defense in depth, so supply only an operator-trusted trace directory. For recalibration, keep a soft warning at least twice the normal-path p99, place the hard breaker well above the warning so its normal trigger rate stays near zero, and inspect unknown token-usage rates by provider/model before changing policy.
+
 Raw agent output is disabled by default. `audit.includeFileContents` is reserved and fixed to `false`; file contents are never persisted through that setting. If `audit.includeRawAgentOutput` is enabled, traces may persist sensitive review output; delete old traces according to your local retention policy. On Windows or an environment without proven safe filesystem capabilities, Audit trace writing stays disabled and the review returns a sanitized warning (see [Safety Model](#safety-model)).
 
 ## Safety Model
@@ -504,7 +534,7 @@ Windows, and environments where the required filesystem capabilities cannot be p
 
 ## Troubleshooting
 
-- MCP timeout: set client tool timeouts to at least 480 seconds to cover the review-wide deadline. See [Timeouts](#timeouts) for the Kyoso defaults.
+- MCP timeout: keep the client timeout longer than the review-wide deadline. For the 35-minute preset, use 2160 seconds in Codex or `MCP_TOOL_TIMEOUT=2160000` in Claude Code. See [Timeouts](#timeouts).
 - Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx @kyo-so/cli` resolution after publish.
 - Deprecated TypeScript config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`; prefer `kyoso.toml`.
 - OpenRouter key missing: confirm a non-empty Codex `model`, an `OPENROUTER_API_KEY` forwarded to the Kyoso process, and a restarted client; run `kyoso doctor`. Marketplace Plugin `0.4.0` and later forward this variable name to the Kyoso process; earlier versions do not. Existing MCP registrations are not rewritten by setup.

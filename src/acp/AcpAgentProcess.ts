@@ -14,13 +14,22 @@ import type {
   AgentName,
   AgentRunInput,
   AgentRunResult,
+  ModelExecutionIdentity,
   ModelTokenUsage,
 } from "../core/types.js";
+import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
-import { ChildEnvPreflightError, buildChildEnv } from "../utils/env.js";
+import {
+  ChildEnvPreflightError,
+  buildChildLaunchContext,
+} from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
-import { normalizeAgentOutput } from "./normalize.js";
+import {
+  AcpNdJsonLineLimitError,
+  limitAcpNdJsonLineBytes,
+} from "./ndJsonLineLimit.js";
+import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
   constructor(
@@ -45,9 +54,9 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
 
     const provider =
       input.agent === "codex" ? this.config.agents.codex.provider : undefined;
-    let env: NodeJS.ProcessEnv;
+    let launchContext: ReturnType<typeof buildChildLaunchContext>;
     try {
-      env = buildChildEnv(
+      launchContext = buildChildLaunchContext(
         this.parentEnv,
         agentConfig.auth.envWhitelist,
         agentConfig.env,
@@ -70,7 +79,13 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
     }
 
     try {
-      return await runSubprocessAgent(input.agent, agentConfig, input, env);
+      return await runSubprocessAgent(
+        input.agent,
+        agentConfig,
+        input,
+        launchContext.env,
+        launchContext.executionIdentity,
+      );
     } catch (error) {
       return {
         agent: input.agent,
@@ -94,6 +109,7 @@ async function runSubprocessAgent(
   agentConfig: AgentConfig,
   input: AgentRunInput,
   env: NodeJS.ProcessEnv,
+  launchExecutionIdentity: ModelExecutionIdentity,
 ): Promise<AgentRunResult> {
   const startedAt = new Date().toISOString();
   const effectiveTimeoutMs = resolveEffectiveTimeoutMs(input);
@@ -121,11 +137,15 @@ async function runSubprocessAgent(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let spawned = false;
     let startedWrite: Promise<void> | undefined;
     child.once("spawn", () => {
       if (settled) return;
+      spawned = true;
       startedWrite = Promise.resolve()
-        .then(() => input.onStarted?.())
+        .then(async () => {
+          await input.onStarted?.(launchExecutionIdentity);
+        })
         .catch(() => undefined);
     });
 
@@ -135,8 +155,12 @@ async function runSubprocessAgent(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      const finalResult =
+        spawned && result.executionIdentity === undefined
+          ? { ...result, executionIdentity: launchExecutionIdentity }
+          : result;
       void (startedWrite ?? Promise.resolve()).then(() =>
-        resolveResult(result),
+        resolveResult(finalResult),
       );
     };
 
@@ -185,48 +209,87 @@ async function runSubprocessAgent(
       input,
       abortController,
       resolveEffortConfigOption(agent, agentConfig.effort),
+      launchExecutionIdentity,
     )
-      .then(({ rawText, warnings, usage, outputBytes, stopReason }) => {
-        stdout = rawText;
-        const completed = stopReason === "end_turn";
-        resolveOnce({
-          agent,
-          role: input.role,
-          status: completed ? "completed" : "failed",
+      .then(
+        ({
           rawText,
-          normalized: normalizeAgentOutput(agent, input.role, rawText),
-          startedAt,
-          completedAt: new Date().toISOString(),
+          warnings,
+          usage,
+          messageBytes,
+          thoughtBytes,
           outputBytes,
+          outputWarningTriggered,
           stopReason,
-          ...(usage ? { usage } : {}),
-          ...(warnings.length > 0 ? { warnings } : {}),
-          ...(completed
-            ? {}
-            : {
-                error: {
-                  code: "AGENT_STOPPED_EARLY",
-                  message: `Agent stopped before completing the review: ${stopReason}.`,
-                },
-              }),
-        });
-      })
+          executionIdentity,
+        }) => {
+          stdout = rawText;
+          const completed = stopReason === "end_turn";
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: completed ? "completed" : "failed",
+            rawText,
+            normalized: normalizeAgentOutput(agent, input.role, rawText),
+            startedAt,
+            completedAt: new Date().toISOString(),
+            messageBytes,
+            thoughtBytes,
+            outputBytes,
+            outputWarningTriggered,
+            stopReason,
+            executionIdentity,
+            ...(usage ? { usage } : {}),
+            ...(warnings.length > 0 ? { warnings } : {}),
+            ...(completed
+              ? {}
+              : {
+                  error: {
+                    code: "AGENT_STOPPED_EARLY",
+                    message: `Agent stopped before completing the review: ${stopReason}.`,
+                  },
+                }),
+          });
+        },
+      )
       .catch((error) => {
         const outputLimitError = findOutputLimitError(error, abortController);
         if (outputLimitError) {
           stdout = outputLimitError.rawText;
+          const normalized = parseAgentOutputStrict(agent, input.role, stdout);
           resolveOnce({
             agent,
             role: input.role,
             status: "failed",
             rawText: stdout,
+            ...(normalized ? { normalized, salvaged: true } : {}),
+            messageBytes: outputLimitError.messageBytes,
+            thoughtBytes: outputLimitError.thoughtBytes,
             outputBytes: outputLimitError.outputBytes,
+            outputWarningTriggered: outputLimitError.outputWarningTriggered,
             stopReason: "cancelled",
             startedAt,
             completedAt: new Date().toISOString(),
             error: {
               code: "AGENT_OUTPUT_LIMIT",
-              message: `Agent output exceeded ${outputLimitError.maxOutputBytes} bytes and was cancelled.`,
+              message: `Agent output exceeded the ${outputLimitError.maxOutputBytes}-byte hard limit (message: ${outputLimitError.messageBytes}, thought: ${outputLimitError.thoughtBytes}, total: ${outputLimitError.outputBytes}) and was cancelled. Adjust user-global reviewBudget.maxAgentOutputBytes to change this ceiling.`,
+            },
+          });
+          return;
+        }
+        if (error instanceof AcpNdJsonLineLimitError) {
+          abortController.abort(error);
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: "failed",
+            rawText: stdout,
+            stopReason: "cancelled",
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: {
+              code: "AGENT_PROTOCOL_LIMIT",
+              message: `Agent emitted an ACP NDJSON line above the ${error.maxLineBytes}-byte transport limit and was cancelled.`,
             },
           });
           return;
@@ -270,12 +333,17 @@ async function runAcpClientWorkflow(
   input: AgentRunInput,
   abortController: AbortController,
   configOption: { configId: string; value: string } | undefined,
+  launchExecutionIdentity: ModelExecutionIdentity,
 ): Promise<{
   rawText: string;
   warnings: string[];
   usage?: ModelTokenUsage;
+  messageBytes: number;
+  thoughtBytes: number;
   outputBytes: number;
+  outputWarningTriggered: boolean;
   stopReason: string;
+  executionIdentity: ModelExecutionIdentity;
 }> {
   if (!child.stdin || !child.stdout) {
     throw new Error("Agent process did not expose stdio streams.");
@@ -285,7 +353,7 @@ async function runAcpClientWorkflow(
   const inputStream = Readable.toWeb(
     child.stdout,
   ) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(output, inputStream);
+  const stream = ndJsonStream(output, limitAcpNdJsonLineBytes(inputStream));
   const app = client({ name: "kyoso" })
     .onRequest(methods.client.session.requestPermission, () => ({
       outcome: { outcome: "cancelled" },
@@ -375,7 +443,10 @@ async function runAcpClientWorkflow(
         });
         void promptResponse.catch(() => undefined);
         let rawText = "";
+        let messageBytes = 0;
+        let thoughtBytes = 0;
         let outputBytes = 0;
+        let outputWarningTriggered = false;
         for (;;) {
           const message = await session.nextUpdate();
           if (message.kind === "stop") {
@@ -384,8 +455,15 @@ async function runAcpClientWorkflow(
               rawText,
               warnings,
               ...(usage ? { usage } : {}),
+              messageBytes,
+              thoughtBytes,
               outputBytes,
+              outputWarningTriggered,
               stopReason: message.stopReason,
+              executionIdentity: withReportedExecutionIdentity(
+                launchExecutionIdentity,
+                message.response._meta,
+              ),
             };
           }
 
@@ -398,38 +476,74 @@ async function runAcpClientWorkflow(
             continue;
           }
           const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
-          const nextOutputBytes = outputBytes + chunkBytes;
+          const isMessage = update.sessionUpdate === "agent_message_chunk";
+          const nextMessageBytes = messageBytes + (isMessage ? chunkBytes : 0);
+          const nextThoughtBytes = thoughtBytes + (isMessage ? 0 : chunkBytes);
+          const nextOutputBytes = nextMessageBytes + nextThoughtBytes;
+          const nextOutputWarningTriggered: boolean =
+            outputWarningTriggered ||
+            (input.warnOutputBytes !== undefined &&
+              nextOutputBytes >= input.warnOutputBytes);
           if (
             input.maxOutputBytes !== undefined &&
             nextOutputBytes > input.maxOutputBytes
           ) {
+            const retainedRawText = isMessage
+              ? `${rawText}${utf8Prefix(
+                  update.content.text,
+                  input.maxOutputBytes - outputBytes,
+                )}`
+              : rawText;
             await ctx
               .notify(methods.agent.session.cancel, {
                 sessionId: session.sessionId,
               })
               .catch(() => undefined);
             const error = new AgentOutputLimitError(
-              rawText,
+              retainedRawText,
+              nextMessageBytes,
+              nextThoughtBytes,
               nextOutputBytes,
               input.maxOutputBytes,
+              nextOutputWarningTriggered,
             );
             abortController.abort(error);
             throw error;
           }
-          if (update.sessionUpdate === "agent_message_chunk") {
+          if (isMessage) {
             rawText += update.content.text;
           }
+          messageBytes = nextMessageBytes;
+          thoughtBytes = nextThoughtBytes;
           outputBytes = nextOutputBytes;
+          outputWarningTriggered = nextOutputWarningTriggered;
         }
       });
   });
 }
 
+function utf8Prefix(input: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(input);
+  const budget = Math.max(0, Math.min(maxBytes, encoded.byteLength));
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let end = budget; end > 0; end -= 1) {
+    try {
+      return decoder.decode(encoded.subarray(0, end));
+    } catch {
+      // Retry after backing off to a UTF-8 character boundary.
+    }
+  }
+  return "";
+}
+
 class AgentOutputLimitError extends Error {
   constructor(
     readonly rawText: string,
+    readonly messageBytes: number,
+    readonly thoughtBytes: number,
     readonly outputBytes: number,
     readonly maxOutputBytes: number,
+    readonly outputWarningTriggered: boolean,
   ) {
     super(`Agent output exceeded ${maxOutputBytes} bytes.`);
     this.name = "AgentOutputLimitError";
@@ -455,6 +569,23 @@ function resolveEffectiveTimeoutMs(input: AgentRunInput): number {
 
 function normalizeUsage(usage: unknown): ModelTokenUsage | undefined {
   return normalizeModelTokenUsage(usage);
+}
+
+function withReportedExecutionIdentity(
+  identity: ModelExecutionIdentity,
+  metadata: unknown,
+): ModelExecutionIdentity {
+  const record = isRecord(metadata) ? metadata : {};
+  return createModelExecutionIdentity({
+    providerRoute: identity.providerRoute,
+    requestedModel: identity.requestedModel,
+    reportedProvider: record.provider,
+    reportedModel: record.model,
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveEffortConfigOption(

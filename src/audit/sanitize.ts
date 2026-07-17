@@ -1,4 +1,5 @@
 import { sanitizeText } from "../security/sanitizeText.js";
+import { normalizeModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 
 const USAGE_METADATA_KEYS = new Set([
   "tokenUsage",
@@ -21,6 +22,11 @@ export function sanitizeForAudit(
   if (typeof value === "object" && value !== null) {
     const result: Record<string, unknown> = {};
     for (const [key, nested] of Object.entries(value)) {
+      if (key === "executionIdentity") {
+        const identity = normalizeModelExecutionIdentity(nested);
+        if (identity) result[key] = identity;
+        continue;
+      }
       if (
         /raw|content|env|credential|token|secret|password/i.test(key) &&
         !(options.includeRawAgentOutput && key === "rawText") &&

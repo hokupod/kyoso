@@ -3,7 +3,7 @@ import type { KyosoConfig } from "../config/schema.js";
 import type {
   AgentRole,
   KyosoReviewRequest,
-  ReviewBudget,
+  ResolvedReviewBudget,
   ReviewTool,
 } from "./types.js";
 
@@ -14,7 +14,7 @@ export function createRequestFingerprint(input: {
   request: KyosoReviewRequest;
   config: KyosoConfig;
   roles: Partial<Record<"codex" | "claude", AgentRole>>;
-  budget: ReviewBudget;
+  budget: ResolvedReviewBudget;
   entrypoint?: "cli" | "mcp" | "core";
 }): string {
   const reviewers = (["codex", "claude"] as const)

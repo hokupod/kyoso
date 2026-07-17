@@ -1,6 +1,10 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
-import { MAX_AGENT_OUTPUT_BYTES } from "../core/constants.js";
+import {
+  DEFAULT_AGENT_TIMEOUT_MS,
+  DEFAULT_WARN_AGENT_OUTPUT_BYTES,
+  MAX_AGENT_OUTPUT_BYTES,
+} from "../core/constants.js";
 import { REVIEW_LENSES } from "../core/reviewPolicy.js";
 
 export const CODEX_OPENROUTER_PROVIDER = "openrouter" as const;
@@ -28,7 +32,7 @@ const baseAgentSchema = z.object({
     "architecture_security_reviewer",
     "combined_reviewer",
   ]),
-  timeoutMs: z.number().int().positive().default(120_000),
+  timeoutMs: z.number().int().positive().default(DEFAULT_AGENT_TIMEOUT_MS),
   env: z.record(z.string(), z.string()).default({}),
   auth: z.object({
     mode: z.literal("passthrough").default("passthrough"),
@@ -74,6 +78,7 @@ const codexAgentSchema = baseAgentSchema
 const reviewBudgetSchema = z.object({
   maxModelCalls: z.number().int().positive(),
   maxTotalWallTimeMs: z.number().int().positive(),
+  warnAgentOutputBytes: z.number().int().positive().max(MAX_AGENT_OUTPUT_BYTES),
   maxAgentOutputBytes: z.number().int().positive().max(MAX_AGENT_OUTPUT_BYTES),
   maxFindingsPerAgent: z.number().int().positive(),
   skipOptionalPhasesWhenTokenUsageUnknown: z.boolean(),
@@ -154,13 +159,30 @@ export const kyosoConfigSchema = z
     const enabledPrimaryReviewers = Object.values(config.agents).filter(
       (agent) => agent.enabled,
     ).length;
-    if (config.reviewBudget.maxModelCalls >= enabledPrimaryReviewers) return;
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["reviewBudget", "maxModelCalls"],
-      message:
-        "must be greater than or equal to the number of enabled primary reviewers.",
-    });
+    if (config.reviewBudget.maxModelCalls < enabledPrimaryReviewers) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["reviewBudget", "maxModelCalls"],
+        message:
+          "must be greater than or equal to the number of enabled primary reviewers.",
+      });
+    }
+    const inheritedLegacyHardLimit =
+      config.reviewBudget.warnAgentOutputBytes ===
+        DEFAULT_WARN_AGENT_OUTPUT_BYTES &&
+      config.reviewBudget.maxAgentOutputBytes <=
+        DEFAULT_WARN_AGENT_OUTPUT_BYTES;
+    if (
+      config.reviewBudget.warnAgentOutputBytes >=
+        config.reviewBudget.maxAgentOutputBytes &&
+      !inheritedLegacyHardLimit
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["reviewBudget", "warnAgentOutputBytes"],
+        message: "must be less than reviewBudget.maxAgentOutputBytes.",
+      });
+    }
   });
 
 function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
@@ -225,6 +247,7 @@ export const kyosoConfigKnownLeafPaths = [
   "verification.allowDemotion",
   "reviewBudget.maxModelCalls",
   "reviewBudget.maxTotalWallTimeMs",
+  "reviewBudget.warnAgentOutputBytes",
   "reviewBudget.maxAgentOutputBytes",
   "reviewBudget.maxFindingsPerAgent",
   "reviewBudget.skipOptionalPhasesWhenTokenUsageUnknown",

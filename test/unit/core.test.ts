@@ -11,6 +11,7 @@ import { readWorkspaceFile } from "../../src/acp/AcpAgentProcess.js";
 import {
   extractFirstJsonObject,
   normalizeAgentOutput,
+  parseAgentOutputStrict,
 } from "../../src/acp/normalize.js";
 import {
   buildAgentPrompt,
@@ -46,7 +47,10 @@ import {
 import { createSnapshot } from "../../src/workspace/createSnapshot.js";
 import { cleanupSnapshot } from "../../src/workspace/cleanup.js";
 import { parseJudgeOutput } from "../../src/judge/prompt.js";
-import { resolveJudgeProvider } from "../../src/judge/provider.js";
+import {
+  resolveJudgeCallRoute,
+  resolveJudgeProvider,
+} from "../../src/judge/provider.js";
 import {
   sanitizeTextForDisplay,
   sanitizeTextForRawOutput,
@@ -54,13 +58,18 @@ import {
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
 import { computeCisaGate } from "../../src/security/cisaGate.js";
 import { decide } from "../../src/security/decision.js";
+import { resolveReviewBudget } from "../../src/core/reviewBudget.js";
+import {
+  createModelExecutionIdentity,
+  MODEL_EXECUTION_IDENTITY_MAX_CHARS,
+} from "../../src/core/modelExecutionIdentity.js";
 import {
   applyVerificationVerdicts,
   markVerificationOverflow,
   parseVerificationVerdicts,
   selectVerificationTargets,
 } from "../../src/core/verification.js";
-import { buildChildEnv } from "../../src/utils/env.js";
+import { buildChildEnv, buildChildLaunchContext } from "../../src/utils/env.js";
 import type {
   AgentName,
   AgentRunResult,
@@ -82,7 +91,8 @@ describe("config", () => {
     );
     expect(parsed.agents.claude.auth.envWhitelist).toContain("ANTHROPIC_MODEL");
     expect(parsed.agents.claude.auth.preferApiKey).toBe(false);
-    expect(parsed.agents.claude.timeoutMs).toBe(300_000);
+    expect(parsed.agents.codex.timeoutMs).toBe(600_000);
+    expect(parsed.agents.claude.timeoutMs).toBe(600_000);
     expect(parsed.verification).toEqual({
       enabled: false,
       maxFindings: 5,
@@ -91,13 +101,27 @@ describe("config", () => {
     });
     expect(parsed.reviewBudget).toEqual({
       maxModelCalls: 4,
-      maxTotalWallTimeMs: 480_000,
-      maxAgentOutputBytes: 65_536,
+      maxTotalWallTimeMs: 660_000,
+      warnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 1_048_576,
       maxFindingsPerAgent: 10,
-      skipOptionalPhasesWhenTokenUsageUnknown: true,
+      skipOptionalPhasesWhenTokenUsageUnknown: false,
     });
     expect(parsed.judge.mode).toBe("deterministic_only");
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
+  });
+
+  test("applies the shared agent timeout default", () => {
+    const parsed = kyosoConfigSchema.parse({
+      ...defaultConfig,
+      agents: {
+        codex: { ...defaultConfig.agents?.codex, timeoutMs: undefined },
+        claude: { ...defaultConfig.agents?.claude, timeoutMs: undefined },
+      },
+    });
+
+    expect(parsed.agents.codex.timeoutMs).toBe(600_000);
+    expect(parsed.agents.claude.timeoutMs).toBe(600_000);
   });
 
   test("requires enough global model-call budget for enabled primary reviewers", () => {
@@ -107,6 +131,62 @@ describe("config", () => {
         reviewBudget: { ...defaultConfig.reviewBudget, maxModelCalls: 1 },
       }),
     ).toThrow("enabled primary reviewers");
+  });
+
+  test("names the hard output threshold in schema validation errors", () => {
+    expect(() =>
+      kyosoConfigSchema.parse({
+        ...defaultConfig,
+        reviewBudget: {
+          ...defaultConfig.reviewBudget,
+          warnAgentOutputBytes: 1_024,
+          maxAgentOutputBytes: 1_024,
+        },
+      }),
+    ).toThrow("must be less than reviewBudget.maxAgentOutputBytes");
+  });
+
+  test("requires an explicit output warning threshold below the hard breaker", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-output-warning-invalid-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[reviewBudget]
+warnAgentOutputBytes = 1048576
+maxAgentOutputBytes = 1048576
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("must be less than reviewBudget.maxAgentOutputBytes");
+  });
+
+  test("preserves a legacy global hard limit below the default warning threshold", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-output-warning-legacy-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[reviewBudget]
+maxAgentOutputBytes = 65536
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+    const resolved = resolveReviewBudget(loaded.config.reviewBudget, undefined);
+
+    expect(loaded.config.reviewBudget).toMatchObject({
+      warnAgentOutputBytes: 524_288,
+      maxAgentOutputBytes: 65_536,
+    });
+    expect(resolved).not.toHaveProperty("effectiveWarnAgentOutputBytes");
   });
 
   test("accepts optional per-agent model pins", () => {
@@ -922,12 +1002,13 @@ allowDemotion = true
 
 [reviewBudget]
 maxModelCalls = 99
+warnAgentOutputBytes = 123
 `,
       "utf8",
     );
 
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
-      /agents\.codex\.command.*network\.defaultMode.*reviewBudget\.maxModelCalls.*verification\.allowDemotion/s,
+      /agents\.codex\.command.*network\.defaultMode.*reviewBudget\.maxModelCalls.*reviewBudget\.warnAgentOutputBytes.*verification\.allowDemotion/s,
     );
     await expect(loadConfig({ cwd, env: { HOME: home } })).rejects.toThrow(
       join(home, ".config", "kyoso", "config.toml"),
@@ -1279,6 +1360,22 @@ describe("judge", () => {
     expect(resolveJudgeProvider("none", { OPENAI_API_KEY: "openai" })).toBe(
       "deterministic_fallback",
     );
+  });
+
+  test("requires a credential before planning an LLM judge call", () => {
+    expect(
+      resolveJudgeCallRoute("deterministic_plus_llm", "openai", {}),
+    ).toEqual({ provider: "openai", llmAvailable: false });
+    expect(
+      resolveJudgeCallRoute("deterministic_plus_llm", "openai", {
+        CODEX_API_KEY: "codex",
+      }),
+    ).toEqual({ provider: "openai", llmAvailable: true });
+    expect(
+      resolveJudgeCallRoute("deterministic_only", "anthropic", {
+        ANTHROPIC_API_KEY: "anthropic",
+      }),
+    ).toEqual({ provider: "anthropic", llmAvailable: false });
   });
 
   test("parses only advisory judge fields", () => {
@@ -1730,6 +1827,27 @@ describe("display sanitization", () => {
     expect(value).not.toContain("\u001b");
     expect(value).not.toContain("\n");
   });
+
+  test("sanitizes and bounds model execution identity metadata", () => {
+    const identity = createModelExecutionIdentity({
+      providerRoute: "openrouter",
+      requestedModel: `openai/${"x".repeat(300)}\nforged`,
+      reportedProvider: "https://provider.example.test/v1",
+      reportedModel: `api_key=sk-proj-${"abcdefghijklmnopqrstuvwxyz123456"}`,
+    });
+
+    expect(identity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: expect.any(String),
+      reportingStatus: "requested_only",
+    });
+    expect(identity.requestedModel?.length).toBeLessThanOrEqual(
+      MODEL_EXECUTION_IDENTITY_MAX_CHARS,
+    );
+    expect(identity.requestedModel).not.toContain("\n");
+    expect(JSON.stringify(identity)).not.toContain("provider.example.test");
+    expect(JSON.stringify(identity)).not.toContain("sk-proj-");
+  });
 });
 
 describe("truncate", () => {
@@ -1802,6 +1920,84 @@ describe("agent JSON extraction", () => {
       "not-json",
     );
     expect(opinion.findings[0]?.title).toBe("Agent output could not be parsed");
+  });
+
+  test("strictly parses a complete valid opinion without defaulting fields", () => {
+    const opinion = parseAgentOutputStrict(
+      "codex",
+      "implementation_reviewer",
+      JSON.stringify({
+        summary: "complete",
+        findings: [
+          {
+            severity: "high",
+            category: "authz",
+            title: "Tenant boundary bypass",
+            evidence: "tenant comes from input",
+            recommendation: "derive tenant from session",
+            disposition: "actionable",
+            changeRelation: "introduced",
+            evidenceQuality: "concrete",
+            evidenceRefs: [{ kind: "plan_clause", label: "Tenant boundary" }],
+            files: [{ path: "src/tenant.ts", lineStart: 10, lineEnd: 12 }],
+            confidence: "high",
+            cisaMapping: ["secure_by_default"],
+          },
+        ],
+        testsToAdd: ["reject cross-tenant input"],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+    );
+
+    expect(opinion).toMatchObject({
+      agent: "codex",
+      role: "implementation_reviewer",
+      summary: "complete",
+      findings: [{ title: "Tenant boundary bypass", severity: "high" }],
+    });
+  });
+
+  test("strict parsing rejects partial JSON and invalid required structure", () => {
+    const invalidOutputs = [
+      '{"summary":"partial","findings":[',
+      JSON.stringify({
+        summary: "missing open questions",
+        findings: [],
+        testsToAdd: [],
+        residualRisks: [],
+      }),
+      JSON.stringify({
+        summary: "defaultable finding",
+        findings: [
+          {
+            severity: "unexpected",
+            category: "test",
+            title: "",
+            evidence: "evidence",
+            recommendation: "recommendation",
+            confidence: "high",
+          },
+        ],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+      }),
+      JSON.stringify({
+        summary: "unknown field",
+        findings: [],
+        testsToAdd: [],
+        residualRisks: [],
+        openQuestions: [],
+        extra: true,
+      }),
+    ];
+
+    for (const output of invalidOutputs) {
+      expect(
+        parseAgentOutputStrict("codex", "implementation_reviewer", output),
+      ).toBeUndefined();
+    }
   });
 
   test("normalizes CISA gate values from agent output", () => {
@@ -1883,6 +2079,21 @@ describe("agent prompts", () => {
     "Write each finding title in concise English, regardless of the language used elsewhere. Titles are compared across agents for deduplication.";
   const baseStateInstruction =
     "Selected files show the PRE-CHANGE (base) state. The unified diff describes proposed changes on top of them. Do not report the difference between the selected files and the diff as an inconsistency.";
+
+  test("renders the findings limit as a soft target", () => {
+    const prompt = buildAgentPrompt(
+      "plan_review",
+      { goal: "review" },
+      "codex",
+      "implementation_reviewer",
+      { maxFindingsTarget: 10 },
+    );
+
+    expect(prompt).toContain("aim for at most 10 findings in severity order");
+    expect(prompt).toContain(
+      "do not hide a material finding solely to meet this target",
+    );
+  });
 
   test("renders typed review policy outside untrusted constraints", () => {
     const prompt = buildAgentPrompt(
@@ -2938,6 +3149,80 @@ describe("child env", () => {
       model: "gpt-5.5",
     });
     expect(explicit.CODEX_CONFIG).toBe('{"model":"gpt-5.4"}');
+  });
+
+  test("resolves requested models from the final child environment", () => {
+    const claude = buildChildLaunchContext(
+      { PATH: "/bin", ANTHROPIC_MODEL: "claude-parent" },
+      ["ANTHROPIC_MODEL"],
+      { ANTHROPIC_MODEL: "claude-explicit" },
+      { agent: "claude", model: "claude-config" },
+    );
+    const codex = buildChildLaunchContext(
+      { PATH: "/bin" },
+      [],
+      { CODEX_CONFIG: '{"model":"gpt-explicit"}' },
+      { agent: "codex", model: "gpt-config" },
+    );
+
+    expect(claude.executionIdentity).toEqual({
+      providerRoute: "claude_default",
+      requestedModel: "claude-explicit",
+      reportingStatus: "requested_only",
+    });
+    expect(codex.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      requestedModel: "gpt-explicit",
+      reportingStatus: "requested_only",
+    });
+  });
+
+  test("keeps invalid default Codex config runnable with unknown identity", () => {
+    const context = buildChildLaunchContext(
+      { PATH: "/bin" },
+      [],
+      { CODEX_CONFIG: "not-json" },
+      { agent: "codex" },
+    );
+
+    expect(context.env.CODEX_CONFIG).toBe("not-json");
+    expect(context.executionIdentity).toEqual({
+      providerRoute: "codex_default",
+      reportingStatus: "unknown",
+    });
+  });
+
+  test("exposes only the effective OpenRouter route and requested model", () => {
+    const key = "openrouter-child-identity-key";
+    const context = buildChildLaunchContext(
+      { PATH: "/bin", OPENROUTER_API_KEY: key },
+      [],
+      {
+        CODEX_CONFIG: JSON.stringify({
+          model_providers: {
+            foreign: {
+              base_url: "https://foreign.example.test/v1",
+              env_key: "FOREIGN_API_KEY",
+            },
+          },
+        }),
+      },
+      {
+        agent: "codex",
+        provider: "openrouter",
+        model: "openai/o4-mini",
+      },
+    );
+    const serialized = JSON.stringify(context.executionIdentity);
+
+    expect(context.executionIdentity).toEqual({
+      providerRoute: "openrouter",
+      requestedModel: "openai/o4-mini",
+      reportingStatus: "requested_only",
+    });
+    expect(serialized).not.toContain(key);
+    expect(serialized).not.toContain("foreign");
+    expect(serialized).not.toContain("base_url");
   });
 
   test("applies the fixed OpenRouter preset while preserving unrelated config", () => {

@@ -701,6 +701,13 @@ function markdownResult(
     completion: { status: "complete", reasons: [], retryable: false },
     executionBudget: {
       maxModelCalls: 0,
+      modelCallPlan: {
+        requiredPrimaryCalls: 0,
+        potentialVerifierCalls: 0,
+        potentialJudgeCalls: 0,
+        potentialTotalCalls: 0,
+        ceilingEffects: [],
+      },
       modelCalls: {
         planned: 0,
         consumed: 0,

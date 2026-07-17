@@ -703,6 +703,7 @@ enabled = false
 [agents.claude]
 command = "bun"
 args = ["run", ${JSON.stringify(fixture)}]
+model = "claude-cli-requested"
 timeoutMs = 5000
 `,
       "utf8",
@@ -752,6 +753,14 @@ timeoutMs = 5000
     expect(result.agentsUsed).toEqual(["claude"]);
     expect(result.agentOpinions[0].summary).toContain(
       "configOption=effort:high",
+    );
+    expect(result.audit.modelCalls[0].executionIdentity).toEqual({
+      providerRoute: "claude_default",
+      requestedModel: "claude-cli-requested",
+      reportingStatus: "requested_only",
+    });
+    expect(result.summaryMarkdown).toContain(
+      "primary/claude: route=claude_default, requested=claude-cli-requested, reporting=requested_only",
     );
   });
 

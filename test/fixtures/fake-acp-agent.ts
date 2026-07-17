@@ -22,6 +22,15 @@ if (mode === "crash") {
   process.exit(1);
 }
 
+if (mode === "oversized_ndjson_line") {
+  const lineBytes = Number(process.env.FAKE_ACP_LINE_BYTES);
+  if (!Number.isSafeInteger(lineBytes) || lineBytes <= 0) {
+    throw new Error("FAKE_ACP_LINE_BYTES must be a positive integer");
+  }
+  process.stdout.write("x".repeat(lineBytes));
+  await new Promise(() => {});
+}
+
 const app = agent({ name: "kyoso-fake-acp-agent" })
   .onRequest(methods.agent.initialize, () => {
     initialized = true;
@@ -111,6 +120,67 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       return { stopReason: "end_turn", usage: fakeUsage() };
     }
 
+    if (
+      mode === "valid_then_thought" ||
+      mode === "invalid_then_thought" ||
+      mode === "partial_then_thought" ||
+      mode === "valid_with_overflow_suffix"
+    ) {
+      const salvageOpinion = {
+        summary: "salvaged output",
+        findings: [
+          {
+            severity: "high",
+            category: "test",
+            title: "Salvaged complete finding",
+            evidence: "the complete JSON arrived before the hard breaker",
+            recommendation: "retain this finding while blocking the review",
+            confidence: "high",
+          },
+        ],
+        testsToAdd: [
+          "verify a complete primary finding remains after thought output crosses the hard limit",
+        ],
+        residualRisks: ["salvaged risk"],
+        openQuestions: ["salvaged question"],
+      };
+      const text =
+        mode === "partial_then_thought"
+          ? '{"summary":"partial","findings":['
+          : mode === "valid_with_overflow_suffix"
+            ? `${JSON.stringify(salvageOpinion)}あoverflow`
+            : JSON.stringify(
+                mode === "invalid_then_thought"
+                  ? {
+                      summary: salvageOpinion.summary,
+                      findings: salvageOpinion.findings,
+                      testsToAdd: salvageOpinion.testsToAdd,
+                      residualRisks: salvageOpinion.residualRisks,
+                    }
+                  : salvageOpinion,
+              );
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "fake-message",
+          content: { type: "text", text },
+        },
+      });
+      if (mode === "valid_with_overflow_suffix") {
+        return { stopReason: "end_turn", usage: fakeUsage() };
+      }
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          messageId: "fake-thought",
+          content: { type: "text", text: "overflow" },
+        },
+      });
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+
     const promptText = promptToText(
       (ctx.params as { prompt?: unknown }).prompt,
     );
@@ -185,7 +255,11 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
         },
       },
     });
-    return { stopReason: terminalStopReason(mode), usage: fakeUsage() };
+    return {
+      stopReason: terminalStopReason(mode),
+      usage: fakeUsage(),
+      ...fakeExecutionMetadata(),
+    };
   });
 
 const stream = ndJsonStream(
@@ -220,6 +294,21 @@ function hasEnv(key: string): boolean {
 
 function fakeUsage() {
   return { totalTokens: 20, inputTokens: 12, outputTokens: 8 };
+}
+
+function fakeExecutionMetadata(): {
+  _meta?: { provider?: string; model?: string };
+} {
+  const provider = process.env.FAKE_ACP_REPORTED_PROVIDER;
+  const model = process.env.FAKE_ACP_REPORTED_MODEL;
+  return provider || model
+    ? {
+        _meta: {
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+        },
+      }
+    : {};
 }
 
 function terminalStopReason(value: string) {

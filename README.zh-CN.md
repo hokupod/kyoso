@@ -419,24 +419,40 @@ Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.tom
 
 ### Execution budget and review stopping
 
-每次 review 都有 user-global hard ceiling，用于限制 model call 数、总 wall time、streaming agent text（message 和 thought chunk）以及每个 agent 的 finding 数量。
+每次 review 都有 user-global hard ceiling，用于限制 model call 数、总 wall time和streaming agent text（message 和 thought chunk）。streaming text还设有更低的soft warning threshold，而每个agent的finding数是soft target。
 
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
-maxAgentOutputBytes = 65536
+maxTotalWallTimeMs = 660000
+warnAgentOutputBytes = 524288
+maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
-skipOptionalPhasesWhenTokenUsageUnknown = true
+skipOptionalPhasesWhenTokenUsageUnknown = false
 ```
 
-`reviewBudget` 只能在 user-global 配置中设置；project `kyoso.toml` 和 `--set` 都不能修改它。MCP / library request 只能通过 `options.reviewBudget` 降低 ceiling，不能提高。Kyoso 会先同时预留两个 primary reviewer，再将剩余 call 用于 verification，并把 LLM Judge 作为 advisory。默认 Judge mode 是 `deterministic_only`。
+`reviewBudget` 只能在 user-global 配置中设置；project `kyoso.toml` 和 `--set` 都不能修改它。MCP / library request 只能通过 `options.reviewBudget` 降低 ceiling，不能提高。512 KiB warning不会block，1 MiB limit会cancel call，超过10条finding target的material finding也不会被丢弃。token usage未知时默认warning并继续；只有user-global显式设为`true`时才保持严格的optional-phase skip。Kyoso 会先同时预留两个 primary reviewer，再将剩余 call 用于 verification，并把 LLM Judge 作为 advisory。默认 Judge mode 是 `deterministic_only`。
 
-结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、output bytes，以及 reported 或 unknown token usage。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次评审与 material fix 后的确认评审各1次；第三次需要用户明确批准。
+结果包含 `completion`、`executionBudget` 和 `requestFingerprint`。Markdown 与 Audit 会显示 call 数、wall time、message / thought / total output bytes，以及reported / partial / unknown token usage。已完成的model call还可显示`executionIdentity`，将Kyoso route和requested model与provider-reported identity分开；requested-only value绝不会显示为provider报告值。若 `completion.status` 为 `incomplete`，Kyoso 返回普通的 `block` 结果且 `retryable: false`：该 block 表示 review coverage 未完成，而不是已经确认 code defect。不要自动重试相同 fingerprint。对于一个 review checkpoint，bundled Skill 只允许首次评审与 material fix 后的确认评审各1次；第三次需要用户明确批准。
 
 ### Timeouts
 
-Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒(`reviewBudget.maxTotalWallTimeMs`)，各 phase 使用剩余 deadline 而不会延长它。MCP clients 应允许 tool calls 至少运行480秒。
+Codex 和 Claude 的default agent timeout均为600秒；verification round 默认90秒。review-wide deadline 默认660秒(`reviewBudget.maxTotalWallTimeMs`)，在default并行primary phase后保留标准的60秒finalization余量。各 phase 使用剩余 deadline 而不会延长它。`kyoso doctor` 会显示已配置的顺序phase时间，以及加入10%或60秒（取较大值）余量后的review-wide建议值。只有当judge mode允许且direct provider credential可用时，才会计入LLM judge timeout。
+
+本repository的primary 15分钟＋verification 15分钟dogfooding preset使用以下user-global override：
+
+```toml
+[reviewBudget]
+maxTotalWallTimeMs = 2100000
+```
+
+Codex Plugin和新生成的manual Codex registration使用`tool_timeout_sec = 2160`，比Kyoso的35分钟deadline多保留60秒。`kyoso setup`会保留已有manual registration，因此需要手动更新。Claude Code Plugin manifest不设置client tool timeout；请用等效的毫秒值启动Claude Code，然后重启client：
+
+```bash
+MCP_TOOL_TIMEOUT=2160000 claude
+```
+
+延长client timeout不会延长Kyoso内部的review-wide deadline。对于其他preset，请确保client timeout大于`reviewBudget.maxTotalWallTimeMs`。
 
 ### Verification
 
@@ -473,6 +489,20 @@ Judge defaults 有意使用 lightweight models。若需要更强的 judge，请�
 
 `audit.directory`是 logical relative directory（默认：`.kyoso/traces`），不是 workspace 内的 directory。现有 workspace `.kyoso/traces`不会被自动迁移或删除。
 
+通过installed package显式指定absolute trusted trace directory，生成read-only budget report：
+
+```bash
+kyoso-budget-report --trace-dir /absolute/path/to/traces --json
+```
+
+在source checkout中使用package script：
+
+```bash
+bun run audit:budget-report -- --trace-dir /absolute/path/to/traces --json
+```
+
+report仅递归读取regular `.jsonl`文件，skip symlink，且不会推测trace path。它按agent、kind、provider route、requested model以及requested / reported identity status统计call，分别显示all-call与normal-path的nearest-rank p50 / p95 / p99 / max byte分布、token usage reporting率、output warning / limit率和completion / skip原因。只有明确具有`resultStatus = "completed"`且没有`errorCode`的event才属于normal-path；有歧义的historical event仅保留在all-call统计中。top-level byte分布和output warning / hard limit的call率仅统计primary与verifier；judge call仍保留在all-call总数及execution分组中，但不会稀释重新校准指标。warning call率只包含与相同trace / kind / agent的completed call相关联的warning event；重复或孤立的warning event会单独显示。JSON通过`inputLimits`公开固定输入上限；当file、byte、line、event、call、review、warning、group、reason或directory超限时，命令会中止而不是截断。遍历在专用worker中执行，其经过验证的current directory绑定到指定root的device / inode；recursive descent也会重新验证每个directory identity，因此替换并恢复lexical root不会改变读取目标。file使用不跟随symlink的non-blocking open，并且读取量不会超过discovery时的size；如果platform无法提供这些open capability，report会中止。metadata sanitize属于defense in depth，因此只能指定operator信任的trace directory。report不会把bytes换算为估算token或cost。重新校准时，将soft warning保持在正常路径p99的至少2倍，将hard breaker放在warning之上足够远的位置，使正常触发率接近0，并在调整policy前按provider / model检查token usage unknown率。
+
 Raw agent output 默认禁用。`audit.includeFileContents` 是 reserved value，固定为 `false`；不会通过该设置保存 file contents。如果启用 `audit.includeRawAgentOutput`，traces 可能会保留 sensitive review output；请按照 local retention policy 删除旧 traces。在 Windows 或无法证明安全 filesystem capability 的环境中，Audit trace 写入会保持禁用，review 会返回 sanitized warning（参见 [Safety Model](#safety-model)）。
 
 ## Safety Model
@@ -506,7 +536,7 @@ Windows，以及无法证明所需 filesystem capability 的环境，会 fail-cl
 
 ## Troubleshooting
 
-- MCP timeout: 将 client tool timeouts 设置为至少 480 秒，以覆盖 review-wide deadline。Kyoso defaults 请参阅 [Timeouts](#timeouts)。
+- MCP timeout: client timeout应长于review-wide deadline。35分钟preset在Codex中使用2160秒，在Claude Code中使用`MCP_TOOL_TIMEOUT=2160000`。请参阅[Timeouts](#timeouts)。
 - Fresh npm release: safe-chain 等 minimum-package-age protection 可能会在 publish 后短时间内 block `npx @kyo-so/cli` resolution。
 - Deprecated TypeScript config: 除非传入 `--trust-config`，否则 untrusted `kyoso.config.ts` 会被 skip；新配置请使用 `kyoso.toml`。
 - OpenRouter key missing: 确认 Codex `model` 非空、`OPENROUTER_API_KEY` 已 forward 给 Kyoso process，并已重启 client；再运行 `kyoso doctor`。Marketplace Plugin `0.4.0` 及更高版本会将此变量名 forward 给 Kyoso process，旧版本不会。setup 也不会重写已有 MCP registration。

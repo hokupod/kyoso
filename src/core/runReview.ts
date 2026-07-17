@@ -1,9 +1,5 @@
 import { resolve } from "node:path";
-import {
-  CODEX_OPENROUTER_PROVIDER,
-  kyosoConfigSchema,
-  type KyosoConfig,
-} from "../config/schema.js";
+import { kyosoConfigSchema, type KyosoConfig } from "../config/schema.js";
 import { defaultConfig } from "../config/defaultConfig.js";
 import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
 import { applyConfigOverrides } from "../config/configOverrides.js";
@@ -16,7 +12,6 @@ import {
 } from "../acp/prompts.js";
 import { normalizeAgentOutput } from "../acp/normalize.js";
 import { aggregateAgentResults } from "../aggregate/aggregateFindings.js";
-import { compareSeverity } from "../aggregate/severity.js";
 import {
   createTraceWriter,
   type TraceWriter,
@@ -31,23 +26,27 @@ import type {
   AgentRole,
   CisaSecureByDesignResult,
   CrossModelAnalysis,
+  JudgeProvider,
   KyosoFinding,
   KyosoResult,
   KyosoReviewRequest,
+  ModelExecutionIdentity,
   NetworkMode,
   NormalizedAgentOpinion,
   ReviewCoverage,
   ReviewLens,
+  ResolvedReviewBudget,
   ReviewTool,
   SecretScanResult,
 } from "./types.js";
+import { normalizeModelExecutionIdentity } from "./modelExecutionIdentity.js";
 import { validateReviewRequest } from "./validateRequest.js";
 import {
   defaultSummaryText,
   renderMarkdownResult,
 } from "../output/markdown.js";
 import {
-  resolveJudgeProvider,
+  resolveJudgeCallRoute,
   runJudge,
   type JudgeRunInput,
   type JudgeRunResult,
@@ -67,6 +66,7 @@ import { newTraceId } from "../utils/ids.js";
 import { createRequestFingerprint } from "./requestFingerprint.js";
 import { normalizeModelTokenUsage } from "./tokenUsage.js";
 import {
+  buildReviewModelCallPlan,
   ReviewBudgetTracker,
   resolveReviewBudget,
   type ModelCallReservation,
@@ -131,16 +131,22 @@ export async function runReview(
   } catch (error) {
     if (error instanceof KyosoRequestError) {
       const config = kyosoConfigSchema.parse(defaultConfig);
+      const reviewBudget = resolveReviewBudget(config.reviewBudget, undefined);
       const budgetTracker = new ReviewBudgetTracker(
-        config.reviewBudget,
+        reviewBudget,
         startedAtEpochMs,
+        configuredReviewModelCallPlan(
+          config,
+          reviewBudget,
+          options.env ?? process.env,
+        ),
       );
       const requestFingerprint = createRequestFingerprint({
         tool,
         request: requestForRecursionFingerprint(request),
         config,
         roles: resolveAgentRoles(config),
-        budget: config.reviewBudget,
+        budget: reviewBudget,
         entrypoint: options.entrypoint,
       });
       const trace = traceWriterFactory({
@@ -271,6 +277,12 @@ export async function runReview(
     const budgetTracker = new ReviewBudgetTracker(
       reviewBudget,
       startedAtEpochMs,
+      configuredReviewModelCallPlan(
+        loaded.config,
+        reviewBudget,
+        options.env ?? process.env,
+        request.options?.judgeProvider,
+      ),
     );
     assertTrustedWorkspaceRoot(
       request.workspace?.root,
@@ -433,6 +445,7 @@ export async function runReview(
       budgetTracker,
       requestFingerprint,
     });
+    warnings.push(...plannedBudgetWarnings(budgetTracker));
     snapshot = await createSnapshot(traceId, tool, built.request, {
       denyPatterns,
       allowPatterns,
@@ -470,14 +483,14 @@ export async function runReview(
       ),
     );
 
-    const normalized = agentResults.map((result) =>
+    const normalizedAgentResults = agentResults.map((result) =>
       normalizeAgentRunResult(result, reviewBudget.maxFindingsPerAgent),
     );
-    const normalizedAgentResults = normalized.map((item) => item.result);
-    for (const item of normalized.filter((item) => item.findingsCapped)) {
-      budgetTracker.markIncomplete("coverage_incomplete");
+    for (const result of normalizedAgentResults.filter(
+      (item) => item.findingsTargetExceeded,
+    )) {
       warnings.push(
-        `Agent ${item.result.agent} findings were capped at ${reviewBudget.maxFindingsPerAgent}; review coverage is incomplete.`,
+        `Agent ${result.agent} reported ${result.reportedFindings} findings, above the soft target of ${reviewBudget.maxFindingsPerAgent}; all findings were retained.`,
       );
     }
     const enabledAgents = (["codex", "claude"] as const).filter(
@@ -723,6 +736,13 @@ export async function runReview(
     );
     const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
     const budgetAfterJudge = budgetTracker.snapshot();
+    const finalWarnings = Array.from(
+      new Set([
+        ...(resultWithoutMarkdown.audit.warnings ?? []),
+        ...outputWarningMessages(budgetAfterJudge),
+        ...tokenUsageWarningMessages(budgetTracker, budgetAfterJudge),
+      ]),
+    );
     const finalDecision =
       budgetAfterJudge.completion.status === "incomplete" ? "block" : decision;
     const resultAfterJudge: Omit<KyosoResult, "summaryMarkdown"> = {
@@ -735,6 +755,7 @@ export async function runReview(
       audit: {
         ...resultWithoutMarkdown.audit,
         completedAt: new Date().toISOString(),
+        warnings: finalWarnings,
         modelCalls: budgetAfterJudge.modelCalls,
       },
     };
@@ -743,6 +764,9 @@ export async function runReview(
       traceId,
       provider: judge.provider,
       status: judge.status,
+      ...(judge.executionIdentity
+        ? { executionIdentity: judge.executionIdentity }
+        : {}),
       timestamp: new Date().toISOString(),
     };
     if (judge.error) judgeEvent.error = judge.error;
@@ -1003,11 +1027,24 @@ async function runFindingVerification(input: {
       input.budgetTracker.remainingWallTimeMs(),
     ),
     deadlineAtEpochMs: input.budgetTracker.deadlineAtEpochMs,
+    warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
     maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
     networkMode: input.networkMode,
-    onStarted: () => {
-      input.budgetTracker.markStarted(group.reservation);
-      return Promise.resolve();
+    onStarted: (executionIdentity?: ModelExecutionIdentity) => {
+      input.budgetTracker.markStarted(group.reservation, executionIdentity);
+      const event = buildAgentStartedEvent({
+        traceId: input.traceId,
+        agent: group.verifier,
+        role: "finding_verifier",
+        executionIdentity: input.budgetTracker.executionIdentity(
+          group.reservation,
+        ),
+      });
+      return input.trace.write(event).catch(() => {
+        warnings.push(
+          "AUDIT_WRITE_FAILED: agent_started event could not be recorded.",
+        );
+      });
     },
   }));
 
@@ -1179,11 +1216,12 @@ async function runBudgetedJudge(
   },
 ): Promise<JudgeRunResult> {
   const configuredProvider = input.requestedProvider ?? input.config.provider;
-  const provider = resolveJudgeProvider(configuredProvider, input.env);
-  if (
-    input.config.mode === "deterministic_only" ||
-    provider === "deterministic_fallback"
-  ) {
+  const judgeRoute = resolveJudgeCallRoute(
+    input.config.mode,
+    configuredProvider,
+    input.env,
+  );
+  if (!judgeRoute.llmAvailable) {
     return runJudge(input);
   }
 
@@ -1254,7 +1292,11 @@ async function runBudgetedJudge(
   const usage = normalizeModelTokenUsage(judge.usage);
   input.budgetTracker.complete(reservation, {
     ...(usage ? { usage } : {}),
+    ...(judge.executionIdentity
+      ? { executionIdentity: judge.executionIdentity }
+      : {}),
   });
+  const executionIdentity = input.budgetTracker.executionIdentity(reservation);
   await input.trace.write({
     type: "model_call_completed",
     traceId: input.traceId,
@@ -1262,6 +1304,7 @@ async function runBudgetedJudge(
     provider: judge.provider,
     resultStatus: judge.status,
     ...(usage ? { usage } : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
     timestamp: new Date().toISOString(),
   });
   return judge;
@@ -1417,6 +1460,7 @@ async function runAgents(input: {
       prompt: buildAgentPrompt(input.tool, input.request, agent, role, {
         requiredLenses,
         cisaEnabled: input.config.securityReview.cisaSecureByDesign.enabled,
+        maxFindingsTarget: input.budgetTracker.budget.maxFindingsPerAgent,
       }),
       workspaceDir: input.workspaceDir,
       timeoutMs: Math.min(
@@ -1425,27 +1469,18 @@ async function runAgents(input: {
         input.budgetTracker.remainingWallTimeMs(),
       ),
       deadlineAtEpochMs: input.budgetTracker.deadlineAtEpochMs,
+      warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
       maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
       networkMode: input.networkMode,
-      onStarted: () => {
-        input.budgetTracker.markStarted(reservation);
+      onStarted: (executionIdentity?: ModelExecutionIdentity) => {
+        input.budgetTracker.markStarted(reservation, executionIdentity);
         if (!acceptingStartedEvents) return Promise.resolve();
-        const event: Record<string, unknown> = {
-          type: "agent_started",
+        const event = buildAgentStartedEvent({
           traceId: input.traceId,
           agent,
           role,
-          timestamp: new Date().toISOString(),
-        };
-        if (agentConfig.model) {
-          event.model = sanitizeTextForDisplay(agentConfig.model);
-        }
-        if (
-          agent === "codex" &&
-          input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER
-        ) {
-          event.provider = CODEX_OPENROUTER_PROVIDER;
-        }
+          executionIdentity: input.budgetTracker.executionIdentity(reservation),
+        });
         const write = (async () => {
           try {
             await input.trace.write(event);
@@ -1505,7 +1540,14 @@ async function runAgents(input: {
     };
   });
 
-  for (const result of orderedResults) {
+  const normalizedResults = orderedResults.map((result) =>
+    normalizeAgentRunResult(
+      result,
+      input.budgetTracker.budget.maxFindingsPerAgent,
+    ),
+  );
+
+  for (const result of normalizedResults) {
     const reservation = reservations.get(result.agent);
     if (!reservation) continue;
     await finalizeModelCallResult({
@@ -1520,7 +1562,7 @@ async function runAgents(input: {
     }
   }
   await Promise.all(
-    orderedResults.map((result) => {
+    normalizedResults.map((result) => {
       const event: Record<string, unknown> = {
         type: "agent_completed",
         traceId: input.traceId,
@@ -1535,13 +1577,20 @@ async function runAgents(input: {
         event.errorCode = result.error.code;
         event.errorDetail = result.error.detail;
       }
+      if (result.salvaged !== undefined) event.salvaged = result.salvaged;
+      if (result.reportedFindings !== undefined) {
+        event.reportedFindings = result.reportedFindings;
+      }
+      if (result.findingsTargetExceeded !== undefined) {
+        event.findingsTargetExceeded = result.findingsTargetExceeded;
+      }
       if (input.config.audit.includeRawAgentOutput && result.rawText) {
         event.rawText = sanitizeTextForRawOutput(result.rawText);
       }
       return input.trace.write(event);
     }),
   );
-  return orderedResults;
+  return normalizedResults;
 }
 
 async function skipReservedPrimaryAgents(input: {
@@ -1611,23 +1660,72 @@ async function finalizeModelCallResult(input: {
     return;
   }
 
-  input.budgetTracker.markStarted(input.reservation);
+  input.budgetTracker.markStarted(
+    input.reservation,
+    input.result.executionIdentity,
+  );
   const usage = normalizeModelTokenUsage(input.result.usage);
-  const outputBytes =
-    input.result.outputBytes ??
-    (input.result.rawText
-      ? Buffer.byteLength(input.result.rawText, "utf8")
-      : undefined);
+  const { messageBytes, thoughtBytes, outputBytes } = resolveOutputByteMetrics(
+    input.result,
+  );
+  const warningThreshold =
+    input.budgetTracker.budget.effectiveWarnAgentOutputBytes;
+  const warningTriggered =
+    warningThreshold !== undefined &&
+    outputBytes !== undefined &&
+    (input.result.outputWarningTriggered === true ||
+      outputBytes >= warningThreshold);
+  const outputWarningTriggered =
+    warningTriggered || input.result.outputWarningTriggered !== undefined
+      ? warningTriggered
+      : undefined;
   input.budgetTracker.complete(input.reservation, {
+    ...(messageBytes === undefined ? {} : { messageBytes }),
+    ...(thoughtBytes === undefined ? {} : { thoughtBytes }),
     ...(outputBytes === undefined ? {} : { outputBytes }),
+    ...(outputWarningTriggered === undefined ? {} : { outputWarningTriggered }),
+    ...(input.result.salvaged === undefined
+      ? {}
+      : { salvaged: input.result.salvaged }),
+    ...(input.result.reportedFindings === undefined
+      ? {}
+      : { reportedFindings: input.result.reportedFindings }),
+    ...(input.result.findingsTargetExceeded === undefined
+      ? {}
+      : { findingsTargetExceeded: input.result.findingsTargetExceeded }),
     ...(usage ? { usage } : {}),
+    ...(input.result.executionIdentity
+      ? { executionIdentity: input.result.executionIdentity }
+      : {}),
     ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
   });
+  const executionIdentity = input.budgetTracker.executionIdentity(
+    input.reservation,
+  );
   if (input.result.error?.code === "AGENT_OUTPUT_LIMIT") {
     input.budgetTracker.markIncomplete("agent_output_limit");
   }
   if (input.result.error?.code === "REVIEW_DEADLINE_EXCEEDED") {
     input.budgetTracker.markIncomplete("deadline");
+  }
+  if (
+    outputWarningTriggered &&
+    warningThreshold !== undefined &&
+    messageBytes !== undefined &&
+    thoughtBytes !== undefined &&
+    outputBytes !== undefined
+  ) {
+    await input.trace.write({
+      type: "agent_output_warning",
+      traceId: input.traceId,
+      kind: input.reservation.kind,
+      agent: input.reservation.agent,
+      thresholdBytes: warningThreshold,
+      messageBytes,
+      thoughtBytes,
+      outputBytes,
+      timestamp: new Date().toISOString(),
+    });
   }
   await input.trace.write({
     type: "model_call_completed",
@@ -1636,11 +1734,92 @@ async function finalizeModelCallResult(input: {
     agent: input.reservation.agent,
     resultStatus: input.result.status,
     ...(input.result.error?.code ? { errorCode: input.result.error.code } : {}),
+    ...(messageBytes === undefined ? {} : { messageBytes }),
+    ...(thoughtBytes === undefined ? {} : { thoughtBytes }),
     ...(outputBytes === undefined ? {} : { outputBytes }),
+    ...(outputWarningTriggered === undefined ? {} : { outputWarningTriggered }),
+    ...(input.result.salvaged === undefined
+      ? {}
+      : { salvaged: input.result.salvaged }),
+    ...(input.result.reportedFindings === undefined
+      ? {}
+      : { reportedFindings: input.result.reportedFindings }),
+    ...(input.result.findingsTargetExceeded === undefined
+      ? {}
+      : { findingsTargetExceeded: input.result.findingsTargetExceeded }),
     ...(usage ? { usage } : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
     ...(input.result.stopReason ? { stopReason: input.result.stopReason } : {}),
     timestamp: new Date().toISOString(),
   });
+}
+
+function buildAgentStartedEvent(input: {
+  traceId: string;
+  agent: AgentName;
+  role: AgentRole;
+  executionIdentity?: ModelExecutionIdentity;
+}): Record<string, unknown> {
+  const executionIdentity = normalizeModelExecutionIdentity(
+    input.executionIdentity,
+  );
+  return {
+    type: "agent_started",
+    traceId: input.traceId,
+    agent: input.agent,
+    role: input.role,
+    ...(executionIdentity ? { executionIdentity } : {}),
+    ...(executionIdentity?.requestedModel
+      ? { model: executionIdentity.requestedModel }
+      : {}),
+    ...(executionIdentity?.providerRoute === "openrouter"
+      ? { provider: "openrouter" }
+      : {}),
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function resolveOutputByteMetrics(result: AgentRunResult): {
+  messageBytes?: number;
+  thoughtBytes?: number;
+  outputBytes?: number;
+} {
+  const rawTextBytes = result.rawText
+    ? Buffer.byteLength(result.rawText, "utf8")
+    : undefined;
+  let messageBytes = result.messageBytes;
+  let thoughtBytes = result.thoughtBytes;
+
+  if (messageBytes === undefined && thoughtBytes === undefined) {
+    if (rawTextBytes !== undefined) {
+      messageBytes = rawTextBytes;
+      thoughtBytes =
+        result.outputBytes === undefined
+          ? 0
+          : Math.max(0, result.outputBytes - rawTextBytes);
+    } else if (result.outputBytes !== undefined) {
+      messageBytes = result.outputBytes;
+      thoughtBytes = 0;
+    }
+  } else if (messageBytes === undefined) {
+    messageBytes =
+      result.outputBytes === undefined
+        ? (rawTextBytes ?? 0)
+        : Math.max(0, result.outputBytes - (thoughtBytes ?? 0));
+  } else if (thoughtBytes === undefined) {
+    thoughtBytes =
+      result.outputBytes === undefined
+        ? 0
+        : Math.max(0, result.outputBytes - messageBytes);
+  }
+
+  return {
+    ...(messageBytes === undefined ? {} : { messageBytes }),
+    ...(thoughtBytes === undefined ? {} : { thoughtBytes }),
+    ...(messageBytes === undefined || thoughtBytes === undefined
+      ? {}
+      : { outputBytes: messageBytes + thoughtBytes }),
+  };
 }
 
 function isPreflightAgentFailure(result: AgentRunResult): boolean {
@@ -1760,7 +1939,7 @@ function defaultAgentManager(
 function normalizeAgentRunResult(
   result: AgentRunResult,
   maxFindingsPerAgent: number,
-): { result: AgentRunResult; findingsCapped: boolean } {
+): AgentRunResult {
   const normalizedResult =
     result.status === "completed" && result.rawText && !result.normalized
       ? {
@@ -1772,33 +1951,14 @@ function normalizeAgentRunResult(
           ),
         }
       : result;
-  const normalized = normalizedResult.normalized;
-  const findings = normalized?.findings;
-  if (!normalized || !findings || findings.length <= maxFindingsPerAgent) {
-    return { result: normalizedResult, findingsCapped: false };
-  }
-
-  const limitedFindings = findings
-    .map((finding, index) => ({ finding, index }))
-    .sort((left, right) => {
-      const severity = compareSeverity(
-        left.finding.severity,
-        right.finding.severity,
-      );
-      return severity === 0 ? left.index - right.index : severity;
-    })
-    .slice(0, maxFindingsPerAgent)
-    .map(({ finding }) => finding);
-  return {
-    result: {
-      ...normalizedResult,
-      normalized: {
-        ...normalized,
-        findings: limitedFindings,
-      },
-    },
-    findingsCapped: true,
-  };
+  const reportedFindings = normalizedResult.normalized?.findings.length;
+  return reportedFindings === undefined
+    ? normalizedResult
+    : {
+        ...normalizedResult,
+        reportedFindings,
+        findingsTargetExceeded: reportedFindings > maxFindingsPerAgent,
+      };
 }
 
 function agentOpinionSummary(
@@ -1813,6 +1973,7 @@ function agentOpinionSummary(
       sanitizeTextForDisplay(result.error?.message ?? result.status),
     status: result.status,
     errorCode: result.error?.code,
+    ...(result.salvaged === undefined ? {} : { salvaged: result.salvaged }),
   };
   if (includeRawText && result.rawText) {
     opinion.rawText = sanitizeTextForRawOutput(result.rawText);
@@ -2091,11 +2252,97 @@ async function writeReviewBudgetPlanned(input: {
     requestFingerprint: input.requestFingerprint,
     maxModelCalls: snapshot.executionBudget.maxModelCalls,
     maxTotalWallTimeMs: snapshot.executionBudget.wallTime.limitMs,
+    ...(snapshot.executionBudget.effectiveWarnAgentOutputBytes !== undefined
+      ? {
+          effectiveWarnAgentOutputBytes:
+            snapshot.executionBudget.effectiveWarnAgentOutputBytes,
+        }
+      : {}),
     maxAgentOutputBytes: snapshot.executionBudget.maxAgentOutputBytes,
     maxFindingsPerAgent: snapshot.executionBudget.maxFindingsPerAgent,
     skipOptionalPhasesWhenTokenUsageUnknown:
       snapshot.executionBudget.skipOptionalPhasesWhenTokenUsageUnknown,
+    ...snapshot.executionBudget.modelCallPlan,
     timestamp: new Date().toISOString(),
+  });
+}
+
+function plannedBudgetWarnings(budgetTracker: ReviewBudgetTracker): string[] {
+  const fallbackCalls = budgetTracker.modelCallPlan.ceilingEffects
+    .filter(
+      (effect) =>
+        effect.kind === "judge" &&
+        effect.action === "deterministic_fallback" &&
+        effect.reason === "model_call_budget",
+    )
+    .reduce((total, effect) => total + effect.calls, 0);
+  if (fallbackCalls === 0) return [];
+  return [
+    `The potential model-call plan requires ${budgetTracker.modelCallPlan.potentialTotalCalls} calls, above maxModelCalls=${budgetTracker.budget.maxModelCalls}; ${fallbackCalls} LLM judge call(s) will use deterministic fallback if higher-priority calls consume the available capacity.`,
+  ];
+}
+
+function outputWarningMessages(
+  snapshot: ReturnType<ReviewBudgetTracker["snapshot"]>,
+): string[] {
+  const threshold = snapshot.executionBudget.effectiveWarnAgentOutputBytes;
+  if (threshold === undefined) return [];
+  return snapshot.modelCalls.flatMap((call) => {
+    if (
+      call.status !== "completed" ||
+      !call.outputWarningTriggered ||
+      !call.agent
+    ) {
+      return [];
+    }
+    const messageBytes = call.messageBytes ?? 0;
+    const thoughtBytes = call.thoughtBytes ?? 0;
+    const outputBytes = call.outputBytes ?? messageBytes + thoughtBytes;
+    const outcome =
+      call.stopReason === "cancelled"
+        ? "the hard breaker subsequently stopped execution."
+        : "execution continued.";
+    return [
+      `Agent ${call.agent} ${call.kind} output reached the ${threshold}-byte soft threshold (message: ${messageBytes}, thought: ${thoughtBytes}, total: ${outputBytes}); ${outcome}`,
+    ];
+  });
+}
+
+function tokenUsageWarningMessages(
+  budgetTracker: ReviewBudgetTracker,
+  snapshot: ReturnType<ReviewBudgetTracker["snapshot"]>,
+): string[] {
+  const unknownCalls = snapshot.executionBudget.tokenUsage.unknownCalls;
+  if (
+    budgetTracker.budget.skipOptionalPhasesWhenTokenUsageUnknown ||
+    unknownCalls === 0
+  ) {
+    return [];
+  }
+  return [
+    `Token usage was not reported for ${unknownCalls} completed call(s); budget enforcement continued using calls, wall time, and bytes.`,
+  ];
+}
+
+function configuredReviewModelCallPlan(
+  config: KyosoConfig,
+  budget: ResolvedReviewBudget,
+  env: NodeJS.ProcessEnv,
+  requestedJudgeProvider?: JudgeProvider,
+) {
+  const judgeRoute = resolveJudgeCallRoute(
+    config.judge.mode,
+    requestedJudgeProvider ?? config.judge.provider,
+    env,
+  );
+  return buildReviewModelCallPlan({
+    maxModelCalls: budget.maxModelCalls,
+    requiredPrimaryCalls: Object.values(config.agents).filter(
+      (agent) => agent.enabled,
+    ).length,
+    verificationEnabled: config.verification.enabled,
+    verificationMaxFindings: config.verification.maxFindings,
+    llmJudgeAvailable: judgeRoute.llmAvailable,
   });
 }
 

@@ -1,5 +1,6 @@
 import type {
   AgentName,
+  ModelExecutionIdentity,
   ModelCallKind,
   ModelTokenUsage,
   ReviewBudget,
@@ -7,10 +8,13 @@ import type {
   ReviewCompletion,
   ReviewCompletionReason,
   ReviewExecutionBudget,
+  ReviewModelCallPlan,
   ReviewModelCallAudit,
+  ResolvedReviewBudget,
 } from "./types.js";
 import { KyosoRequestError } from "./errors.js";
 import { normalizeModelTokenUsage } from "./tokenUsage.js";
+import { normalizeModelExecutionIdentity } from "./modelExecutionIdentity.js";
 
 type ReservationStatus = "reserved" | "started" | "completed" | "skipped";
 
@@ -20,8 +24,15 @@ type Reservation = {
   agent?: AgentName;
   status: ReservationStatus;
   reason?: string;
+  messageBytes?: number;
+  thoughtBytes?: number;
   outputBytes?: number;
+  outputWarningTriggered?: boolean;
+  salvaged?: boolean;
+  reportedFindings?: number;
+  findingsTargetExceeded?: boolean;
   usage?: ModelTokenUsage;
+  executionIdentity?: ModelExecutionIdentity;
   stopReason?: string;
 };
 
@@ -31,7 +42,7 @@ export type BudgetReservationFailure = {
   reason: "model_call_budget" | "deadline";
 };
 
-const REVIEW_BUDGET_KEYS = new Set<keyof ReviewBudget>([
+const REVIEW_BUDGET_KEYS = new Set<keyof ReviewBudgetRequest>([
   "maxModelCalls",
   "maxTotalWallTimeMs",
   "maxAgentOutputBytes",
@@ -44,17 +55,16 @@ const MODEL_CALL_KINDS: ModelCallKind[] = ["primary", "verifier", "judge"];
 export function resolveReviewBudget(
   ceiling: ReviewBudget,
   requested: ReviewBudgetRequest | undefined,
-): ReviewBudget {
-  if (requested === undefined) return ceiling;
-  if (!isRecord(requested)) {
+): ResolvedReviewBudget {
+  if (requested !== undefined && !isRecord(requested)) {
     throw new KyosoRequestError(
       "options.reviewBudget must be an object.",
       "REVIEW_BUDGET_INVALID",
     );
   }
 
-  for (const [key, value] of Object.entries(requested)) {
-    if (!REVIEW_BUDGET_KEYS.has(key as keyof ReviewBudget)) {
+  for (const [key, value] of Object.entries(requested ?? {})) {
+    if (!REVIEW_BUDGET_KEYS.has(key as keyof ReviewBudgetRequest)) {
       throw new KyosoRequestError(
         `options.reviewBudget.${key} is not supported.`,
         "REVIEW_BUDGET_INVALID",
@@ -78,7 +88,10 @@ export function resolveReviewBudget(
   }
 
   const numericKeys: Array<
-    Exclude<keyof ReviewBudget, "skipOptionalPhasesWhenTokenUsageUnknown">
+    Exclude<
+      keyof ReviewBudgetRequest,
+      "skipOptionalPhasesWhenTokenUsageUnknown"
+    >
   > = [
     "maxModelCalls",
     "maxTotalWallTimeMs",
@@ -86,7 +99,7 @@ export function resolveReviewBudget(
     "maxFindingsPerAgent",
   ];
   for (const key of numericKeys) {
-    const value = requested[key];
+    const value = requested?.[key];
     if (value === undefined) continue;
     if (value > ceiling[key]) {
       throw new KyosoRequestError(
@@ -97,7 +110,7 @@ export function resolveReviewBudget(
   }
   if (
     ceiling.skipOptionalPhasesWhenTokenUsageUnknown &&
-    requested.skipOptionalPhasesWhenTokenUsageUnknown === false
+    requested?.skipOptionalPhasesWhenTokenUsageUnknown === false
   ) {
     throw new KyosoRequestError(
       "options.reviewBudget.skipOptionalPhasesWhenTokenUsageUnknown cannot relax the user-global ceiling.",
@@ -105,17 +118,99 @@ export function resolveReviewBudget(
     );
   }
 
+  const maxAgentOutputBytes =
+    requested?.maxAgentOutputBytes ?? ceiling.maxAgentOutputBytes;
   return {
-    maxModelCalls: requested.maxModelCalls ?? ceiling.maxModelCalls,
+    maxModelCalls: requested?.maxModelCalls ?? ceiling.maxModelCalls,
     maxTotalWallTimeMs:
-      requested.maxTotalWallTimeMs ?? ceiling.maxTotalWallTimeMs,
-    maxAgentOutputBytes:
-      requested.maxAgentOutputBytes ?? ceiling.maxAgentOutputBytes,
+      requested?.maxTotalWallTimeMs ?? ceiling.maxTotalWallTimeMs,
+    warnAgentOutputBytes: ceiling.warnAgentOutputBytes,
+    maxAgentOutputBytes,
     maxFindingsPerAgent:
-      requested.maxFindingsPerAgent ?? ceiling.maxFindingsPerAgent,
+      requested?.maxFindingsPerAgent ?? ceiling.maxFindingsPerAgent,
     skipOptionalPhasesWhenTokenUsageUnknown:
       ceiling.skipOptionalPhasesWhenTokenUsageUnknown ||
-      requested.skipOptionalPhasesWhenTokenUsageUnknown === true,
+      requested?.skipOptionalPhasesWhenTokenUsageUnknown === true,
+    ...(ceiling.warnAgentOutputBytes < maxAgentOutputBytes
+      ? { effectiveWarnAgentOutputBytes: ceiling.warnAgentOutputBytes }
+      : {}),
+  };
+}
+
+export function buildReviewModelCallPlan(input: {
+  maxModelCalls: number;
+  requiredPrimaryCalls: number;
+  verificationEnabled: boolean;
+  verificationMaxFindings: number;
+  llmJudgeAvailable: boolean;
+}): ReviewModelCallPlan {
+  const requiredPrimaryCalls = nonNegativeInteger(input.requiredPrimaryCalls);
+  const potentialVerifierCalls =
+    input.verificationEnabled && requiredPrimaryCalls === 2
+      ? Math.min(2, nonNegativeInteger(input.verificationMaxFindings))
+      : 0;
+  const potentialJudgeCalls = input.llmJudgeAvailable ? 1 : 0;
+  const potentialTotalCalls =
+    requiredPrimaryCalls + potentialVerifierCalls + potentialJudgeCalls;
+  const ceilingEffects: ReviewModelCallPlan["ceilingEffects"] = [];
+  const availableCalls = nonNegativeInteger(input.maxModelCalls);
+
+  if (availableCalls < requiredPrimaryCalls) {
+    if (requiredPrimaryCalls > 0) {
+      ceilingEffects.push({
+        kind: "primary",
+        action: "skip",
+        calls: requiredPrimaryCalls,
+        reason: "model_call_budget",
+      });
+    }
+    if (potentialVerifierCalls > 0) {
+      ceilingEffects.push({
+        kind: "verifier",
+        action: "skip",
+        calls: potentialVerifierCalls,
+        reason: "model_call_budget",
+      });
+    }
+    if (potentialJudgeCalls > 0) {
+      ceilingEffects.push({
+        kind: "judge",
+        action: "deterministic_fallback",
+        calls: potentialJudgeCalls,
+        reason: "model_call_budget",
+      });
+    }
+  } else {
+    let remainingCalls = availableCalls - requiredPrimaryCalls;
+    const verifierCalls = Math.min(potentialVerifierCalls, remainingCalls);
+    remainingCalls -= verifierCalls;
+    const skippedVerifierCalls = potentialVerifierCalls - verifierCalls;
+    if (skippedVerifierCalls > 0) {
+      ceilingEffects.push({
+        kind: "verifier",
+        action: "skip",
+        calls: skippedVerifierCalls,
+        reason: "model_call_budget",
+      });
+    }
+    const judgeCalls = Math.min(potentialJudgeCalls, remainingCalls);
+    const fallbackJudgeCalls = potentialJudgeCalls - judgeCalls;
+    if (fallbackJudgeCalls > 0) {
+      ceilingEffects.push({
+        kind: "judge",
+        action: "deterministic_fallback",
+        calls: fallbackJudgeCalls,
+        reason: "model_call_budget",
+      });
+    }
+  }
+
+  return {
+    requiredPrimaryCalls,
+    potentialVerifierCalls,
+    potentialJudgeCalls,
+    potentialTotalCalls,
+    ceilingEffects,
   };
 }
 
@@ -128,8 +223,9 @@ export class ReviewBudgetTracker {
   private nextReservationId = 1;
 
   constructor(
-    readonly budget: ReviewBudget,
+    readonly budget: ResolvedReviewBudget,
     readonly startedAtEpochMs = Date.now(),
+    readonly modelCallPlan: ReviewModelCallPlan = emptyReviewModelCallPlan(),
   ) {
     this.deadlineAtEpochMs = startedAtEpochMs + budget.maxTotalWallTimeMs;
   }
@@ -187,10 +283,15 @@ export class ReviewBudgetTracker {
     return { reservation };
   }
 
-  markStarted(reservation: ModelCallReservation): void {
+  markStarted(
+    reservation: ModelCallReservation,
+    executionIdentity?: ModelExecutionIdentity,
+  ): void {
     const current = this.reservations.get(reservation.id);
     if (!current || current.status !== "reserved") return;
     current.status = "started";
+    current.executionIdentity =
+      normalizeModelExecutionIdentity(executionIdentity);
   }
 
   hasStarted(reservation: ModelCallReservation): boolean {
@@ -198,11 +299,24 @@ export class ReviewBudgetTracker {
     return current?.status === "started" || current?.status === "completed";
   }
 
+  executionIdentity(
+    reservation: ModelCallReservation,
+  ): ModelExecutionIdentity | undefined {
+    return this.reservations.get(reservation.id)?.executionIdentity;
+  }
+
   complete(
     reservation: ModelCallReservation,
     values: {
+      messageBytes?: number;
+      thoughtBytes?: number;
       outputBytes?: number;
+      outputWarningTriggered?: boolean;
+      salvaged?: boolean;
+      reportedFindings?: number;
+      findingsTargetExceeded?: boolean;
       usage?: ModelTokenUsage;
+      executionIdentity?: ModelExecutionIdentity;
       stopReason?: string;
     } = {},
   ): void {
@@ -215,8 +329,17 @@ export class ReviewBudgetTracker {
       return;
     }
     current.status = "completed";
+    current.messageBytes = values.messageBytes;
+    current.thoughtBytes = values.thoughtBytes;
     current.outputBytes = values.outputBytes;
+    current.outputWarningTriggered = values.outputWarningTriggered;
+    current.salvaged = values.salvaged;
+    current.reportedFindings = values.reportedFindings;
+    current.findingsTargetExceeded = values.findingsTargetExceeded;
     current.usage = normalizeModelTokenUsage(values.usage);
+    current.executionIdentity =
+      normalizeModelExecutionIdentity(values.executionIdentity) ??
+      current.executionIdentity;
     current.stopReason = values.stopReason;
   }
 
@@ -315,12 +438,19 @@ export class ReviewBudgetTracker {
       },
       executionBudget: {
         maxModelCalls: this.budget.maxModelCalls,
+        modelCallPlan: this.modelCallPlan,
         modelCalls: { planned, consumed, skipped, byKind },
         wallTime: {
           limitMs: this.budget.maxTotalWallTimeMs,
           consumedMs,
           remainingMs: this.remainingWallTimeMs(now),
         },
+        ...(this.budget.effectiveWarnAgentOutputBytes !== undefined
+          ? {
+              effectiveWarnAgentOutputBytes:
+                this.budget.effectiveWarnAgentOutputBytes,
+            }
+          : {}),
         maxAgentOutputBytes: this.budget.maxAgentOutputBytes,
         maxFindingsPerAgent: this.budget.maxFindingsPerAgent,
         skipOptionalPhasesWhenTokenUsageUnknown:
@@ -358,10 +488,31 @@ export class ReviewBudgetTracker {
         ...(reservation.agent ? { agent: reservation.agent } : {}),
         status: reservation.status === "completed" ? "completed" : "skipped",
         ...(reservation.reason ? { reason: reservation.reason } : {}),
+        ...(reservation.messageBytes !== undefined
+          ? { messageBytes: reservation.messageBytes }
+          : {}),
+        ...(reservation.thoughtBytes !== undefined
+          ? { thoughtBytes: reservation.thoughtBytes }
+          : {}),
         ...(reservation.outputBytes !== undefined
           ? { outputBytes: reservation.outputBytes }
           : {}),
+        ...(reservation.outputWarningTriggered !== undefined
+          ? { outputWarningTriggered: reservation.outputWarningTriggered }
+          : {}),
+        ...(reservation.salvaged !== undefined
+          ? { salvaged: reservation.salvaged }
+          : {}),
+        ...(reservation.reportedFindings !== undefined
+          ? { reportedFindings: reservation.reportedFindings }
+          : {}),
+        ...(reservation.findingsTargetExceeded !== undefined
+          ? { findingsTargetExceeded: reservation.findingsTargetExceeded }
+          : {}),
         ...(reservation.usage ? { usage: reservation.usage } : {}),
+        ...(reservation.executionIdentity
+          ? { executionIdentity: reservation.executionIdentity }
+          : {}),
         ...(reservation.stopReason
           ? { stopReason: reservation.stopReason }
           : {}),
@@ -387,6 +538,20 @@ function addUsage(total: ModelTokenUsage, usage: ModelTokenUsage): void {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function nonNegativeInteger(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function emptyReviewModelCallPlan(): ReviewModelCallPlan {
+  return {
+    requiredPrimaryCalls: 0,
+    potentialVerifierCalls: 0,
+    potentialJudgeCalls: 0,
+    potentialTotalCalls: 0,
+    ceilingEffects: [],
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

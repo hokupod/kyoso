@@ -2,5 +2,12 @@
 # verification round so verdict data accumulates in .kyoso/traces/.
 # Phase 1 is annotate-only; allowDemotion stays false.
 
+[agents.codex]
+timeoutMs = 900000
+
+[agents.claude]
+timeoutMs = 900000
+
 [verification]
 enabled = true
+timeoutMs = 900000

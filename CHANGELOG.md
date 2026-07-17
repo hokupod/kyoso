@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-17
+
 ### Changed
 
+- Update `@modelcontextprotocol/server` from `2.0.0-beta.3` to
+  `2.0.0-beta.4`, adopting the shared `@modelcontextprotocol/core` runtime
+  dependency and lazy validation-schema construction.
+- Update the default `@agentclientprotocol/claude-agent-acp` adapter from
+  `0.58.1` to `0.59.0` for background-subagent lifetime handling, result-text
+  forwarding, and refined streamed tool calls.
 - Promote the Marketplace Plugin to `0.7.0` and pin its Codex and Claude Code
   MCP definitions to `@kyo-so/cli@0.13.0`, delivering output-budget
   recalibration, execution identity reporting, shared deadlines, and bounded

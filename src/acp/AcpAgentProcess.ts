@@ -25,6 +25,10 @@ import {
   buildChildLaunchContext,
 } from "../utils/env.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
+import {
+  AcpNdJsonLineLimitError,
+  limitAcpNdJsonLineBytes,
+} from "./ndJsonLineLimit.js";
 import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
@@ -273,6 +277,23 @@ async function runSubprocessAgent(
           });
           return;
         }
+        if (error instanceof AcpNdJsonLineLimitError) {
+          abortController.abort(error);
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: "failed",
+            rawText: stdout,
+            stopReason: "cancelled",
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: {
+              code: "AGENT_PROTOCOL_LIMIT",
+              message: `Agent emitted an ACP NDJSON line above the ${error.maxLineBytes}-byte transport limit and was cancelled.`,
+            },
+          });
+          return;
+        }
         if (abortController.signal.aborted) return;
         const failureText = [stderr, formatAgentErrorDetail(error)]
           .filter((part) => part.trim().length > 0)
@@ -332,7 +353,7 @@ async function runAcpClientWorkflow(
   const inputStream = Readable.toWeb(
     child.stdout,
   ) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(output, inputStream);
+  const stream = ndJsonStream(output, limitAcpNdJsonLineBytes(inputStream));
   const app = client({ name: "kyoso" })
     .onRequest(methods.client.session.requestPermission, () => ({
       outcome: { outcome: "cancelled" },

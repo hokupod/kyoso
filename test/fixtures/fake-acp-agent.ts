@@ -22,6 +22,15 @@ if (mode === "crash") {
   process.exit(1);
 }
 
+if (mode === "oversized_ndjson_line") {
+  const lineBytes = Number(process.env.FAKE_ACP_LINE_BYTES);
+  if (!Number.isSafeInteger(lineBytes) || lineBytes <= 0) {
+    throw new Error("FAKE_ACP_LINE_BYTES must be a positive integer");
+  }
+  process.stdout.write("x".repeat(lineBytes));
+  await new Promise(() => {});
+}
+
 const app = agent({ name: "kyoso-fake-acp-agent" })
   .onRequest(methods.agent.initialize, () => {
     initialized = true;

@@ -958,7 +958,7 @@ All three MCP tools use the same pipeline.
 11. Resolve required lenses and render the trusted review contract outside untrusted repository context
 12. Generate role-specific prompts and reserve every primary reviewer before starting either subprocess
 13. Spawn Codex ACP and Claude ACP subprocesses
-14. Send prompts over ACP, counting streamed UTF-8 bytes from agent message and thought text chunks and cancelling output above the cap
+14. Send prompts over ACP, enforcing an 8 MiB NDJSON transport-line limit before SDK parsing, counting streamed UTF-8 bytes from agent message and thought text chunks, and cancelling output above the configured cap
 15. Deny write/tool/permission requests that exceed MVP policy
 16. Collect and normalize agent responses; cap findings deterministically
 17. Aggregate candidates, calculate coverage, and run deterministic finding admission
@@ -1066,6 +1066,8 @@ export interface AcpAgentManager {
   runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]>;
 }
 ```
+
+ACP child stdout passes through an incremental NDJSON line limiter before `@agentclientprotocol/sdk` can buffer a complete line. The fixed 8 MiB limit allows the configured 1 MiB agent-output ceiling to expand by the worst-case six-byte JSON string escape plus 2 MiB of JSON-RPC envelope and ACP metadata. A larger line fails with `AGENT_PROTOCOL_LIMIT`, cancels the session, and terminates the child process without logging the line contents.
 
 ### 13.2 Subprocess env policy
 

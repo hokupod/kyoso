@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SubprocessAcpAgentManager } from "../../src/acp/AcpAgentProcess.js";
+import { MAX_ACP_NDJSON_LINE_BYTES } from "../../src/acp/ndJsonLineLimit.js";
 import { defaultConfig } from "../../src/config/defaultConfig.js";
 import {
   kyosoConfigSchema,
@@ -343,6 +344,33 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     }
   });
 
+  test("rejects oversized ACP NDJSON lines before SDK buffering can grow unbounded", async () => {
+    const cwd = await fakeWorkspace();
+    const pidPath = join(cwd, "oversized-line-agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("oversized_ndjson_line", {
+        FAKE_ACP_PID_FILE: pidPath,
+        FAKE_ACP_LINE_BYTES: String(MAX_ACP_NDJSON_LINE_BYTES + 1),
+      }),
+    );
+
+    const result = await manager.runAgent(
+      agentInput(cwd, { timeoutMs: 10_000 }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      stopReason: "cancelled",
+      error: { code: "AGENT_PROTOCOL_LIMIT" },
+    });
+    expect(result.error?.message).toContain(
+      `${MAX_ACP_NDJSON_LINE_BYTES}-byte transport limit`,
+    );
+    const pid = Number(await readFile(pidPath, "utf8"));
+    await Bun.sleep(1_000);
+    expect(isProcessAlive(pid)).toBe(false);
+  }, 15_000);
+
   test("classifies immediate ACP child crashes from stderr", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("crash"));
@@ -483,7 +511,8 @@ type FakeAcpMode =
   | "valid_then_thought"
   | "invalid_then_thought"
   | "partial_then_thought"
-  | "valid_with_overflow_suffix";
+  | "valid_with_overflow_suffix"
+  | "oversized_ndjson_line";
 
 function fakeAcpConfig(
   mode: FakeAcpMode,

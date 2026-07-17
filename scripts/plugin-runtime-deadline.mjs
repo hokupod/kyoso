@@ -39,9 +39,10 @@ export async function waitForFileUntilDeadline(
     options.timeoutMessage ??
     `File was not written before the deadline: ${path}`;
 
-  while (!existsSync(path)) {
+  for (;;) {
     const sleepMs = remainingProbeTimeoutMs(deadlineAtEpochMs, pollIntervalMs);
     if (sleepMs <= 0) throw new Error(timeoutMessage);
+    if (existsSync(path)) return;
     await new Promise((resolveDelay) => setTimeout(resolveDelay, sleepMs));
   }
 }

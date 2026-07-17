@@ -107,7 +107,7 @@ describe("review execution budget", () => {
       "plan_review",
       {
         goal: "review plan",
-        options: { reviewBudget: { maxAgentOutputBytes: 524_288 } },
+        options: { reviewBudget: { maxAgentOutputBytes: 65_536 } },
       },
       {
         cwd: await tempCwd(),
@@ -116,7 +116,7 @@ describe("review execution budget", () => {
       },
     );
 
-    expect(result.executionBudget.maxAgentOutputBytes).toBe(524_288);
+    expect(result.executionBudget.maxAgentOutputBytes).toBe(65_536);
     expect(result.executionBudget).not.toHaveProperty(
       "effectiveWarnAgentOutputBytes",
     );
@@ -305,6 +305,7 @@ describe("review execution budget", () => {
 
   test("records a soft output warning without changing completion or decision", async () => {
     const events: Record<string, unknown>[] = [];
+    const manager = new OutputWarningManager();
     const base = baseConfig();
     const config: KyosoConfig = {
       ...base,
@@ -321,11 +322,26 @@ describe("review execution budget", () => {
       {
         cwd: await tempCwd(),
         config,
-        agentManager: new OutputWarningManager(),
+        agentManager: manager,
         traceWriterFactory: () => memoryTrace(events),
       },
     );
 
+    expect(manager.calls).toHaveLength(2);
+    expect(manager.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agent: "codex",
+          warnOutputBytes: 4,
+          maxOutputBytes: 10,
+        }),
+        expect.objectContaining({
+          agent: "claude",
+          warnOutputBytes: 4,
+          maxOutputBytes: 10,
+        }),
+      ]),
+    );
     expect(result.completion.status).toBe("complete");
     expect(result.decision).not.toBe("block");
     expect(result.audit.warnings).toContain(
@@ -699,9 +715,15 @@ class ScriptedBudgetManager extends BaseAcpAgentManager {
 }
 
 class OutputWarningManager extends BaseAcpAgentManager {
+  readonly calls: AgentRunInput[] = [];
+
   async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+    this.calls.push(input);
     await input.onStarted?.();
     const startedAt = new Date().toISOString();
+    const messageBytes = input.agent === "codex" ? 3 : 2;
+    const thoughtBytes = input.agent === "codex" ? 2 : 0;
+    const outputBytes = messageBytes + thoughtBytes;
     return {
       agent: input.agent,
       role: input.role,
@@ -713,10 +735,12 @@ class OutputWarningManager extends BaseAcpAgentManager {
         residualRisks: [],
         openQuestions: [],
       }),
-      messageBytes: input.agent === "codex" ? 3 : 2,
-      thoughtBytes: input.agent === "codex" ? 2 : 0,
-      outputBytes: input.agent === "codex" ? 5 : 2,
-      outputWarningTriggered: input.agent === "codex",
+      messageBytes,
+      thoughtBytes,
+      outputBytes,
+      outputWarningTriggered:
+        input.warnOutputBytes !== undefined &&
+        outputBytes >= input.warnOutputBytes,
       usage: usage(),
       startedAt,
       completedAt: new Date().toISOString(),

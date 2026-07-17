@@ -180,7 +180,7 @@ export const kyosoConfigSchema = z
       context.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["reviewBudget", "warnAgentOutputBytes"],
-        message: "must be less than maxAgentOutputBytes.",
+        message: "must be less than reviewBudget.maxAgentOutputBytes.",
       });
     }
   });

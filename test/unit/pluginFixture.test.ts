@@ -245,6 +245,46 @@ describe("Codex Plugin fixture", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
+  test("rejects an observation created after the shared deadline", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { writeFileSync, unlinkSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { waitForFileUntilDeadline } from "./scripts/plugin-runtime-deadline.mjs";
+
+          const path = join(tmpdir(), "kyoso-plugin-runtime-late-" + process.pid);
+          const wait = waitForFileUntilDeadline(path, Date.now() + 20, {
+            pollIntervalMs: 100,
+            timeoutMessage: "expected late observation timeout",
+          });
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60);
+          writeFileSync(path, "late", "utf8");
+          let rejected = false;
+          try {
+            await wait;
+          } catch (error) {
+            if (!String(error).includes("expected late observation timeout")) {
+              throw error;
+            }
+            rejected = true;
+          } finally {
+            unlinkSync(path);
+          }
+          if (!rejected) throw new Error("late observation was accepted");
+        `,
+      ],
+      { cwd: root, encoding: "utf8", timeout: 2_000 },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   test("keeps the Plugin Skill mirror checkable through plugin:sync", () => {
     const result = spawnSync("node", ["scripts/plugin-sync.mjs", "--check"], {
       cwd: root,

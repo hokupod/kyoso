@@ -1363,6 +1363,9 @@ model = "openai/o4-mini"
         events.find((event) => event.type === "judge_completed")
           ?.executionIdentity,
       ).toEqual(judgeIdentity);
+      expect(result.summaryMarkdown).toContain(
+        "judge: route=openai, requested=gpt-5.4-mini-requested, reportedModel=gpt-5.4-mini-2026-06-15, reporting=reported",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

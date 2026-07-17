@@ -167,6 +167,8 @@ timeoutMs = 5000
 [agents.claude.env]
 FAKE_ACP_MODE = "happy"
 FAKE_ACP_FINDING_SEVERITY = "none"
+FAKE_ACP_REPORTED_PROVIDER = "anthropic"
+FAKE_ACP_REPORTED_MODEL = "claude-mcp-reported"
 `,
       "utf8",
     );
@@ -210,14 +212,16 @@ FAKE_ACP_FINDING_SEVERITY = "none"
       const identity = {
         providerRoute: "claude_default",
         requestedModel: "claude-mcp-requested",
-        reportingStatus: "requested_only",
+        reportedProvider: "anthropic",
+        reportedModel: "claude-mcp-reported",
+        reportingStatus: "reported",
       };
 
       expect(jsonResult.audit?.modelCalls?.[0]?.executionIdentity).toEqual(
         identity,
       );
       expect(texts[0]).toContain(
-        "primary/claude: route=claude_default, requested=claude-mcp-requested, reporting=requested_only",
+        "primary/claude: route=claude_default, requested=claude-mcp-requested, reportedProvider=anthropic, reportedModel=claude-mcp-reported, reporting=reported",
       );
       expect(client.parseErrors).toEqual([]);
       expect(client.stderr).toBe("");

@@ -243,7 +243,15 @@ function formatExecutionBudget(
       const label = [call.kind, call.agent].filter(Boolean).join("/");
       const identity = call.executionIdentity;
       if (!identity) return `- ${label}: identity=unknown`;
-      return `- ${label}: route=${identity.providerRoute}, requested=${escapeMarkdownText(identity.requestedModel ?? "unknown")}, reporting=${identity.reportingStatus}`;
+      const reportedIdentity = [
+        identity.reportedProvider
+          ? `reportedProvider=${escapeMarkdownText(identity.reportedProvider)}`
+          : undefined,
+        identity.reportedModel
+          ? `reportedModel=${escapeMarkdownText(identity.reportedModel)}`
+          : undefined,
+      ].filter((value): value is string => value !== undefined);
+      return `- ${label}: route=${identity.providerRoute}, requested=${escapeMarkdownText(identity.requestedModel ?? "unknown")}${reportedIdentity.length > 0 ? `, ${reportedIdentity.join(", ")}` : ""}, reporting=${identity.reportingStatus}`;
     });
   const totalTokens = budget.tokenUsage.totals.totalTokens;
   const plan = budget.modelCallPlan;

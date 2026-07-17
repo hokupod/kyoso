@@ -133,6 +133,19 @@ describe("config", () => {
     ).toThrow("enabled primary reviewers");
   });
 
+  test("names the hard output threshold in schema validation errors", () => {
+    expect(() =>
+      kyosoConfigSchema.parse({
+        ...defaultConfig,
+        reviewBudget: {
+          ...defaultConfig.reviewBudget,
+          warnAgentOutputBytes: 1_024,
+          maxAgentOutputBytes: 1_024,
+        },
+      }),
+    ).toThrow("must be less than reviewBudget.maxAgentOutputBytes");
+  });
+
   test("requires an explicit output warning threshold below the hard breaker", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-output-warning-invalid-"));
     const configHome = join(cwd, "xdg");

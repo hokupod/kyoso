@@ -32,7 +32,7 @@
 | Agent roles            | role-specific prompts                                                                      |
 | Judge                  | deterministic aggregator + configurable judge LLM                                          |
 | Security framework     | CISA Secure by Design gate                                                                 |
-| Timeout                | per-agent configurable; defaults: Codex 120s / Claude 300s                                 |
+| Timeout                | per-agent configurable; defaults: Codex 600s / Claude 600s                                 |
 | Max context            | 500 KB selected file content budget                                                        |
 | Secret handling        | default block, config extensible                                                           |
 | Network                | default `model_only`; opt-in `--network unrestricted`; `mediated_web` designed but not MVP |
@@ -444,7 +444,7 @@ MCP
 
 ACP agents
   Codex: ok
-    command: npx -y @agentclientprotocol/codex-acp@1.1.2
+    command: npx -y @agentclientprotocol/codex-acp@1.1.4
     auth: detected or delegated
   Claude: warning
     command: npx -y @agentclientprotocol/claude-agent-acp
@@ -852,7 +852,7 @@ TOML config is declarative and does not require trust approval. The user global 
 - tightening-only `network.defaultMode = "model_only"`, `secrets.blockOnDetectedSecret = true`, `secrets.allowOverride = false`
 - `securityReview.cisaSecureByDesign.* = true`
 
-Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 480-second absolute deadline, a non-blocking warning at 524,288 UTF-8 bytes per agent, and a hard breaker at 1,048,576 bytes across streamed message and thought text chunks. Ten findings per agent is a prompt target rather than a truncation limit, and unknown token usage warns while optional phases continue by default. A request may lower the hard ceilings and soft targets through `options.reviewBudget`, but project TOML and `--set` never change them.
+Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 660-second absolute deadline, a non-blocking warning at 524,288 UTF-8 bytes per agent, and a hard breaker at 1,048,576 bytes across streamed message and thought text chunks. Ten findings per agent is a prompt target rather than a truncation limit, and unknown token usage warns while optional phases continue by default. A request may lower the hard ceilings and soft targets through `options.reviewBudget`, but project TOML and `--set` never change them.
 
 Fixed or reserved schema values are explicit: `firstClassClient = "codex"` is metadata only, `workspace.readOnly = true` describes the enforced read-only review contract, `network.mediatedWeb.enabled = false` reserves the future mode, and `audit.includeFileContents = false` prevents file-content persistence through Audit config. `verification.allowDemotion` is accepted for compatibility but is annotate-only and has no runtime demotion effect.
 
@@ -1153,7 +1153,7 @@ Codex:
 ```ts
 {
   command: "npx",
-  args: ["-y", "@agentclientprotocol/codex-acp@1.1.2"],
+  args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
   // Omit model to use the user's Codex default.
   // model: "gpt-5.5",
   // Omit effort to use the user's Codex default reasoning effort.
@@ -2473,7 +2473,7 @@ When implementing Kyoso:
 | Config executes malicious code        | trust-on-first-use, `--ignore-config`, `--trust-config`, config hash                  |
 | Prompt injection in repo content      | `<untrusted-content>` boundaries, read-only agents, schema-constrained findings       |
 | MCP stdout polluted                   | logs to stderr only                                                                   |
-| Timeout in client                     | Codex 120s / Claude 300s agent defaults, MCP tool timeout docs recommend 360s         |
+| Timeout in client                     | Codex 600s / Claude 600s agent defaults; MCP client timeout must exceed review-wide   |
 | User assumes full sandbox             | explicit docs: MVP is temp snapshot, not OS sandbox                                   |
 
 ---

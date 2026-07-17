@@ -422,7 +422,7 @@ Every review has user-global hard ceilings for model calls, total wall time, and
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
+maxTotalWallTimeMs = 660000
 warnAgentOutputBytes = 524288
 maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
@@ -435,7 +435,7 @@ The result includes `completion`, `executionBudget`, and `requestFingerprint`; M
 
 ### Timeouts
 
-Default agent timeouts are Codex 120 seconds and Claude 300 seconds; the verification round defaults to 90 seconds. The review-wide deadline defaults to 480 seconds (`reviewBudget.maxTotalWallTimeMs`), and each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
+Default agent timeouts are 600 seconds for both Codex and Claude; the verification round defaults to 90 seconds. The review-wide deadline defaults to 660 seconds (`reviewBudget.maxTotalWallTimeMs`), leaving the standard 60-second finalization margin after the default parallel primary phase. Each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
 
 This repository's 15-minute primary plus 15-minute verification dogfooding preset uses the following user-global override:
 

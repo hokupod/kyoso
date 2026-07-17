@@ -91,7 +91,8 @@ describe("config", () => {
     );
     expect(parsed.agents.claude.auth.envWhitelist).toContain("ANTHROPIC_MODEL");
     expect(parsed.agents.claude.auth.preferApiKey).toBe(false);
-    expect(parsed.agents.claude.timeoutMs).toBe(300_000);
+    expect(parsed.agents.codex.timeoutMs).toBe(600_000);
+    expect(parsed.agents.claude.timeoutMs).toBe(600_000);
     expect(parsed.verification).toEqual({
       enabled: false,
       maxFindings: 5,
@@ -100,7 +101,7 @@ describe("config", () => {
     });
     expect(parsed.reviewBudget).toEqual({
       maxModelCalls: 4,
-      maxTotalWallTimeMs: 480_000,
+      maxTotalWallTimeMs: 660_000,
       warnAgentOutputBytes: 524_288,
       maxAgentOutputBytes: 1_048_576,
       maxFindingsPerAgent: 10,
@@ -108,6 +109,19 @@ describe("config", () => {
     });
     expect(parsed.judge.mode).toBe("deterministic_only");
     expect(parsed.workspace.maxContextBytes).toBe(500_000);
+  });
+
+  test("applies the shared agent timeout default", () => {
+    const parsed = kyosoConfigSchema.parse({
+      ...defaultConfig,
+      agents: {
+        codex: { ...defaultConfig.agents?.codex, timeoutMs: undefined },
+        claude: { ...defaultConfig.agents?.claude, timeoutMs: undefined },
+      },
+    });
+
+    expect(parsed.agents.codex.timeoutMs).toBe(600_000);
+    expect(parsed.agents.claude.timeoutMs).toBe(600_000);
   });
 
   test("requires enough global model-call budget for enabled primary reviewers", () => {

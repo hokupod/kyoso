@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Raise the default Codex and Claude timeouts to 600 seconds and the review-wide
+  deadline from 480 to 660 seconds, and update the pinned Codex ACP adapter from
+  `1.1.2` to `1.1.4`.
 - Recalibrate review output defaults to a non-blocking 512 KiB warning and a
   1 MiB hard breaker, make the ten-finding limit a soft target, and continue
   optional phases when token usage is unknown by default.

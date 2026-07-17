@@ -1,5 +1,8 @@
 import type { KyosoConfigInput } from "./schema.js";
-import { DEFAULT_WARN_AGENT_OUTPUT_BYTES } from "../core/constants.js";
+import {
+  DEFAULT_AGENT_TIMEOUT_MS,
+  DEFAULT_WARN_AGENT_OUTPUT_BYTES,
+} from "../core/constants.js";
 
 export const defaultConfig: KyosoConfigInput = {
   entrypoints: { mcp: true, cli: true },
@@ -20,9 +23,9 @@ export const defaultConfig: KyosoConfigInput = {
       command: "npx",
       // Pinned on purpose: adapters are fetched at runtime on user machines,
       // so updates must go through a deliberate kyoso release.
-      args: ["-y", "@agentclientprotocol/codex-acp@1.1.2"],
+      args: ["-y", "@agentclientprotocol/codex-acp@1.1.4"],
       role: "implementation_reviewer",
-      timeoutMs: 120_000,
+      timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
       allowProjectProvider: [],
       env: {
         INITIAL_AGENT_MODE: "read-only",
@@ -47,7 +50,7 @@ export const defaultConfig: KyosoConfigInput = {
       command: "npx",
       args: ["-y", "@agentclientprotocol/claude-agent-acp@0.58.1"],
       role: "architecture_security_reviewer",
-      timeoutMs: 300_000,
+      timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
       env: {
         KYOSO_CHILD_AGENT: "1",
       },
@@ -128,7 +131,7 @@ export const defaultConfig: KyosoConfigInput = {
   },
   reviewBudget: {
     maxModelCalls: 4,
-    maxTotalWallTimeMs: 480_000,
+    maxTotalWallTimeMs: 660_000,
     warnAgentOutputBytes: DEFAULT_WARN_AGENT_OUTPUT_BYTES,
     maxAgentOutputBytes: 1_048_576,
     maxFindingsPerAgent: 10,

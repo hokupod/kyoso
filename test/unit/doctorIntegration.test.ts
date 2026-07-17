@@ -401,7 +401,7 @@ model = "openai/o4-mini\\u001b[31m\\nforged"
     );
     expect(output).toContain("Codex: warning command not found");
     expect(output).toContain(
-      "command: npx -y @agentclientprotocol/codex-acp@1.1.2",
+      "command: npx -y @agentclientprotocol/codex-acp@1.1.4",
     );
     expect(output).not.toContain(
       'hint: set agents.<name>.command = "bunx" in config.toml',

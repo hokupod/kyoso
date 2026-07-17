@@ -424,7 +424,7 @@ single-agent mode では、残った backend が `combined_reviewer` として1�
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
+maxTotalWallTimeMs = 660000
 warnAgentOutputBytes = 524288
 maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
@@ -437,7 +437,7 @@ skipOptionalPhasesWhenTokenUsageUnknown = false
 
 ### Timeouts
 
-Default agent timeouts は Codex 120 秒、Claude 300 秒です。verification round の default は 90 秒です。review全体のdeadlineは既定480秒(`reviewBudget.maxTotalWallTimeMs`)で、各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許可し、direct provider credentialが利用できる場合だけ加算します。
+Default agent timeout は Codex / Claude ともに600秒です。verification round の default は 90 秒です。review全体のdeadlineは既定660秒(`reviewBudget.maxTotalWallTimeMs`)で、defaultの並列primary phase後に標準の60秒のfinalization余裕を確保します。各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許し、direct provider credentialが利用できる場合だけ加算します。
 
 このrepositoryのprimary 15分＋verification 15分のdogfooding presetでは、次のuser-global overrideを使います。
 

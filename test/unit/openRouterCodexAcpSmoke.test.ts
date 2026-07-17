@@ -72,7 +72,7 @@ describe("OpenRouter Codex ACP smoke", () => {
     expect(config.agents.codex.command).toBe(normalConfig.agents.codex.command);
     expect(config.agents.codex.args).toEqual(normalConfig.agents.codex.args);
     expect(config.agents.codex.args).toContain(
-      "@agentclientprotocol/codex-acp@1.1.2",
+      "@agentclientprotocol/codex-acp@1.1.4",
     );
     expect(JSON.stringify(config)).not.toContain(testKey);
   });

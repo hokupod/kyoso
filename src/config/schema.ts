@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import {
+  DEFAULT_AGENT_TIMEOUT_MS,
   DEFAULT_WARN_AGENT_OUTPUT_BYTES,
   MAX_AGENT_OUTPUT_BYTES,
 } from "../core/constants.js";
@@ -31,7 +32,7 @@ const baseAgentSchema = z.object({
     "architecture_security_reviewer",
     "combined_reviewer",
   ]),
-  timeoutMs: z.number().int().positive().default(120_000),
+  timeoutMs: z.number().int().positive().default(DEFAULT_AGENT_TIMEOUT_MS),
   env: z.record(z.string(), z.string()).default({}),
   auth: z.object({
     mode: z.literal("passthrough").default("passthrough"),

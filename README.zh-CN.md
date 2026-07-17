@@ -424,7 +424,7 @@ Kyoso 可以在只有 Claude 或只有 Codex 可用时运行。请在 `kyoso.tom
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 480000
+maxTotalWallTimeMs = 660000
 warnAgentOutputBytes = 524288
 maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
@@ -437,7 +437,7 @@ skipOptionalPhasesWhenTokenUsageUnknown = false
 
 ### Timeouts
 
-Default agent timeouts 是 Codex 120 秒、Claude 300 秒；verification round 默认 90 秒。review-wide deadline 默认480秒(`reviewBudget.maxTotalWallTimeMs`)，各 phase 使用剩余 deadline 而不会延长它。`kyoso doctor` 会显示已配置的顺序phase时间，以及加入10%或60秒（取较大值）余量后的review-wide建议值。只有当judge mode允许且direct provider credential可用时，才会计入LLM judge timeout。
+Codex 和 Claude 的default agent timeout均为600秒；verification round 默认90秒。review-wide deadline 默认660秒(`reviewBudget.maxTotalWallTimeMs`)，在default并行primary phase后保留标准的60秒finalization余量。各 phase 使用剩余 deadline 而不会延长它。`kyoso doctor` 会显示已配置的顺序phase时间，以及加入10%或60秒（取较大值）余量后的review-wide建议值。只有当judge mode允许且direct provider credential可用时，才会计入LLM judge timeout。
 
 本repository的primary 15分钟＋verification 15分钟dogfooding preset使用以下user-global override：
 

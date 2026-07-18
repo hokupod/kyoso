@@ -6,7 +6,7 @@
  * retains dated probe metadata, which deliberately does not belong in the
  * published CLI.
  */
-export const PLUGIN_RUNTIME_COMPATIBILITY_SCHEMA_VERSION = 1;
+export const PLUGIN_RUNTIME_COMPATIBILITY_SCHEMA_VERSION = 2;
 
 export const MINIMUM_SUPPORTED_CODEX_VERSION = "0.144.0-alpha.4";
 
@@ -15,6 +15,7 @@ export const PLUGIN_RUNTIME_EXPECTED_CONTRACT = {
     pluginVersion: "0.7.2",
     mcpCommand: "npx",
     mcpPackagePin: "@kyo-so/cli@0.13.1",
+    mcpExecutable: "kyoso",
   },
   marketplace: {
     name: "kyoso",

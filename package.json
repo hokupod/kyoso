@@ -49,6 +49,7 @@
     "plugin:sync": "node scripts/plugin-sync.mjs",
     "plugin:verify": "node scripts/verify-plugin.mjs",
     "plugin:verify:registry": "node scripts/verify-plugin-registry.mjs",
+    "plugin:runtime:migrate": "node scripts/plugin-runtime-contract-migrate.mjs",
     "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
     "plugin:promote": "node scripts/plugin-promote.mjs",
     "skill:runtime:verify": "node scripts/verify-skill-runtime.mjs",

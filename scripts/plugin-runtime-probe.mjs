@@ -11,15 +11,17 @@ import {
 } from "node:fs";
 import { arch, platform, release, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import {
+  readBundledPluginRuntimeContract,
+  repositoryRoot,
+} from "./plugin-distribution.mjs";
 import {
   boundedProbeTimeoutMs,
   remainingProbeTimeoutMs,
   waitForFileUntilDeadline,
 } from "./plugin-runtime-deadline.mjs";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CODEX_NPX_INSTALL_TIMEOUT_MS = 180_000;
 const CODEX_COMMAND_TIMEOUT_MS = 60_000;
 const PROBE_WALL_TIME_MS = 300_000;
@@ -48,6 +50,7 @@ const fakeSecrets = {
   CLAUDE_CODE_OAUTH_TOKEN: "kyoso-probe-claude-oauth",
 };
 const deniedSentinel = "kyoso-probe-denied";
+const bundledRuntimeContract = readBundledPluginRuntimeContract(repositoryRoot);
 
 for (const path of [
   marketplaceRoot,
@@ -147,11 +150,11 @@ async function runProbe() {
   );
 
   return {
-    schemaVersion: 1,
+    schemaVersion: bundledRuntimeContract.schemaVersion,
     verifiedAt: new Date().toISOString().slice(0, 10),
     codexVersion: versionOutput.replace(/^codex-cli\s+/, ""),
     os: { platform: platform(), release: release(), arch: arch() },
-    fixtureSchemaVersion: 1,
+    fixtureSchemaVersion: 2,
     contract: {
       distribution: summarizeDistributionFixture(),
       marketplace: {
@@ -463,10 +466,15 @@ function summarizeDistributionFixture() {
   if (!packageArgument) {
     throw new Error("Plugin MCP package argument was not found");
   }
+  const executable = mcp.kyoso.args[2];
+  if (executable !== "kyoso") {
+    throw new Error("Plugin MCP executable must be kyoso");
+  }
   return {
     pluginVersion: manifest.version,
     mcpCommand: mcp.kyoso.command,
     mcpPackagePin: packageArgument.slice("--package=".length),
+    mcpExecutable: executable,
   };
 }
 
@@ -542,11 +550,16 @@ function updateCompatibilityRecord(path, result) {
   const record = existsSync(path)
     ? readJson(path)
     : {
-        schemaVersion: 1,
+        schemaVersion: bundledRuntimeContract.schemaVersion,
         minimumSupportedCodexVersion: result.codexVersion,
         expectedContract: result.contract,
         probes: [],
       };
+  if (record.schemaVersion !== result.schemaVersion) {
+    throw new Error(
+      `Compatibility record schema ${record.schemaVersion} does not match probe schema ${result.schemaVersion}`,
+    );
+  }
   if (!isDeepStrictEqual(record.expectedContract, result.contract)) {
     throw new Error(
       `Codex ${result.codexVersion} runtime contract differs from the recorded contract`,
@@ -569,12 +582,22 @@ function updateCompatibilityRecord(path, result) {
 
 function assertCompatibilityRecord(path, result) {
   const record = readJson(path);
+  if (record.schemaVersion !== result.schemaVersion) {
+    throw new Error(
+      `compatibility record schema ${record.schemaVersion} does not match probe schema ${result.schemaVersion}`,
+    );
+  }
   const expected = record.probes?.find(
     (probe) => probe.codexVersion === result.codexVersion,
   );
   if (!expected) {
     throw new Error(
       `compatibility record has no probe for Codex ${result.codexVersion}`,
+    );
+  }
+  if (expected.fixtureSchemaVersion !== result.fixtureSchemaVersion) {
+    throw new Error(
+      `compatibility record fixture schema for Codex ${result.codexVersion} does not match probe fixture schema`,
     );
   }
   if (!isDeepStrictEqual(record.expectedContract, result.contract)) {

@@ -78,6 +78,8 @@ describe("Codex Plugin fixture", () => {
       "mcp",
     ]);
     expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(packageMetadata.bin).toMatchObject({ kyoso: "dist/bin/kyoso.js" });
+    expect(distribution.mcpExecutable).toBe("kyoso");
   });
 
   test("keeps the Plugin MCP dependency separate from the canonical Skill", async () => {
@@ -112,11 +114,19 @@ describe("Codex Plugin fixture", () => {
     expect(pluginMetadata).toContain('type: "mcp"');
     expect(pluginMetadata).toContain('value: "kyoso"');
     expect(pluginMetadata).toContain('transport: "stdio"');
-    expect(canonicalInstructions).toContain("`npx -y @kyo-so/cli`");
-    expect(canonicalInstructions).toContain("`bunx @kyo-so/cli`");
+    expect(canonicalInstructions).toContain(
+      "`npx -y --package=@kyo-so/cli kyoso`",
+    );
+    expect(canonicalInstructions).toContain(
+      "`bunx --package @kyo-so/cli kyoso`",
+    );
     expect(canonicalInstructions).not.toContain(cliPackagePin);
-    expect(pluginInstructions).toContain(`\`npx -y ${cliPackagePin}\``);
-    expect(pluginInstructions).toContain(`\`bunx ${cliPackagePin}\``);
+    expect(pluginInstructions).toContain(
+      `\`npx -y --package=${cliPackagePin} kyoso\``,
+    );
+    expect(pluginInstructions).toContain(
+      `\`bunx --package ${cliPackagePin} kyoso\``,
+    );
     expect(await directorySnapshot(plugin)).toEqual({
       ...canonicalSnapshot,
       "SKILL.md": pluginInstructions,
@@ -159,6 +169,11 @@ describe("Codex Plugin fixture", () => {
       skillHasKyosoMcpDependency: false,
       mcpObservationWritten: false,
     });
+    expect(compatibility.probes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ fixtureSchemaVersion: 2 }),
+      ]),
+    );
   });
 
   test("keeps the bundled runtime contract structurally synchronized with its record", async () => {
@@ -550,6 +565,54 @@ describe("Codex Plugin fixture", () => {
               ],
             },
             {
+              name: "wrong Claude executable",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[2] = "other";
+              },
+              expected: [
+                "Claude plugin MCP args must exactly equal",
+                '"other"',
+              ],
+            },
+            {
+              name: "missing Claude package flag",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.13.1";
+              },
+              expected: [
+                "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+                "args[1] was",
+              ],
+            },
+            {
+              name: "extra Claude argument",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args.push("--verbose");
+              },
+              expected: [
+                "Claude plugin MCP args must exactly equal",
+                '"--verbose"',
+              ],
+            },
+            {
+              name: "tagged Claude package pin",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[1] = "--package=@kyo-so/cli@latest";
+              },
+              expected: [
+                "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+              ],
+            },
+            {
+              name: "ranged Claude package pin",
+              mutate(manifest) {
+                manifest.mcpServers.kyoso.args[1] = "--package=@kyo-so/cli@^0.13.1";
+              },
+              expected: [
+                "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
+              ],
+            },
+            {
               name: "path-based Claude MCP definition",
               mutate(manifest) {
                 manifest.mcpServers = "./.codex-plugin/mcp.json";
@@ -619,6 +682,84 @@ describe("Codex Plugin fixture", () => {
               if (!message) {
                 throw new Error(scenario.name + " unexpectedly passed verification");
               }
+              for (const expected of scenario.expected) {
+                if (!message.includes(expected)) {
+                  throw new Error(scenario.name + " did not report " + expected + ": " + message);
+                }
+              }
+            } finally {
+              rmSync(fixture, { force: true, recursive: true });
+            }
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
+  test("rejects noncanonical Codex MCP argv and a missing primary executable", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const scenarios = [
+            {
+              name: "legacy positional argv",
+              mutate({ mcp }) {
+                mcp.kyoso.args = ["-y", "@kyo-so/cli@0.13.1", "mcp"];
+              },
+              expected: ["Plugin MCP package pin must be an exact @kyo-so/cli SemVer"],
+            },
+            {
+              name: "wrong executable",
+              mutate({ mcp }) {
+                mcp.kyoso.args[2] = "other";
+              },
+              expected: ["Plugin MCP args must exactly equal", '"other"'],
+            },
+            {
+              name: "missing primary executable",
+              mutate({ packageMetadata }) {
+                delete packageMetadata.bin.kyoso;
+              },
+              expected: ['package.json bin.kyoso must equal "dist/bin/kyoso.js"'],
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-mcp-contract-"));
+            try {
+              cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+              cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
+              cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+              cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+              mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+              cpSync("package.json", join(fixture, "package.json"));
+              cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+              cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+              const mcpPath = join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json");
+              const packagePath = join(fixture, "package.json");
+              const mcp = JSON.parse(readFileSync(mcpPath, "utf8"));
+              const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
+              scenario.mutate({ mcp, packageMetadata });
+              writeFileSync(mcpPath, JSON.stringify(mcp));
+              writeFileSync(packagePath, JSON.stringify(packageMetadata));
+              let message = "";
+              try {
+                verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
+              } catch (error) {
+                message = String(error);
+              }
+              if (!message) throw new Error(scenario.name + " unexpectedly passed verification");
               for (const expected of scenario.expected) {
                 if (!message.includes(expected)) {
                   throw new Error(scenario.name + " did not report " + expected + ": " + message);
@@ -888,7 +1029,10 @@ describe("Codex Plugin fixture", () => {
           ) {
             throw new Error("Plugin promotion did not update the relocated MCP pin");
           }
-          if (!skill?.next.includes("npx -y " + packagePin) || !skill.next.includes("bunx " + packagePin)) {
+          if (
+            !skill?.next.includes("npx -y --package=" + packagePin + " kyoso") ||
+            !skill.next.includes("bunx --package " + packagePin + " kyoso")
+          ) {
             throw new Error("Plugin promotion did not update both Skill fallback pins");
           }
           if (!claudeManifest || !claudeMarketplace) {

@@ -19,10 +19,13 @@ const env = { HOME: "/home/kyoso", CODEX_HOME: "/state/codex" };
 
 describe("Codex Plugin detector", () => {
   test("uses the bundled probe contract", () => {
-    expect(PLUGIN_RUNTIME_COMPATIBILITY_SCHEMA_VERSION).toBe(1);
+    expect(PLUGIN_RUNTIME_COMPATIBILITY_SCHEMA_VERSION).toBe(2);
     expect(MINIMUM_SUPPORTED_CODEX_VERSION).toBe("0.144.0-alpha.4");
     expect(PLUGIN_RUNTIME_EXPECTED_CONTRACT.marketplace.pluginId).toBe(
       "kyoso@kyoso",
+    );
+    expect(PLUGIN_RUNTIME_EXPECTED_CONTRACT.distribution.mcpExecutable).toBe(
+      "kyoso",
     );
     expect(PLUGIN_LIST_JSON_SCHEMA.collections).toEqual([
       "installed",

@@ -29,7 +29,7 @@ const pluginSkillRelativePath = "plugins/kyoso/skills/kyoso-review";
 const pluginRootRelativePath = "plugins/kyoso";
 const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
-const unpinnedCliFallbacks = ["`npx -y @kyo-so/cli`", "`bunx @kyo-so/cli`"];
+const skillFallbackRunners = ["npx", "bunx"];
 const pluginMcpPackageArgumentPrefix = "--package=";
 const pluginMcpDependencyBlock = [
   "dependencies:",
@@ -130,6 +130,13 @@ export function buildPluginMcpArgs(cliPackagePin) {
   ];
 }
 
+function buildSkillCliFallback(runner, packageSpecifier) {
+  if (runner === "npx") {
+    return `\`npx -y --package=${packageSpecifier} kyoso\``;
+  }
+  return `\`bunx --package ${packageSpecifier} kyoso\``;
+}
+
 /**
  * Apply the Plugin-only Skill metadata contract to canonical Skill content.
  * The canonical Skill remains MCP-optional for skill-only installation.
@@ -147,17 +154,16 @@ export function transformCanonicalToPlugin(
       );
     }
     let instructions = content.toString("utf8");
-    for (const fallback of unpinnedCliFallbacks) {
-      const occurrences = instructions.split(fallback).length - 1;
+    for (const runner of skillFallbackRunners) {
+      const canonicalFallback = buildSkillCliFallback(runner, "@kyo-so/cli");
+      const pinnedFallback = buildSkillCliFallback(runner, cliPackagePin);
+      const occurrences = instructions.split(canonicalFallback).length - 1;
       if (occurrences !== 1) {
         throw new Error(
-          `Canonical Skill ${relativePath} must contain exactly one ${fallback} fallback`,
+          `Canonical Skill ${relativePath} must contain exactly one ${canonicalFallback} fallback`,
         );
       }
-      instructions = instructions.replace(
-        fallback,
-        fallback.replace("@kyo-so/cli", cliPackagePin),
-      );
+      instructions = instructions.replace(canonicalFallback, pinnedFallback);
     }
     transformed = Buffer.from(instructions, "utf8");
   }
@@ -238,6 +244,7 @@ export function verifyPluginDistribution(options = {}) {
     failures,
   );
   validatePackageAllowlist(packageMetadata, failures);
+  validatePackageExecutable(packageMetadata, failures);
   validatePackageVersion(
     packageMetadata,
     pin,
@@ -620,26 +627,11 @@ function validateClaudeManifest(manifest, paths, failures) {
     failures,
   );
   validateClaudeMcpEnv(server.env, failures);
-  if (server.command !== "npx") {
-    failures.push('Claude plugin MCP command must be "npx"');
-  }
-  if (
-    !Array.isArray(server.args) ||
-    server.args.length !== 4 ||
-    server.args[0] !== "-y" ||
-    server.args[2] !== pluginMcpServerName ||
-    server.args[3] !== "mcp"
-  ) {
-    failures.push(
-      'Claude plugin MCP args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]',
-    );
-  }
-  const pin = parsePluginMcpPackagePin(server.args);
-  if (!pin) {
-    failures.push(
-      "Claude plugin MCP package pin must be an exact @kyo-so/cli SemVer",
-    );
-  }
+  const pin = validatePluginMcpInvocation(
+    server,
+    "Claude plugin MCP",
+    failures,
+  );
   return pin ?? { packageName: "", packageVersion: "" };
 }
 
@@ -793,24 +785,7 @@ function validateMcp(mcp, failures) {
       failures.push(`Plugin MCP config has unsupported key: kyoso.${key}`);
     }
   }
-  if (server.command !== "npx") {
-    failures.push('Plugin MCP command must be "npx"');
-  }
-  if (
-    !Array.isArray(server.args) ||
-    server.args.length !== 4 ||
-    server.args[0] !== "-y" ||
-    server.args[2] !== pluginMcpServerName ||
-    server.args[3] !== "mcp"
-  ) {
-    failures.push(
-      'Plugin MCP args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]',
-    );
-  }
-  const pin = parsePluginMcpPackagePin(server.args);
-  if (!pin) {
-    failures.push("Plugin MCP package pin must be an exact @kyo-so/cli SemVer");
-  }
+  const pin = validatePluginMcpInvocation(server, "Plugin MCP", failures);
   if (!isExactArray(server.env_vars, allowedMcpEnvVars)) {
     failures.push(
       "Plugin MCP env_vars must match the seven-item allowlist exactly",
@@ -857,6 +832,48 @@ function validatePackageAllowlist(packageMetadata, failures) {
       failures.push(`package.json files allowlist must exclude ${prefix}/`);
     }
   }
+}
+
+function validatePackageExecutable(packageMetadata, failures) {
+  if (
+    !isObject(packageMetadata) ||
+    !isObject(packageMetadata.bin) ||
+    packageMetadata.bin.kyoso !== "dist/bin/kyoso.js"
+  ) {
+    failures.push('package.json bin.kyoso must equal "dist/bin/kyoso.js"');
+  }
+}
+
+function validatePluginMcpInvocation(server, label, failures) {
+  if (server.command !== "npx") {
+    failures.push(`${label} command must be "npx"`);
+  }
+  if (!Array.isArray(server.args)) {
+    failures.push(
+      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
+    );
+    return { packageName: "", packageVersion: "" };
+  }
+  const pin = parsePluginMcpPackagePin(server.args);
+  if (!pin) {
+    failures.push(
+      `${label} package pin must be an exact @kyo-so/cli SemVer; args[1] was ${formatValue(server.args[1])}`,
+    );
+    failures.push(
+      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
+    );
+    return { packageName: "", packageVersion: "" };
+  }
+  const expectedArgs = buildPluginMcpArgs(packagePin(pin));
+  if (!isDeepStrictEqual(server.args, expectedArgs)) {
+    failures.push(
+      `${label} args must exactly equal ${formatValue(expectedArgs)}; received ${formatValue(server.args)}`,
+    );
+    failures.push(
+      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
+    );
+  }
+  return pin;
 }
 
 function validatePackageVersion(
@@ -975,6 +992,27 @@ function validateRuntimeContract(
     failures.push(
       "Plugin compatibility record minimumSupportedCodexVersion must have a matching probe",
     );
+  } else {
+    const versions = new Set();
+    for (const probe of compatibility.probes) {
+      if (!isNonEmptyString(probe?.codexVersion)) {
+        failures.push(
+          "Plugin compatibility record probes must have a non-empty codexVersion",
+        );
+        continue;
+      }
+      if (versions.has(probe.codexVersion)) {
+        failures.push(
+          `Plugin compatibility record must not duplicate Codex ${probe.codexVersion}`,
+        );
+      }
+      versions.add(probe.codexVersion);
+      if (probe.fixtureSchemaVersion !== compatibility.schemaVersion) {
+        failures.push(
+          `Plugin compatibility probe ${probe.codexVersion} fixtureSchemaVersion must match schemaVersion`,
+        );
+      }
+    }
   }
   const contract = compatibility.expectedContract;
   if (contract?.distribution?.pluginVersion !== manifest?.version) {
@@ -985,6 +1023,11 @@ function validateRuntimeContract(
   if (contract?.distribution?.mcpPackagePin !== packagePin(pin)) {
     failures.push(
       "Plugin MCP package pin must match the compatibility contract",
+    );
+  }
+  if (contract?.distribution?.mcpExecutable !== pluginMcpServerName) {
+    failures.push(
+      `Plugin compatibility contract distribution.mcpExecutable must be ${pluginMcpServerName}`,
     );
   }
   if (contract?.marketplace?.pluginId !== pluginId) {

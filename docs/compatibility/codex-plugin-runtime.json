@@ -1,11 +1,12 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "minimumSupportedCodexVersion": "0.144.0-alpha.4",
   "expectedContract": {
     "distribution": {
       "pluginVersion": "0.7.2",
       "mcpCommand": "npx",
-      "mcpPackagePin": "@kyo-so/cli@0.13.1"
+      "mcpPackagePin": "@kyo-so/cli@0.13.1",
+      "mcpExecutable": "kyoso"
     },
     "marketplace": {
       "name": "kyoso",
@@ -123,23 +124,23 @@
   "probes": [
     {
       "codexVersion": "0.144.0-alpha.4",
-      "verifiedAt": "2026-07-17",
+      "verifiedAt": "2026-07-18",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",
         "arch": "arm64"
       },
-      "fixtureSchemaVersion": 1
+      "fixtureSchemaVersion": 2
     },
     {
       "codexVersion": "0.144.1",
-      "verifiedAt": "2026-07-17",
+      "verifiedAt": "2026-07-18",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",
         "arch": "arm64"
       },
-      "fixtureSchemaVersion": 1
+      "fixtureSchemaVersion": 2
     }
   ]
 }

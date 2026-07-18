@@ -470,7 +470,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.stdout).toContain("plugin verify ok: kyoso@kyoso");
   });
 
-  test("rejects package script drift for runtime migration and published smoke", () => {
+  test("rejects package script drift for runtime and release verification", () => {
     const result = spawnSync(
       "node",
       [
@@ -494,18 +494,226 @@ describe("Codex Plugin fixture", () => {
             cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
             const packagePath = join(fixture, "package.json");
             const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
-            packageMetadata.scripts["plugin:verify:published-cli"] = "node scripts/other.mjs";
-            writeFileSync(packagePath, JSON.stringify(packageMetadata));
-            try {
-              verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
-              process.exitCode = 1;
-            } catch (error) {
-              if (!String(error).includes("plugin:verify:published-cli must exactly equal")) {
-                throw error;
+            for (const name of [
+              "plugin:runtime:migrate",
+              "plugin:verify:registry",
+              "plugin:verify:published-cli",
+              "plugin:runtime:verify",
+            ]) {
+              const original = packageMetadata.scripts[name];
+              packageMetadata.scripts[name] = "node scripts/other.mjs";
+              writeFileSync(packagePath, JSON.stringify(packageMetadata));
+              let message = "";
+              try {
+                verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
+              } catch (error) {
+                message = String(error);
               }
+              if (!message.includes(name + " must exactly equal")) {
+                throw new Error(name + " drift was not rejected: " + message);
+              }
+              packageMetadata.scripts[name] = original;
             }
           } finally {
             rmSync(fixture, { force: true, recursive: true });
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
+  test("rejects Plugin promotion workflow drift", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const scenarios = [
+            {
+              name: "missing runner smoke path",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace('      - "scripts/mcp-smoke.mjs"\\n', "");
+              },
+              expected: "pull_request.paths must contain canonical paths exactly once",
+            },
+            {
+              name: "broad promotion workflow path",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - "plugins/**"\\n',
+                  '      - "plugins/**"\\n      - "**"\\n',
+                );
+              },
+              expected: "pull_request.paths must contain canonical paths exactly once",
+            },
+            {
+              name: "commented package path",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - "plugins/**"',
+                  '      - "plugins/**"\\n      - "package.json" # re-added',
+                );
+              },
+              expected: "pull_request.paths must contain canonical paths exactly once",
+            },
+            {
+              name: "inert safe-chain verification",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: npx safe-chain-verify",
+                  '        run: echo "npx safe-chain-verify"',
+                );
+              },
+              expected: "must run npx safe-chain-verify before published CLI smoke exactly once",
+            },
+            {
+              name: "job-level inert run mapping",
+              mutate({ workflow }) {
+                workflow.value = workflow.value
+                  .replace(
+                    "  verify-plugin-promotion:\\n",
+                    "  verify-plugin-promotion:\\n    env:\\n      run: bun run plugin:verify:published-cli\\n",
+                  )
+                  .replace(
+                    "        run: bun run plugin:verify:published-cli",
+                    '        run: echo "bun run plugin:verify:published-cli"',
+                  );
+              },
+              expected: "must run published CLI smoke before recorded Codex Plugin probes exactly once",
+            },
+            {
+              name: "conditional published smoke",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      - name: Verify published CLI runtime\\n        run: bun run plugin:verify:published-cli",
+                  "      - name: Verify published CLI runtime\\n        if: false\\n        run: bun run plugin:verify:published-cli",
+                );
+              },
+              expected: "must run published CLI smoke before recorded Codex Plugin probes without if, continue-on-error, or shell",
+            },
+            {
+              name: "conditional promotion job",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    runs-on: ubuntu-latest",
+                  "    if: false\\n    runs-on: ubuntu-latest",
+                );
+              },
+              expected: "job must not use if or continue-on-error",
+            },
+            {
+              name: "continue-on-error promotion job",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    runs-on: ubuntu-latest",
+                  "    continue-on-error: true\\n    runs-on: ubuntu-latest",
+                );
+              },
+              expected: "job must not use if or continue-on-error",
+            },
+            {
+              name: "post-steps quoted continue-on-error promotion job",
+              mutate({ workflow }) {
+                workflow.value += '    "continue-on-error": true\\n';
+              },
+              expected: "job must not use if or continue-on-error",
+            },
+            {
+              name: "workflow defaults",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "permissions:",
+                  "defaults:\\n  run:\\n    shell: echo {0}\\n\\npermissions:",
+                );
+              },
+              expected: "must not configure workflow-level defaults",
+            },
+            {
+              name: "required step shell override",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      - name: Verify published CLI runtime\\n        run: bun run plugin:verify:published-cli",
+                  "      - name: Verify published CLI runtime\\n        shell: echo {0}\\n        run: bun run plugin:verify:published-cli",
+                );
+              },
+              expected: "must run published CLI smoke before recorded Codex Plugin probes without if, continue-on-error, or shell",
+            },
+            {
+              name: "quoted required step shell override",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      - name: Verify published CLI runtime\\n        run: bun run plugin:verify:published-cli",
+                  '      - name: Verify published CLI runtime\\n        "shell": echo {0}\\n        run: bun run plugin:verify:published-cli',
+                );
+              },
+              expected: "must run published CLI smoke before recorded Codex Plugin probes without if, continue-on-error, or shell",
+            },
+            {
+              name: "published smoke after runtime replay",
+              mutate({ workflow }) {
+                const published = "bun run plugin:verify:published-cli";
+                const runtime = "bun run plugin:runtime:verify";
+                workflow.value = workflow.value
+                  .replace(published, "__published_cli_smoke__")
+                  .replace(runtime, published)
+                  .replace("__published_cli_smoke__", runtime);
+              },
+              expected: "must run published CLI smoke before recorded Codex Plugin probes",
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-workflow-"));
+            try {
+              cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+              cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
+              cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+              cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+              mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+              mkdirSync(join(fixture, ".github", "workflows"), { recursive: true });
+              cpSync("package.json", join(fixture, "package.json"));
+              cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+              cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+              cpSync(
+                ".github/workflows/plugin-promotion.yml",
+                join(fixture, ".github", "workflows", "plugin-promotion.yml"),
+              );
+              const workflow = {
+                value: readFileSync(
+                  join(fixture, ".github", "workflows", "plugin-promotion.yml"),
+                  "utf8",
+                ),
+              };
+              scenario.mutate({ workflow });
+              writeFileSync(
+                join(fixture, ".github", "workflows", "plugin-promotion.yml"),
+                workflow.value,
+              );
+              let message = "";
+              try {
+                verifyPluginDistribution({
+                  root: fixture,
+                  verifyPackageArchive: false,
+                  verifyPromotionWorkflow: true,
+                });
+              } catch (error) {
+                message = String(error);
+              }
+              if (!message.includes(scenario.expected)) {
+                throw new Error(scenario.name + " did not report " + scenario.expected + ": " + message);
+              }
+            } finally {
+              rmSync(fixture, { force: true, recursive: true });
+            }
           }
         `,
       ],

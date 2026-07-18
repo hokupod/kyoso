@@ -29,7 +29,26 @@ const pluginSkillRelativePath = "plugins/kyoso/skills/kyoso-review";
 const pluginRootRelativePath = "plugins/kyoso";
 const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
+const promotionWorkflowRelativePath = ".github/workflows/plugin-promotion.yml";
+const promotionWorkflowPullRequestPaths = [
+  ".agents/plugins/**",
+  ".agents/skills/kyoso-review/**",
+  ".claude-plugin/**",
+  "plugins/**",
+  "docs/compatibility/codex-plugin-runtime.json",
+  "src/cli/knownSkillDigests.ts",
+  "src/cli/pluginRuntimeContract.ts",
+  "scripts/plugin-*.mjs",
+  "scripts/mcp-smoke.mjs",
+  "scripts/verify-plugin*.mjs",
+  "scripts/verify-published-cli.mjs",
+];
 const skillFallbackRunners = ["npx", "bunx"];
+const promotionJobExecutionModifierKeys = ["if", "continue-on-error"];
+const promotionStepExecutionModifierKeys = [
+  ...promotionJobExecutionModifierKeys,
+  "shell",
+];
 const pluginMcpPackageArgumentPrefix = "--package=";
 const pluginMcpDependencyBlock = [
   "dependencies:",
@@ -114,6 +133,7 @@ export function distributionPaths(root = repositoryRoot) {
     mcp: join(root, pluginRootRelativePath, ".codex-plugin", "mcp.json"),
     pluginRoot: join(root, pluginRootRelativePath),
     pluginSkill: join(root, pluginSkillRelativePath),
+    promotionWorkflow: join(root, promotionWorkflowRelativePath),
     runtimeContract: join(root, "src", "cli", "pluginRuntimeContract.ts"),
   };
 }
@@ -191,6 +211,8 @@ export function transformCanonicalToPlugin(
 export function verifyPluginDistribution(options = {}) {
   const root = options.root ?? repositoryRoot;
   const verifyPackageArchive = options.verifyPackageArchive ?? true;
+  const verifyPromotionWorkflow =
+    options.verifyPromotionWorkflow ?? root === repositoryRoot;
   const expectedPackageVersion = options.expectedPackageVersion;
   const paths = distributionPaths(root);
   const failures = [];
@@ -246,6 +268,7 @@ export function verifyPluginDistribution(options = {}) {
   validatePackageAllowlist(packageMetadata, failures);
   validatePackageExecutable(packageMetadata, failures);
   validateRuntimeScripts(packageMetadata, failures);
+  if (verifyPromotionWorkflow) validatePromotionWorkflow(paths, failures);
   validatePackageVersion(
     packageMetadata,
     pin,
@@ -849,7 +872,9 @@ function validateRuntimeScripts(packageMetadata, failures) {
   const expectedScripts = {
     "plugin:runtime:migrate":
       "node scripts/plugin-runtime-contract-migrate.mjs",
+    "plugin:verify:registry": "node scripts/verify-plugin-registry.mjs",
     "plugin:verify:published-cli": "node scripts/verify-published-cli.mjs",
+    "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
   };
   if (!isObject(packageMetadata) || !isObject(packageMetadata.scripts)) {
     failures.push("package.json scripts must define Plugin runtime commands");
@@ -862,6 +887,228 @@ function validateRuntimeScripts(packageMetadata, failures) {
       );
     }
   }
+}
+
+function validatePromotionWorkflow(paths, failures) {
+  let workflow;
+  try {
+    workflow = readFileSync(paths.promotionWorkflow, "utf8");
+  } catch (error) {
+    failures.push(
+      `Plugin promotion workflow could not be read: ${errorMessage(error)}`,
+    );
+    return;
+  }
+
+  const pullRequestPaths = readPromotionWorkflowPaths(workflow);
+  if (!pullRequestPaths || !hasExactPromotionWorkflowPaths(pullRequestPaths)) {
+    failures.push(
+      "Plugin promotion workflow pull_request.paths must contain canonical paths exactly once",
+    );
+  }
+
+  if (hasWorkflowDefaults(workflow)) {
+    failures.push(
+      "Plugin promotion workflow must not configure workflow-level defaults",
+    );
+  }
+
+  const promotionJob = readPromotionWorkflowJob(workflow);
+  if (!promotionJob) {
+    failures.push(
+      "Plugin promotion workflow must define verify-plugin-promotion job steps",
+    );
+    return;
+  }
+  if (promotionJob.executionModifier) {
+    failures.push(
+      "Plugin promotion workflow job must not use if or continue-on-error",
+    );
+  }
+  if (promotionJob.defaults) {
+    failures.push("Plugin promotion workflow job must not configure defaults");
+  }
+  const { steps } = promotionJob;
+  const npxSafeChainVerification = findPromotionWorkflowCommand(
+    steps,
+    "npx safe-chain-verify",
+    "npx safe-chain-verify before published CLI smoke",
+    failures,
+  );
+  const bunxSafeChainVerification = findPromotionWorkflowCommand(
+    steps,
+    "bunx safe-chain-verify",
+    "bunx safe-chain-verify before published CLI smoke",
+    failures,
+  );
+  const registryVerification = findPromotionWorkflowCommand(
+    steps,
+    "bun run plugin:verify:registry",
+    "registry verification before published CLI smoke",
+    failures,
+  );
+  const publishedSmoke = findPromotionWorkflowCommand(
+    steps,
+    "bun run plugin:verify:published-cli",
+    "published CLI smoke before recorded Codex Plugin probes",
+    failures,
+  );
+  const runtimeReplay = findPromotionWorkflowCommand(
+    steps,
+    "bun run plugin:runtime:verify",
+    "recorded Codex Plugin probes",
+    failures,
+  );
+
+  if (publishedSmoke === undefined) return;
+  for (const [command, index] of [
+    ["npx safe-chain-verify", npxSafeChainVerification],
+    ["bunx safe-chain-verify", bunxSafeChainVerification],
+    ["registry verification", registryVerification],
+  ]) {
+    if (index !== undefined && index > publishedSmoke) {
+      failures.push(
+        `Plugin promotion workflow must run ${command} before published CLI smoke`,
+      );
+    }
+  }
+  if (runtimeReplay !== undefined && publishedSmoke > runtimeReplay) {
+    failures.push(
+      "Plugin promotion workflow must run published CLI smoke before recorded Codex Plugin probes",
+    );
+  }
+}
+
+function readPromotionWorkflowPaths(workflow) {
+  const match = workflow.match(
+    /^  pull_request:\s*\n    paths:\s*\n((?:      - [^\n]+\n)+)/m,
+  );
+  if (!match?.[1]) return undefined;
+  const paths = [];
+  for (const line of match[1].trimEnd().split("\n")) {
+    const path = line.match(/^      - (?:(['"])([^#\n]+)\1|([^#\n]+))$/);
+    const value = path?.[2] ?? path?.[3];
+    if (!value) return undefined;
+    paths.push(value.trim());
+  }
+  return paths;
+}
+
+function hasExactPromotionWorkflowPaths(paths) {
+  const actualPaths = new Set(paths);
+  return (
+    actualPaths.size === paths.length &&
+    paths.length === promotionWorkflowPullRequestPaths.length &&
+    promotionWorkflowPullRequestPaths.every((path) => actualPaths.has(path))
+  );
+}
+
+function hasWorkflowDefaults(workflow) {
+  return workflow
+    .split("\n")
+    .some((line) => hasWorkflowMappingKey(line, 0, ["defaults"]));
+}
+
+function hasWorkflowMappingKey(line, indentation, keys) {
+  const keyPattern = keys.join("|");
+  return new RegExp(
+    `^${" ".repeat(indentation)}(?:${keyPattern}|["'](?:${keyPattern})["'])\\s*:`,
+  ).test(line);
+}
+
+function hasWorkflowListMappingKey(line, indentation, keys) {
+  const keyPattern = keys.join("|");
+  return new RegExp(
+    `^${" ".repeat(indentation)}-\\s+(?:${keyPattern}|["'](?:${keyPattern})["'])\\s*:`,
+  ).test(line);
+}
+
+function readPromotionWorkflowJob(workflow) {
+  const lines = workflow.split("\n");
+  const jobStart = lines.indexOf("  verify-plugin-promotion:");
+  if (jobStart === -1) return undefined;
+
+  let jobEnd = lines.length;
+  for (let index = jobStart + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (
+      line.startsWith("  ") &&
+      !line.startsWith("    ") &&
+      line.trimEnd().endsWith(":")
+    ) {
+      jobEnd = index;
+      break;
+    }
+  }
+
+  let stepsStart = -1;
+  for (let index = jobStart + 1; index < jobEnd; index += 1) {
+    if (lines[index] === "    steps:") {
+      stepsStart = index;
+      break;
+    }
+  }
+  if (stepsStart === -1) return undefined;
+
+  const jobLines = lines.slice(jobStart + 1, jobEnd);
+  const steps = [];
+  for (let index = stepsStart + 1; index < jobEnd;) {
+    if (!lines[index].startsWith("      - ")) {
+      index += 1;
+      continue;
+    }
+    let nextStep = index + 1;
+    while (nextStep < jobEnd && !lines[nextStep].startsWith("      - ")) {
+      nextStep += 1;
+    }
+    const stepLines = lines.slice(index, nextStep);
+    const run = stepLines
+      .map((line) => line.match(/^        run:\s*(.+)$/)?.[1]?.trim())
+      .find((value) => value && value !== "|" && value !== ">");
+    const executionModifier = stepLines.some(
+      (line) =>
+        hasWorkflowListMappingKey(
+          line,
+          6,
+          promotionStepExecutionModifierKeys,
+        ) || hasWorkflowMappingKey(line, 8, promotionStepExecutionModifierKeys),
+    );
+    steps.push({ run, executionModifier });
+    index = nextStep;
+  }
+  return {
+    steps,
+    executionModifier: jobLines.some((line) =>
+      hasWorkflowMappingKey(line, 4, promotionJobExecutionModifierKeys),
+    ),
+    defaults: jobLines.some((line) =>
+      hasWorkflowMappingKey(line, 4, ["defaults"]),
+    ),
+  };
+}
+
+function findPromotionWorkflowCommand(steps, command, description, failures) {
+  const matches = steps.reduce(
+    (indices, step, index) =>
+      step.run === command
+        ? [...indices, { index, executionModifier: step.executionModifier }]
+        : indices,
+    [],
+  );
+  if (matches.length !== 1) {
+    failures.push(
+      `Plugin promotion workflow must run ${description} exactly once`,
+    );
+    return undefined;
+  }
+  const match = matches[0];
+  if (match.executionModifier) {
+    failures.push(
+      `Plugin promotion workflow must run ${description} without if, continue-on-error, or shell`,
+    );
+    return undefined;
+  }
+  return match.index;
 }
 
 function validatePluginMcpInvocation(server, label, failures) {

@@ -470,6 +470,51 @@ describe("Codex Plugin fixture", () => {
     expect(result.stdout).toContain("plugin verify ok: kyoso@kyoso");
   });
 
+  test("rejects package script drift for runtime migration and published smoke", () => {
+    const result = spawnSync(
+      "node",
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { verifyPluginDistribution } from "./scripts/plugin-distribution.mjs";
+
+          const fixture = mkdtempSync(join(tmpdir(), "kyoso-plugin-script-drift-"));
+          try {
+            cpSync(".agents", join(fixture, ".agents"), { recursive: true });
+            cpSync(".claude-plugin", join(fixture, ".claude-plugin"), { recursive: true });
+            cpSync("plugins", join(fixture, "plugins"), { recursive: true });
+            cpSync("docs/compatibility", join(fixture, "docs", "compatibility"), { recursive: true });
+            mkdirSync(join(fixture, "src", "cli"), { recursive: true });
+            cpSync("package.json", join(fixture, "package.json"));
+            cpSync("src/cli/knownSkillDigests.ts", join(fixture, "src", "cli", "knownSkillDigests.ts"));
+            cpSync("src/cli/pluginRuntimeContract.ts", join(fixture, "src", "cli", "pluginRuntimeContract.ts"));
+            const packagePath = join(fixture, "package.json");
+            const packageMetadata = JSON.parse(readFileSync(packagePath, "utf8"));
+            packageMetadata.scripts["plugin:verify:published-cli"] = "node scripts/other.mjs";
+            writeFileSync(packagePath, JSON.stringify(packageMetadata));
+            try {
+              verifyPluginDistribution({ root: fixture, verifyPackageArchive: false });
+              process.exitCode = 1;
+            } catch (error) {
+              if (!String(error).includes("plugin:verify:published-cli must exactly equal")) {
+                throw error;
+              }
+            }
+          } finally {
+            rmSync(fixture, { force: true, recursive: true });
+          }
+        `,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+  });
+
   test("rejects a reintroduced Plugin-root .mcp.json", () => {
     const result = spawnSync(
       "node",

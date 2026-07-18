@@ -1,15 +1,24 @@
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import {
+  assertMcpHandshake,
+  buildMcpHandshakeInput,
+  buildMcpSmokeEnvironment,
+  createKyosoPathSentinel,
+  runMcpPackageRunnerSmoke,
+} from "./mcp-smoke.mjs";
 
 const requiredPrefixes = ["dist/", ".agents/skills/kyoso-review/", "examples/"];
 const requiredFiles = [
@@ -145,11 +154,24 @@ try {
   const packedManifest = JSON.parse(
     readTarEntry(tarballPath, "package/package.json"),
   );
+  if (packedManifest.name !== "@kyo-so/cli") {
+    failures.push("package manifest name must be @kyo-so/cli.");
+  }
+  if (packedManifest.bin?.kyoso !== "dist/bin/kyoso.js") {
+    failures.push("package manifest is missing the kyoso bin.");
+  }
   if (
     packedManifest.bin?.["kyoso-budget-report"] !==
     "scripts/review-budget-report.mjs"
   ) {
     failures.push("package manifest is missing the kyoso-budget-report bin.");
+  }
+  if (
+    !packedManifest.bin ||
+    typeof packedManifest.bin !== "object" ||
+    Object.keys(packedManifest.bin).length < 2
+  ) {
+    failures.push("package manifest must retain at least two bin entries.");
   }
 
   for (const entry of tarEntries) {
@@ -177,6 +199,20 @@ try {
     } catch (error) {
       failures.push(
         `packed budget-report smoke failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (failures.length === 0) {
+    try {
+      await verifyLocalPackageRunnerSmokes(
+        tarballPath,
+        tempDir,
+        packedManifest,
+      );
+    } catch (error) {
+      failures.push(
+        `local package-runner MCP smoke failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -314,99 +350,239 @@ function verifyPackedMcpServer(tarballPath, tempDir, packageVersion) {
   }
 
   const binPath = join(extractDir, "package", "dist", "bin", "kyoso.js");
-  const requests = [
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-11-25",
-        capabilities: {},
-        clientInfo: { name: "kyoso-pack-verify", version: "0.0.0" },
-      },
-    },
-    { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
-    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-  ];
+  const smokeRoot = join(tempDir, "direct-mcp-smoke");
+  const sentinel = createKyosoPathSentinel({ root: smokeRoot });
+  const { env } = buildMcpSmokeEnvironment({ root: smokeRoot, sentinel });
   const run = spawnSync(
-    "node",
+    process.execPath,
     [binPath, "mcp", "--ignore-config", "--network", "model_only"],
     {
       cwd: extractDir,
-      env: {
-        ...process.env,
-        OPENAI_API_KEY: "",
-        CODEX_API_KEY: "",
-        ANTHROPIC_API_KEY: "",
-        CLAUDE_CODE_OAUTH_TOKEN: "",
-      },
-      input: `${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
+      env,
+      input: buildMcpHandshakeInput(),
       encoding: "utf8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
     },
   );
-
   const stderr = (run.stderr ?? "").trim();
-  const stderrNote = stderr
-    ? `stderr: ${stderr.slice(0, 400)}`
-    : "no stderr output";
   if (run.error) {
     throw new Error(
-      `failed to run packed MCP server: ${run.error.message}; ${stderrNote}`,
+      `failed to run packed MCP server: ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
     );
   }
   if (run.signal) {
     throw new Error(
-      `packed MCP server was killed by ${run.signal} (likely timeout); ${stderrNote}`,
+      `packed MCP server was killed by ${run.signal}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
     );
   }
-
-  const responses = [];
-  const parseErrors = [];
-  for (const line of (run.stdout ?? "").split("\n")) {
-    if (line.trim().length === 0) continue;
-    try {
-      responses.push(JSON.parse(line));
-    } catch {
-      parseErrors.push(line);
-    }
-  }
-  const findResponse = (id) => {
-    const response = responses.find((item) => item.id === id);
-    if (!response) {
-      throw new Error(
-        `missing MCP response ${id}; exit=${run.status}; ${stderrNote}`,
-      );
-    }
-    return response;
-  };
-
-  const initialize = findResponse(1);
-  const serverInfo = initialize.result?.serverInfo;
-  if (serverInfo?.name !== "kyoso") {
-    throw new Error(`unexpected MCP server name: ${serverInfo?.name}`);
-  }
-  if (serverInfo.version !== packageVersion) {
+  if (run.status !== 0) {
     throw new Error(
-      `MCP server version ${serverInfo.version} does not match package.json version ${packageVersion}`,
+      `packed MCP server exited ${String(run.status)}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
     );
-  }
-
-  const tools = findResponse(2);
-  const names = tools.result?.tools?.map((tool) => tool.name) ?? [];
-  const expected = ["plan_review", "security_review", "diff_review"];
-  if (JSON.stringify(names) !== JSON.stringify(expected)) {
-    throw new Error(`unexpected MCP tools: ${names.join(", ")}`);
-  }
-  if (parseErrors.length > 0) {
-    throw new Error(`non-JSON stdout from MCP server: ${parseErrors[0]}`);
   }
   if (stderr.length > 0) {
-    throw new Error(`unexpected MCP stderr: ${stderr}`);
+    throw new Error(`unexpected MCP stderr: ${stderr.slice(0, 400)}`);
   }
+  assertMcpHandshake(run.stdout ?? "", {
+    version: packageVersion,
+  });
 
   verifyPackedSkillOnlySetup(binPath, tempDir, packageVersion);
+}
+
+async function verifyLocalPackageRunnerSmokes(
+  tarballPath,
+  tempDir,
+  packedManifest,
+) {
+  const runnerProbeTarball = createRunnerProbeTarball(
+    tarballPath,
+    tempDir,
+    packedManifest,
+  );
+  const localSpec = `file:${runnerProbeTarball}`;
+  const mcpArgs = [
+    "kyoso",
+    "mcp",
+    "--ignore-config",
+    "--network",
+    "model_only",
+  ];
+
+  await runMcpPackageRunnerSmoke({
+    runner: "npx",
+    command: "npx",
+    args: ["-y", `--package=${localSpec}`, ...mcpArgs],
+    expectedVersion: packedManifest.version,
+    extraEnv: { npm_config_offline: "true" },
+  });
+
+  await runMcpPackageRunnerSmoke({
+    runner: "bunx",
+    command: "bunx",
+    args: ["--no-install", "--package", packedManifest.name, ...mcpArgs],
+    expectedVersion: packedManifest.version,
+    prepare: ({ root, workspace, env, timeoutMs }) => {
+      const consumer = join(workspace, "bun-consumer");
+      mkdirSync(consumer, { recursive: true });
+      writeFileSync(
+        join(consumer, "package.json"),
+        `${JSON.stringify(
+          {
+            name: "kyoso-local-runner-consumer",
+            private: true,
+            type: "module",
+            dependencies: { [packedManifest.name]: localSpec },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const install = spawnSync(
+        "bun",
+        ["install", "--offline", "--ignore-scripts"],
+        {
+          cwd: consumer,
+          env,
+          encoding: "utf8",
+          timeout: timeoutMs,
+        },
+      );
+      if (install.error || install.status !== 0) {
+        throw new Error(
+          `offline Bun install failed: ${(install.error?.message ?? install.stderr ?? install.stdout ?? "unknown error").trim()}`,
+        );
+      }
+      assertBunLocalConsumer(consumer, packedManifest, runnerProbeTarball);
+      return { cwd: consumer };
+    },
+  });
+}
+
+function createRunnerProbeTarball(tarballPath, tempDir, packedManifest) {
+  const extractDir = join(tempDir, "runner-probe-extract");
+  const packageDir = join(tempDir, "runner-probe-package");
+  const archiveDir = join(tempDir, "runner-probe-archive");
+  mkdirSync(extractDir, { recursive: true });
+  const extract = spawnSync("tar", ["-xf", tarballPath, "-C", extractDir], {
+    encoding: "utf8",
+  });
+  if (extract.status !== 0) {
+    throw new Error(extract.stderr || "failed to extract runner-probe source");
+  }
+
+  const packedRoot = join(extractDir, "package");
+  cpSync(join(packedRoot, "dist"), join(packageDir, "dist"), {
+    recursive: true,
+  });
+  mkdirSync(join(packageDir, "scripts"), { recursive: true });
+  cpSync(
+    join(packedRoot, "scripts", "review-budget-report.mjs"),
+    join(packageDir, "scripts", "review-budget-report.mjs"),
+  );
+  writeFileSync(
+    join(packageDir, "package.json"),
+    `${JSON.stringify(
+      {
+        name: packedManifest.name,
+        version: packedManifest.version,
+        type: packedManifest.type,
+        engines: packedManifest.engines,
+        bin: packedManifest.bin,
+        dependencies: {},
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  mkdirSync(archiveDir, { recursive: true });
+  const pack = spawnSync(
+    "npm",
+    [
+      "--cache",
+      join(tempDir, "runner-probe-npm-cache"),
+      "pack",
+      "--pack-destination",
+      archiveDir,
+    ],
+    { cwd: packageDir, encoding: "utf8", timeout: 30_000 },
+  );
+  if (pack.error || pack.status !== 0) {
+    throw new Error(
+      `failed to create runner-probe tarball: ${(pack.error?.message ?? pack.stderr ?? pack.stdout ?? "unknown error").trim()}`,
+    );
+  }
+  const archives = readdirSync(archiveDir).filter((name) =>
+    name.endsWith(".tgz"),
+  );
+  if (archives.length !== 1) {
+    throw new Error(
+      `runner-probe pack produced ${archives.length} archives; expected exactly 1`,
+    );
+  }
+  const runnerProbeTarball = realpathSync(join(archiveDir, archives[0]));
+  const runnerManifest = JSON.parse(
+    readTarEntry(runnerProbeTarball, "package/package.json"),
+  );
+  if (
+    runnerManifest.name !== packedManifest.name ||
+    runnerManifest.version !== packedManifest.version ||
+    runnerManifest.type !== packedManifest.type ||
+    JSON.stringify(runnerManifest.engines) !==
+      JSON.stringify(packedManifest.engines) ||
+    JSON.stringify(runnerManifest.bin) !== JSON.stringify(packedManifest.bin) ||
+    Object.keys(runnerManifest.bin ?? {}).length < 2 ||
+    Object.keys(runnerManifest.dependencies ?? {}).length !== 0
+  ) {
+    throw new Error(
+      "runner-probe package manifest does not preserve the local 2-bin contract",
+    );
+  }
+  return runnerProbeTarball;
+}
+
+function assertBunLocalConsumer(consumer, packedManifest, runnerProbeTarball) {
+  const installed = join(consumer, "node_modules", "@kyo-so", "cli");
+  if (!existsSync(installed)) {
+    throw new Error(
+      "offline Bun install did not resolve the local runner-probe package",
+    );
+  }
+  const installedRealPath = realpathSync(installed);
+  const installedBinRealPath = realpathSync(
+    join(installed, "dist", "bin", "kyoso.js"),
+  );
+  if (!installedBinRealPath.startsWith(`${installedRealPath}${sep}`)) {
+    throw new Error(
+      "offline Bun install resolved kyoso outside its local package",
+    );
+  }
+  const installedManifest = JSON.parse(
+    readFileSync(join(installed, "package.json"), "utf8"),
+  );
+  if (
+    installedManifest.name !== packedManifest.name ||
+    installedManifest.version !== packedManifest.version ||
+    installedManifest.bin?.kyoso !== "dist/bin/kyoso.js" ||
+    installedManifest.bin?.["kyoso-budget-report"] !==
+      "scripts/review-budget-report.mjs" ||
+    Object.keys(installedManifest.bin ?? {}).length < 2
+  ) {
+    throw new Error("offline Bun install lost the runner-probe 2-bin manifest");
+  }
+  const lockPath = join(consumer, "bun.lock");
+  if (!existsSync(lockPath)) {
+    throw new Error("offline Bun install did not produce bun.lock");
+  }
+  const lock = readFileSync(lockPath, "utf8");
+  if (!lock.includes("file:") || !lock.includes(runnerProbeTarball)) {
+    throw new Error(
+      "bun.lock does not retain the local runner-probe file spec",
+    );
+  }
 }
 
 function verifyPackedSkillOnlySetup(binPath, tempDir, packageVersion) {

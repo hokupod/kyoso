@@ -32,11 +32,40 @@ export async function assertPublishedCliVersion({
     );
   }
 
-  if (payload?.version !== packageVersion) {
+  return validatePublishedCliMetadata(payload, { packageName, packageVersion });
+}
+
+export function validatePublishedCliMetadata(
+  payload,
+  { packageName, packageVersion },
+) {
+  const requested = `${packageName}@${packageVersion}`;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`npm registry metadata for ${requested} must be an object`);
+  }
+  if (payload.name !== packageName) {
+    throw new Error(
+      `npm registry metadata name ${String(payload.name)} does not match ${packageName}`,
+    );
+  }
+  if (payload.version !== packageVersion) {
     throw new Error(
       `npm registry does not list ${requested}; expected version ${packageVersion} to be published`,
     );
   }
-
+  if (
+    !payload.bin ||
+    typeof payload.bin !== "object" ||
+    Array.isArray(payload.bin)
+  ) {
+    throw new Error(
+      `npm registry metadata for ${requested} must include a bin map`,
+    );
+  }
+  if (payload.bin.kyoso !== "dist/bin/kyoso.js") {
+    throw new Error(
+      `npm registry metadata for ${requested} must expose bin.kyoso as dist/bin/kyoso.js`,
+    );
+  }
   return requested;
 }

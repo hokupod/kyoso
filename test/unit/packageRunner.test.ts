@@ -3,6 +3,8 @@ import {
   buildKyosoPackageCommand,
   formatKyosoPackageCommand,
 } from "../../src/cli/packageRunner.js";
+// @ts-expect-error The registry validator is intentionally shipped as a standalone Node.js script.
+import { validatePublishedCliMetadata } from "../../scripts/plugin-registry.mjs";
 
 describe("Kyoso package runner", () => {
   test("builds exact npx and bunx commands without mutating cli args", () => {
@@ -55,5 +57,64 @@ describe("Kyoso package runner", () => {
         cliArgs: ["setup", "codex", "--write"],
       }),
     ).toBe("npx -y --package=@kyo-so/cli kyoso setup codex --write");
+  });
+
+  test.each([
+    [
+      "accepts a multi-bin published package",
+      {
+        name: "@kyo-so/cli",
+        version: "0.13.1",
+        bin: {
+          kyoso: "dist/bin/kyoso.js",
+          "kyoso-budget-report": "scripts/review-budget-report.mjs",
+        },
+      },
+      undefined,
+    ],
+    [
+      "rejects a missing primary executable",
+      { name: "@kyo-so/cli", version: "0.13.1", bin: {} },
+      "bin.kyoso",
+    ],
+    [
+      "rejects a wrong primary executable path",
+      {
+        name: "@kyo-so/cli",
+        version: "0.13.1",
+        bin: { kyoso: "dist/bin/other.js" },
+      },
+      "bin.kyoso",
+    ],
+    [
+      "rejects a wrong package name",
+      {
+        name: "@other/cli",
+        version: "0.13.1",
+        bin: { kyoso: "dist/bin/kyoso.js" },
+      },
+      "metadata name",
+    ],
+    [
+      "rejects a wrong package version",
+      {
+        name: "@kyo-so/cli",
+        version: "0.13.0",
+        bin: { kyoso: "dist/bin/kyoso.js" },
+      },
+      "does not list",
+    ],
+  ])("%s", (_name, payload, expectedError) => {
+    const options = { packageName: "@kyo-so/cli", packageVersion: "0.13.1" };
+
+    if (expectedError) {
+      expect(() => validatePublishedCliMetadata(payload, options)).toThrow(
+        expectedError,
+      );
+      return;
+    }
+    expect(validatePublishedCliMetadata(payload, options)).toBe(
+      "@kyo-so/cli@0.13.1",
+    );
   });
 });

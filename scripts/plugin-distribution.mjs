@@ -245,6 +245,7 @@ export function verifyPluginDistribution(options = {}) {
   );
   validatePackageAllowlist(packageMetadata, failures);
   validatePackageExecutable(packageMetadata, failures);
+  validateRuntimeScripts(packageMetadata, failures);
   validatePackageVersion(
     packageMetadata,
     pin,
@@ -841,6 +842,25 @@ function validatePackageExecutable(packageMetadata, failures) {
     packageMetadata.bin.kyoso !== "dist/bin/kyoso.js"
   ) {
     failures.push('package.json bin.kyoso must equal "dist/bin/kyoso.js"');
+  }
+}
+
+function validateRuntimeScripts(packageMetadata, failures) {
+  const expectedScripts = {
+    "plugin:runtime:migrate":
+      "node scripts/plugin-runtime-contract-migrate.mjs",
+    "plugin:verify:published-cli": "node scripts/verify-published-cli.mjs",
+  };
+  if (!isObject(packageMetadata) || !isObject(packageMetadata.scripts)) {
+    failures.push("package.json scripts must define Plugin runtime commands");
+    return;
+  }
+  for (const [name, command] of Object.entries(expectedScripts)) {
+    if (packageMetadata.scripts[name] !== command) {
+      failures.push(
+        `package.json script ${name} must exactly equal ${formatValue(command)}`,
+      );
+    }
   }
 }
 

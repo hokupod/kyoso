@@ -343,6 +343,27 @@ describe("setup", () => {
     );
     expect(dryRun).not.toContain("claude-preview-secret-value");
 
+    const beforeImplicitBunxMigration = await readFile(configPath, "utf8");
+    let implicitBunxProbeCalls = 0;
+    const implicitBunxMigration = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: true,
+      global: false,
+      force: true,
+      env: { HOME: home },
+      bunxVersionProbe: () => {
+        implicitBunxProbeCalls += 1;
+        return verifiedBunxVersion();
+      },
+    });
+    expect(implicitBunxMigration).toContain("Claude Code MCP: skipped");
+    expect(implicitBunxMigration).toContain("--runner bunx --force");
+    expect(implicitBunxProbeCalls).toBe(0);
+    expect(await readFile(configPath, "utf8")).toBe(
+      beforeImplicitBunxMigration,
+    );
+
     const beforeBlockedMigration = await readFile(configPath, "utf8");
     const blocked = await runSetup({
       cwd,
@@ -350,6 +371,7 @@ describe("setup", () => {
       write: true,
       global: false,
       force: true,
+      runner: "bunx",
       env: { HOME: home },
       bunxVersionProbe: () => ({
         status: "unsupported",
@@ -366,6 +388,7 @@ describe("setup", () => {
       write: true,
       global: false,
       force: true,
+      runner: "bunx",
       env: { HOME: home },
       bunxVersionProbe: verifiedBunxVersion,
     });
@@ -504,6 +527,7 @@ describe("setup", () => {
       write: true,
       global: false,
       force: true,
+      runner: "bunx",
       env: { HOME: home },
       bunxVersionProbe: verifiedBunxVersion,
     });

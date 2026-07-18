@@ -578,6 +578,13 @@ async function ensureExistingCodexMcp(
       `${detail}\nLegacy registration was kept. Re-run with --write --force to migrate this exact invocation.`,
     );
   }
+  if (requiresExplicitBunxRunnerForMigration(context, replacement)) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      `${detail}\nLegacy Bun registration was kept. Re-run with --write --runner bunx --force to verify and migrate this exact invocation, or with --runner npx --force to migrate it using npx.`,
+    );
+  }
   const unsupportedBunx = unsupportedBunxResult(
     context,
     "Codex MCP",
@@ -704,6 +711,13 @@ async function ensureExistingClaudeProjectMcp(
       "Claude Code MCP",
       existing,
       `${detail}\nLegacy registration was kept. Re-run with --write --force to migrate this exact invocation.`,
+    );
+  }
+  if (requiresExplicitBunxRunnerForMigration(context, replacement)) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      `${detail}\nLegacy Bun registration was kept. Re-run with --write --runner bunx --force to verify and migrate this exact invocation, or with --runner npx --force to migrate it using npx.`,
     );
   }
   const unsupportedBunx = unsupportedBunxResult(
@@ -1861,6 +1875,13 @@ function unsupportedBunxResult(
   };
 }
 
+function requiresExplicitBunxRunnerForMigration(
+  context: SetupContext,
+  command: McpCommand,
+): boolean {
+  return command.command === "bunx" && !context.runnerExplicit;
+}
+
 function formatBunxFallbackCommand(
   context: SetupContext,
   title: "Codex MCP" | "Claude Code MCP",
@@ -1884,6 +1905,9 @@ function bunxVerificationPendingDetail(
   command: McpCommand,
 ): string {
   if (context.customCommand || command.command !== "bunx") return "";
+  if (!context.runnerExplicit) {
+    return "\nLegacy Bun registration will stay unchanged unless you rerun with --write --runner bunx --force to verify and migrate it, or with --runner npx --force to migrate it using npx.";
+  }
   return "\nBun 1.3.14 or newer will be verified before any MCP config is written.";
 }
 

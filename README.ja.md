@@ -92,8 +92,8 @@ Plugin は Kyoso review Skill と、公開済み CLI version に pin したロ�
 3. または、MCP を登録して review skill をインストールします。
 
 ```bash
-npx @kyo-so/cli setup claude-code --write
-bunx @kyo-so/cli setup claude-code --write
+npx -y --package=@kyo-so/cli kyoso setup claude-code --write
+bunx --package @kyo-so/cli kyoso setup claude-code --write
 ```
 
 手動で MCP を登録する場合は、`examples/claude-code-mcp.json` を使用します。
@@ -101,8 +101,8 @@ bunx @kyo-so/cli setup claude-code --write
 4. セットアップを確認します。
 
 ```bash
-npx @kyo-so/cli doctor
-bunx @kyo-so/cli doctor
+npx -y --package=@kyo-so/cli kyoso doctor
+bunx --package @kyo-so/cli kyoso doctor
 ```
 
 5. Claude Code からレビューを依頼します。
@@ -133,15 +133,15 @@ Codex Auto modeでは、approvalが必要なKyoso toolの呼び出しが拒否�
 3. または、MCP を登録して review skill をインストールします。
 
 ```bash
-npx @kyo-so/cli setup codex --write
-bunx @kyo-so/cli setup codex --write
+npx -y --package=@kyo-so/cli kyoso setup codex --write
+bunx --package @kyo-so/cli kyoso setup codex --write
 ```
 
 4. セットアップを確認します。
 
 ```bash
-npx @kyo-so/cli doctor
-bunx @kyo-so/cli doctor
+npx -y --package=@kyo-so/cli kyoso doctor
+bunx --package @kyo-so/cli kyoso doctor
 ```
 
 5. Codex からレビューを依頼します。
@@ -154,7 +154,9 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 ## CLI
 
-通常の実行経路は `npx @kyo-so/cli` と `bunx @kyo-so/cli` です。以下の例では、この prefix を `kyoso` と省略しています。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
+package-runner の実行経路では、package と executable を必ず別指定します: `npx -y --package=@kyo-so/cli kyoso` と `bunx --package @kyo-so/cli kyoso` です。workflowで固定する場合は、`@kyo-so/cli@0.13.1` のようにpackage名へcomplete SemVer pinを付けます。以下の例の `kyoso` は、すでにインストールされた executable の省略形です。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
+
+Bun fallback は Bun `1.3.14` で検証済みです。古い Bun では npx 形式またはインストール済みの `kyoso` を使い、複数bin packageからの Bun のbinary推論に依存しないでください。
 
 ```bash
 kyoso plan --goal "Review this OAuth callback plan" --plan plan.md
@@ -198,7 +200,7 @@ Kyoso を Codex または Claude Code の MCP server として登録し、client
 # See examples/codex-config.toml
 [mcp_servers.kyoso]
 command = "npx"
-args = ["-y", "@kyo-so/cli", "mcp", "--network", "model_only"]
+args = ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"]
 ```
 
 client request の例:
@@ -210,8 +212,8 @@ Use Kyoso plan_review on this plan and the selected auth files. I need a second 
 ## MCP
 
 ```bash
-npx @kyo-so/cli mcp --network model_only
-bunx @kyo-so/cli mcp --network model_only
+npx -y --package=@kyo-so/cli kyoso mcp --network model_only
+bunx --package @kyo-so/cli kyoso mcp --network model_only
 ```
 
 `--network` を省略すると、Kyoso は `model_only` を使用します。これは Kyoso が backend agents からの通信を model-provider traffic のみにすることを期待する policy-level constraint です。OS-level network isolation ではありません。
@@ -228,13 +230,19 @@ MCP stdout は protocol messages 専用です。logs は stderr または local 
 
 同梱の `kyoso-review` skill は意図的に狭い用途にしています。Kyoso、multi-agent review、plan review、security review、CISA Secure by Design review、diff review を明示的に依頼したときだけ trigger されるべきです。
 
-Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y @kyo-so/cli`、`bunx @kyo-so/cli`です。package runner fallbackはnetwork accessが必要になり、version driftも起こり得るため、MCPなしの通常経路にはインストール済みCLIを使います。typed [review contract](#review-contract-と-finding-admission) にnon-goalsまたはaccepted risksがありMCPを利用できない場合、CLI fallbackは`focus`しか保持できないためSkillは停止します。
+Skillは利用可能な最初の経路を使います。順序はKyoso MCP tools、PATH上のインストール済み`kyoso`、`npx -y --package=@kyo-so/cli kyoso`、`bunx --package @kyo-so/cli kyoso`です。package runner fallbackはnetwork accessが必要になり、pinなしでは新しいreleaseへ解決され得るため、MCPなしの通常経路にはインストール済みCLIを使います。typed [review contract](#review-contract-と-finding-admission) にnon-goalsまたはaccepted risksがありMCPを利用できない場合、CLI fallbackは`focus`しか保持できないためSkillは停止します。
 
 `kyoso setup codex --write --skill-only`はcanonical Skill directoryを既定で`.agents/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.agents/skills/kyoso-review/`へコピーします。
 
 `kyoso setup claude-code --write --skill-only`は既定で`.claude/skills/kyoso-review/`へコピーします。`--global`を追加すると`~/.claude/skills/kyoso-review/`へコピーします。
 
-managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのSkill directoryだけを置換し、MCP設定を削除・上書きしません。
+managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.json`へ記録します。現行または既知historical copyはadoptして自動更新します。変更済み／未知のcopyはconflictとして残し、上書きしません。`--force`はそのmanaged Skillを置換できます。manual MCPに対する例外は次節の限定移行だけであり、custom／unknown登録、選択した安全な対象外のglobal／nested登録、Marketplace Plugin／cacheは変更しません。
+
+### 手動 MCP の移行
+
+最初に `kyoso setup codex` または `kyoso setup claude-code` を実行し、既存登録を確認します。dry-run と `--write` は既存の MCP entry をすべて保持します。`--write --force` は認識済みの完全一致 legacy npx Kyoso command を上記の package と executable を分離した形式へ移行します。完全一致 legacy bunx command は `--runner` を省略するとprobeせず保持します。`--write --runner bunx --force` は Bun を検証して明示bunx形式へ移行し、`--write --runner npx --force` は意図的にnpx形式へ移行します。いずれもlegacy commandにcomplete SemVer pinがあった場合は保持します。
+
+`--force` が対象にできるのは managed Skill の置換と、上記runner policyに従う完全一致 legacy MCP entry の移行だけです。custom `--command` entry、unknown structure、選択対象外の global / nested registration、Marketplace Plugin / cache は変更しません。`kyoso doctor` は保持したentryを ready とせず、`legacy`、`custom-unverified`、`unknown` として表示します。examplesを使って手動修復してから doctor を再実行してください。
 
 ## Review contract と finding admission
 
@@ -537,7 +545,7 @@ Windows、および必要なfilesystem capabilityを証明できない環境で�
 ## Troubleshooting
 
 - MCP timeout: client timeoutはreview-wide deadlineより長くしてください。35分presetではCodexに2160秒、Claude Codeに`MCP_TOOL_TIMEOUT=2160000`を設定します。[Timeouts](#timeouts)を参照してください。
-- Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx @kyo-so/cli` の解決が一時的に block される場合があります。
+- Fresh npm release: safe-chain などの minimum-package-age protection により、publish 直後は `npx -y --package=@kyo-so/cli@<version> kyoso` が一時的に block される場合があります。`latest` や ambient `kyoso` へfallbackせず、その exact version を待ってください。
 - Deprecated TypeScript config: `--trust-config` を渡さない限り、untrusted `kyoso.config.ts` は skip されます。新規設定は `kyoso.toml` を使ってください。
 - OpenRouter key missing: 空でないCodex `model`、Kyoso processへ転送された`OPENROUTER_API_KEY`、clientの再起動を確認し、`kyoso doctor`を実行してください。Marketplace Plugin `0.4.0`以降はこの変数名をKyoso processへ転送し、それ以前のversionは転送しません。既存MCP registrationはsetupで再書換えされません。
 

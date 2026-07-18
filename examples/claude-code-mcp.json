@@ -2,7 +2,7 @@
   "mcpServers": {
     "kyoso": {
       "command": "npx",
-      "args": ["-y", "@kyo-so/cli", "mcp"],
+      "args": ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"],
       "env": {
         "OPENAI_API_KEY": "${OPENAI_API_KEY}",
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",

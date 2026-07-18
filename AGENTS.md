@@ -32,6 +32,15 @@
 - Add integration or e2e coverage when touching `runReview`, ACP process handling, CLI behavior, snapshots, or MCP responses.
 - Keep fixtures in `test/fixtures/` and avoid real provider credentials.
 
+## Implementation Scope & Harness Proportionality
+
+- This section applies to implementation work only. It does not alter Kyoso review coverage, finding admission, or reporting of concrete findings.
+- Treat the active plan's explicit behavior and implementation steps as the scope boundary. Prefer the smallest implementation that satisfies that contract.
+- Do not add persistent or bespoke operational harnesses—such as migration journals, locks, backup copies, recovery state machines, or generalized test frameworks—solely for hypothetical races.
+- Add such machinery only when the plan explicitly requires it, a reproducible failure demonstrates that the planned primitive is insufficient, or a mandatory security/property requirement cannot be met more simply.
+- When implementation must materially expand beyond the plan, present the concrete need and smallest alternative, then obtain user approval before changing code.
+- Keep tests focused on stated contracts and concrete regressions; do not build generalized harnesses merely to cover speculative scenarios.
+
 ## Commit & Pull Request Guidelines
 
 - Use Conventional Commits, matching the current history, for example `feat: implement kyoso mvp` or `fix: block recursive kyoso calls`.

@@ -1,24 +1,77 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
+import type { Stats } from "node:fs";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
+import {
+  inspectManualMcpInvocation,
+  type ManualMcpInvocationInspection,
+} from "./manualMcpInvocation.js";
+import {
+  buildKyosoPackageCommand,
+  formatKyosoPackageCommand,
+  isCompleteSemVer,
+  KYOSO_PACKAGE_NAME,
+  type KyosoPackageRunner,
+} from "./packageRunner.js";
+import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
 import { ensureManagedSkill } from "./skillInstall.js";
 
 export type SetupClient = "codex" | "claude-code";
-export type SetupRunner = "npx" | "bunx";
+export type SetupRunner = KyosoPackageRunner;
 export type SetupScope = "project" | "global";
 export type ManualMcpStatus = "enabled" | "disabled" | "missing" | "unknown";
+
+export type ManualMcpScope =
+  "codex-global" | "claude-project" | "claude-global" | "claude-global-project";
+
+export type ManualMcpRegistration = {
+  path: string;
+  scope: ManualMcpScope;
+  status: ManualMcpStatus;
+  invocation: ManualMcpInvocationInspection;
+  autoMigrationEligible: boolean;
+};
 
 export type SetupDetection = {
   mcp: boolean;
   skill: boolean;
   manualMcpStatus: ManualMcpStatus;
+  manualMcpRegistrations: ManualMcpRegistration[];
   mcpPaths: string[];
   skillPaths: string[];
 };
+
+export type BunxVersionProbeResult =
+  | { status: "verified"; version: string }
+  | {
+      status: "missing" | "failed" | "timeout" | "invalid" | "unsupported";
+      detail: string;
+    };
+
+export type BunxVersionProbe = (options: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}) => BunxVersionProbeResult;
 
 export type CodexPluginMcpOverride = {
   status: ManualMcpStatus;
@@ -36,6 +89,12 @@ export type SetupOptions = {
   skillOnly?: boolean;
   force?: boolean;
   env?: NodeJS.ProcessEnv;
+  bunxVersionProbe?: BunxVersionProbe;
+  beforeManualMcpWrite?: (path: string) => void | Promise<void>;
+  beforeManualMcpCommit?: (path: string) => void | Promise<void>;
+  afterManualMcpValidation?: (path: string) => void | Promise<void>;
+  beforeManualMcpRename?: (path: string) => void | Promise<void>;
+  manualMcpRename?: (source: string, destination: string) => Promise<void>;
 };
 
 type McpCommand = {
@@ -52,7 +111,7 @@ type StepResultBase = {
 
 type McpStepResult = StepResultBase & {
   kind: "mcp";
-  registration: "generated" | "preserved";
+  registration: "blocked" | "generated" | "migrated" | "preserved";
 };
 
 type NonMcpStepResult = StepResultBase & {
@@ -71,7 +130,16 @@ type SetupContext = {
   skillOnly: boolean;
   force: boolean;
   withOpenRouter: boolean;
+  customCommand: boolean;
+  runnerExplicit: boolean;
   mcpCommand: McpCommand;
+  bunxVersionProbe: BunxVersionProbe;
+  bunxProbe?: BunxVersionProbeResult;
+  beforeManualMcpWrite?: (path: string) => void | Promise<void>;
+  beforeManualMcpCommit?: (path: string) => void | Promise<void>;
+  afterManualMcpValidation?: (path: string) => void | Promise<void>;
+  beforeManualMcpRename?: (path: string) => void | Promise<void>;
+  manualMcpRename: (source: string, destination: string) => Promise<void>;
   sourceSkillDir: string;
 };
 
@@ -94,7 +162,15 @@ export async function runSetup(options: SetupOptions): Promise<string> {
     skillOnly: options.skillOnly ?? false,
     force: options.force ?? false,
     withOpenRouter: options.withOpenRouter ?? false,
+    customCommand: options.command !== undefined,
+    runnerExplicit: options.runner !== undefined,
     mcpCommand: command,
+    bunxVersionProbe: options.bunxVersionProbe ?? probeBunxVersion,
+    beforeManualMcpWrite: options.beforeManualMcpWrite,
+    beforeManualMcpCommit: options.beforeManualMcpCommit,
+    afterManualMcpValidation: options.afterManualMcpValidation,
+    beforeManualMcpRename: options.beforeManualMcpRename,
+    manualMcpRename: options.manualMcpRename ?? rename,
     sourceSkillDir: resolveBundledSkillDir(),
   };
 
@@ -106,10 +182,7 @@ export async function runSetup(options: SetupOptions): Promise<string> {
 }
 
 export function commandForRunner(runner: SetupRunner): McpCommand {
-  if (runner === "bunx") {
-    return { command: "bunx", args: ["@kyo-so/cli", "mcp"] };
-  }
-  return { command: "npx", args: ["-y", "@kyo-so/cli", "mcp"] };
+  return buildKyosoPackageCommand({ runner, cliArgs: ["mcp"] });
 }
 
 export function buildCodexMcpToml(
@@ -252,16 +325,18 @@ export function detectSetup(options: {
 
   return {
     codex: {
-      mcp: codexMcp.status === "enabled",
+      mcp: isCurrentManualMcp(codexMcp),
       skill: codexSkillPaths.length > 0,
       manualMcpStatus: codexMcp.status,
+      manualMcpRegistrations: codexMcp.registrations,
       mcpPaths: codexMcp.paths,
       skillPaths: codexSkillPaths,
     },
     "claude-code": {
-      mcp: claudeMcp.status === "enabled",
+      mcp: isCurrentManualMcp(claudeMcp),
       skill: claudeSkillPaths.length > 0,
       manualMcpStatus: claudeMcp.status,
+      manualMcpRegistrations: claudeMcp.registrations,
       mcpPaths: claudeMcp.paths,
       skillPaths: claudeSkillPaths,
     },
@@ -300,17 +375,28 @@ async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
   const configPath = join(context.codexHome, "config.toml");
   const snippet = buildCodexMcpToml(context.mcpCommand, context.withOpenRouter);
   const current = await readOptionalFile(configPath);
-  if (hasCodexMcpContent(current)) {
+  const existing = inspectCodexMcpContent(
+    current,
+    configPath,
+    context.cwd,
+    context.home,
+  );
+  if (existing) {
+    return ensureExistingCodexMcp(context, current, existing);
+  }
+  const appendSafety = inspectCodexAppendSafety(
+    current,
+    context.cwd,
+    context.home,
+  );
+  if (!appendSafety.ok) {
     return {
       kind: "mcp",
-      registration: "preserved",
+      registration: "blocked",
       title: "Codex MCP",
-      status: "skipped",
+      status: "conflict",
       path: configPath,
-      detail:
-        codexMcpStatusFromContent(current) === "disabled"
-          ? disabledCodexMcpDetail(configPath)
-          : "existing [mcp_servers.kyoso] kept",
+      detail: appendSafety.detail,
     };
   }
   const detail = diffForAppend(configPath, snippet);
@@ -321,8 +407,25 @@ async function ensureCodexMcp(context: SetupContext): Promise<StepResult> {
       title: "Codex MCP",
       status: "dry-run",
       path: configPath,
-      detail,
+      detail: `${detail}${bunxVerificationPendingDetail(context, context.mcpCommand)}`,
     };
+  }
+  const unsupportedBunx = unsupportedBunxResult(
+    context,
+    "Codex MCP",
+    configPath,
+    context.mcpCommand,
+  );
+  if (unsupportedBunx) return unsupportedBunx;
+  if (context.bunxProbe?.status === "verified") {
+    const latest = await readOptionalFile(configPath);
+    if (latest !== current) {
+      return migrationConflictResult(
+        "Codex MCP",
+        configPath,
+        "Codex MCP config changed while bunx verification; it was not overwritten.",
+      );
+    }
   }
   const separator = current.length > 0 && !current.endsWith("\n") ? "\n\n" : "";
   await mkdir(dirname(configPath), { recursive: true });
@@ -343,22 +446,44 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
   }
 
   const configPath = join(context.cwd, ".mcp.json");
-  const current = await readJsonObject(configPath);
-  const mcpServers = recordValue(current.mcpServers);
-  if (isRecord(mcpServers.kyoso)) {
+  const userConfig = detectClaudeMcp(
+    join(context.home, ".claude.json"),
+    context.cwd,
+    context.home,
+  );
+  const applicableUserRegistrations = userConfig.registrations.filter(
+    (registration) => registration.status !== "disabled",
+  );
+  if (applicableUserRegistrations.length > 0) {
+    return claudeProjectMcpScopeConflictResult(configPath, {
+      ...userConfig,
+      registrations: applicableUserRegistrations,
+      paths: [
+        ...new Set(
+          applicableUserRegistrations.map((registration) => registration.path),
+        ),
+      ],
+    });
+  }
+  const content = await readOptionalFile(configPath);
+  let current: Record<string, unknown>;
+  try {
+    current = parseJsonObject(configPath, content);
+  } catch (error) {
     return {
       kind: "mcp",
-      registration: "preserved",
+      registration: "blocked",
       title: "Claude Code MCP",
-      status: "skipped",
+      status: "conflict",
       path: configPath,
-      detail:
-        mcpEntryStatus(mcpServers.kyoso) === "disabled"
-          ? disabledClaudeMcpDetail(configPath)
-          : "existing mcpServers.kyoso kept",
+      detail: `Claude Code MCP config could not be parsed and was left unchanged: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
-
+  const mcpServers = recordValue(current.mcpServers);
+  const existing = inspectClaudeProjectMcp(current, configPath);
+  if (existing) {
+    return ensureExistingClaudeProjectMcp(context, content, existing);
+  }
   const next = {
     ...current,
     mcpServers: {
@@ -374,10 +499,29 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
       title: "Claude Code MCP",
       status: "dry-run",
       path: configPath,
-      detail,
+      detail: `${detail}${bunxVerificationPendingDetail(context, context.mcpCommand)}`,
     };
   }
 
+  const unsupportedBunx = unsupportedBunxResult(
+    context,
+    "Claude Code MCP",
+    configPath,
+    context.mcpCommand,
+  );
+  if (unsupportedBunx) return unsupportedBunx;
+  if (context.bunxProbe?.status === "verified") {
+    const latest = await readOptionalFile(configPath);
+    if (latest !== content) {
+      return migrationConflictResult(
+        "Claude Code MCP",
+        configPath,
+        "Claude Code MCP config changed while bunx verification; it was not overwritten.",
+      );
+    }
+  }
+
+  await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
   return {
     kind: "mcp",
@@ -386,6 +530,260 @@ async function ensureClaudeMcp(context: SetupContext): Promise<StepResult> {
     status: Object.keys(current).length > 0 ? "updated" : "created",
     path: configPath,
     detail,
+  };
+}
+
+async function ensureExistingCodexMcp(
+  context: SetupContext,
+  current: string,
+  existing: ManualMcpRegistration,
+): Promise<StepResult> {
+  if (existing.invocation.kind !== "legacy") {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      codexPreservedDetail(existing),
+    );
+  }
+  const replacement = migrationReplacementForContext(
+    context,
+    existing.invocation,
+  );
+  if (!replacement) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      codexPreservedDetail(existing),
+    );
+  }
+  const detail = legacyMigrationDetail(
+    existing.path,
+    existing.invocation,
+    replacement,
+  );
+  if (!context.write) {
+    return {
+      kind: "mcp",
+      registration: "preserved",
+      title: "Codex MCP",
+      status: "dry-run",
+      path: existing.path,
+      detail: `${detail}${bunxVerificationPendingDetail(context, replacement)}`,
+    };
+  }
+  if (!context.force || context.customCommand) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      `${detail}\nLegacy registration was kept. Re-run with --write --force to migrate this exact invocation.`,
+    );
+  }
+  const unsupportedBunx = unsupportedBunxResult(
+    context,
+    "Codex MCP",
+    existing.path,
+    replacement,
+    { migration: true },
+  );
+  if (unsupportedBunx) return unsupportedBunx;
+  const safety = await inspectMigrationFile(existing.path);
+  if (!safety.ok) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      `${detail}\n${safety.detail}`,
+    );
+  }
+  if (context.beforeManualMcpWrite) {
+    await context.beforeManualMcpWrite(existing.path);
+  }
+  const latest = await readOptionalFile(existing.path);
+  if (latest !== current) {
+    return migrationConflictResult(
+      "Codex MCP",
+      existing.path,
+      "Codex MCP config changed after inspection; it was not overwritten.",
+    );
+  }
+  const next = patchCodexLegacyInvocation(latest, replacement);
+  if (!next) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      `${detail}\nThe TOML shape is not a safe single-line legacy target; migrate it manually.`,
+    );
+  }
+  const verified = inspectCodexMcpContent(
+    next,
+    existing.path,
+    context.cwd,
+    context.home,
+  );
+  if (!isCurrentMcpCommand(verified?.invocation, replacement)) {
+    return preservedMcpResult(
+      "Codex MCP",
+      existing,
+      `${detail}\nThe proposed TOML patch could not be verified; it was not written.`,
+    );
+  }
+  try {
+    await writeFileAtomically(existing.path, next, safety.safety, latest, {
+      beforeCommit: context.beforeManualMcpCommit,
+      afterExpectedContentsCheck: context.afterManualMcpValidation,
+      beforeRename: context.beforeManualMcpRename,
+      replace: context.manualMcpRename,
+    });
+  } catch (error) {
+    if (error instanceof MigrationCommittedError) {
+      return migrationConflictResult(
+        "Codex MCP",
+        existing.path,
+        "Codex MCP migration may have been committed but could not be verified; inspect the current config before retrying.",
+      );
+    }
+    if (error instanceof MigrationConflictError) {
+      return migrationConflictResult(
+        "Codex MCP",
+        existing.path,
+        "Codex MCP config changed before migration could be committed; it was not overwritten.",
+      );
+    }
+    throw error;
+  }
+  return {
+    kind: "mcp",
+    registration: "migrated",
+    title: "Codex MCP",
+    status: "updated",
+    path: existing.path,
+    detail:
+      "migrated exact legacy [mcp_servers.kyoso] invocation to explicit package/executable args",
+  };
+}
+
+async function ensureExistingClaudeProjectMcp(
+  context: SetupContext,
+  content: string,
+  existing: ManualMcpRegistration,
+): Promise<StepResult> {
+  if (existing.invocation.kind !== "legacy") {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      claudePreservedDetail(existing),
+    );
+  }
+  const replacement = migrationReplacementForContext(
+    context,
+    existing.invocation,
+  );
+  if (!replacement) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      claudePreservedDetail(existing),
+    );
+  }
+  const detail = legacyMigrationDetail(
+    existing.path,
+    existing.invocation,
+    replacement,
+  );
+  if (!context.write) {
+    return {
+      kind: "mcp",
+      registration: "preserved",
+      title: "Claude Code MCP",
+      status: "dry-run",
+      path: existing.path,
+      detail: `${detail}${bunxVerificationPendingDetail(context, replacement)}`,
+    };
+  }
+  if (!context.force || context.customCommand) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      `${detail}\nLegacy registration was kept. Re-run with --write --force to migrate this exact invocation.`,
+    );
+  }
+  const unsupportedBunx = unsupportedBunxResult(
+    context,
+    "Claude Code MCP",
+    existing.path,
+    replacement,
+    { migration: true },
+  );
+  if (unsupportedBunx) return unsupportedBunx;
+  const safety = await inspectMigrationFile(existing.path);
+  if (!safety.ok) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      `${detail}\n${safety.detail}`,
+    );
+  }
+  if (context.beforeManualMcpWrite) {
+    await context.beforeManualMcpWrite(existing.path);
+  }
+  const latest = await readOptionalFile(existing.path);
+  if (latest !== content) {
+    return migrationConflictResult(
+      "Claude Code MCP",
+      existing.path,
+      "Claude Code MCP config changed after inspection; it was not overwritten.",
+    );
+  }
+  const next = patchClaudeProjectMcpInvocation(latest, replacement);
+  if (!next) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      `${detail}\nThe JSON shape is not a safe exact legacy target; migrate it manually.`,
+    );
+  }
+  const verified = inspectClaudeProjectMcp(
+    parseJsonObject(existing.path, next),
+    existing.path,
+  );
+  if (!isCurrentMcpCommand(verified?.invocation, replacement)) {
+    return preservedMcpResult(
+      "Claude Code MCP",
+      existing,
+      `${detail}\nThe proposed JSON patch could not be verified; it was not written.`,
+    );
+  }
+  try {
+    await writeFileAtomically(existing.path, next, safety.safety, latest, {
+      beforeCommit: context.beforeManualMcpCommit,
+      afterExpectedContentsCheck: context.afterManualMcpValidation,
+      beforeRename: context.beforeManualMcpRename,
+      replace: context.manualMcpRename,
+    });
+  } catch (error) {
+    if (error instanceof MigrationCommittedError) {
+      return migrationConflictResult(
+        "Claude Code MCP",
+        existing.path,
+        "Claude Code MCP migration may have been committed but could not be verified; inspect the current config before retrying.",
+      );
+    }
+    if (error instanceof MigrationConflictError) {
+      return migrationConflictResult(
+        "Claude Code MCP",
+        existing.path,
+        "Claude Code MCP config changed before migration could be committed; it was not overwritten.",
+      );
+    }
+    throw error;
+  }
+  return {
+    kind: "mcp",
+    registration: "migrated",
+    title: "Claude Code MCP",
+    status: "updated",
+    path: existing.path,
+    detail:
+      "migrated exact legacy mcpServers.kyoso invocation to explicit package/executable args",
   };
 }
 
@@ -402,7 +800,7 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
       detail:
         existingMcp.status === "disabled"
           ? disabledClaudeMcpDetail(configPath)
-          : "existing mcpServers.kyoso kept",
+          : claudeGlobalMcpPreservedDetail(existingMcp),
     };
   }
 
@@ -418,9 +816,17 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
       title: "Claude Code MCP",
       status: "dry-run",
       path: configPath,
-      detail: commandLine,
+      detail: `${commandLine}${bunxVerificationPendingDetail(context, context.mcpCommand)}`,
     };
   }
+
+  const unsupportedBunx = unsupportedBunxResult(
+    context,
+    "Claude Code MCP",
+    configPath,
+    context.mcpCommand,
+  );
+  if (unsupportedBunx) return unsupportedBunx;
 
   const result = spawnSync("claude", args, { encoding: "utf8" });
   if (result.status !== 0) {
@@ -435,6 +841,35 @@ function ensureClaudeGlobalMcp(context: SetupContext): StepResult {
     status: "updated",
     path: configPath,
     detail: commandLine,
+  };
+}
+
+function claudeGlobalMcpPreservedDetail(detection: McpDetection): string {
+  if (detection.registrations.length !== 1) {
+    return "Multiple existing mcpServers.kyoso registrations were kept; their effective precedence is not inferred.";
+  }
+  const registration = detection.registrations[0];
+  if (registration?.invocation.kind !== "legacy") {
+    return "existing mcpServers.kyoso kept";
+  }
+  const scope =
+    registration.scope === "claude-global"
+      ? "user"
+      : "project-scoped user-config";
+  return `existing ${scope} mcpServers.kyoso uses legacy package-runner arguments and was kept. Automatic migration supports only a project .mcp.json; update ${registration.path} manually.`;
+}
+
+function claudeProjectMcpScopeConflictResult(
+  projectPath: string,
+  userConfig: McpDetection,
+): StepResult {
+  return {
+    kind: "mcp",
+    registration: "preserved",
+    title: "Claude Code MCP",
+    status: "skipped",
+    path: projectPath,
+    detail: `Claude user-config MCP registration${userConfig.registrations.length === 1 ? "" : "s"} at ${userConfig.paths.join(", ")} ${userConfig.registrations.length === 1 ? "was" : "were"} kept. Project setup does not infer effective precedence; update the intended scope manually.`,
   };
 }
 
@@ -472,8 +907,8 @@ function renderSetupOverview(context: SetupContext): string {
     "Kyoso setup",
     "",
     "Clients",
-    `  codex: MCP ${statusWord(detected.codex.mcp)}, skill ${statusWord(detected.codex.skill)}`,
-    `  claude-code: MCP ${statusWord(detected["claude-code"].mcp)}, skill ${statusWord(detected["claude-code"].skill)}`,
+    `  codex: MCP ${setupOverviewMcpStatus(detected.codex, context)}, skill ${statusWord(detected.codex.skill)}`,
+    `  claude-code: MCP ${setupOverviewMcpStatus(detected["claude-code"], context)}, skill ${statusWord(detected["claude-code"].skill)}`,
     "",
     "Commands",
     "  kyoso setup codex [--write] [--with-openrouter] [--runner npx|bunx] [--command <command>] [--global] [--force]",
@@ -484,6 +919,31 @@ function renderSetupOverview(context: SetupContext): string {
     `Default MCP command: ${context.mcpCommand.command} ${context.mcpCommand.args.join(" ")}`,
     "Dry-run is the default. Add --write to modify files.",
   ].join("\n");
+}
+
+function setupOverviewMcpStatus(
+  detection: SetupDetection,
+  context: SetupContext,
+): string {
+  if (detection.manualMcpStatus === "missing") return "missing";
+  if (detection.manualMcpRegistrations.length !== 1) return "unverified";
+  const registration = detection.manualMcpRegistrations[0];
+  if (!registration) return "unverified";
+  if (registration.status === "disabled") return "disabled";
+  if (registration.status !== "enabled") return "unverified";
+  const invocation = registration.invocation;
+  if (invocation.kind === "legacy") return "repair required (legacy)";
+  if (invocation.kind === "custom") return "custom/unverified";
+  if (invocation.kind !== "current") return "unverified";
+  if (invocation.runner === "npx") {
+    return commandExists("npx", context.env) ? "ok" : "npx missing";
+  }
+  if (invocation.runner === "bunx") {
+    return commandExists("bunx", context.env)
+      ? "bunx unverified"
+      : "bunx missing";
+  }
+  return "unverified";
 }
 
 function renderResults(context: SetupContext, results: StepResult[]): string {
@@ -625,12 +1085,889 @@ async function readOptionalFile(path: string): Promise<string> {
   }
 }
 
-async function readJsonObject(path: string): Promise<Record<string, unknown>> {
-  const content = await readOptionalFile(path);
+function parseJsonObject(
+  path: string,
+  content: string,
+): Record<string, unknown> {
   if (content.trim().length === 0) return {};
   const parsed: unknown = JSON.parse(content);
   if (!isRecord(parsed)) throw new Error(`${path} must contain a JSON object`);
   return parsed;
+}
+
+function inspectCodexAppendSafety(
+  content: string,
+  cwd: string,
+  home: string,
+): { ok: true } | { ok: false; detail: string } {
+  if (content.trim().length === 0) return { ok: true };
+  try {
+    const parsed = parse(content);
+    if (!isRecord(parsed)) {
+      return {
+        ok: false,
+        detail: "Codex config is not a TOML object and was left unchanged.",
+      };
+    }
+    if (hasUnprobedProjectIntegrationOverride(parsed, cwd, home)) {
+      return {
+        ok: false,
+        detail:
+          "Codex has a project-scoped MCP or Plugin override; the global config was left unchanged.",
+      };
+    }
+    if ("mcp_servers" in parsed && !isRecord(parsed.mcp_servers)) {
+      return {
+        ok: false,
+        detail: "Codex mcp_servers is malformed and was left unchanged.",
+      };
+    }
+    if (isRecord(parsed.mcp_servers) && "kyoso" in parsed.mcp_servers) {
+      return {
+        ok: false,
+        detail:
+          "Codex already defines mcp_servers.kyoso in a form setup cannot safely extend; migrate it manually.",
+      };
+    }
+    if (hasTomlMcpServersAssignment(content)) {
+      return {
+        ok: false,
+        detail:
+          "Codex defines mcp_servers with an inline assignment setup cannot safely extend; add the registration manually.",
+      };
+    }
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      detail: "Codex config could not be parsed and was left unchanged.",
+    };
+  }
+}
+
+function hasTomlMcpServersAssignment(content: string): boolean {
+  return /^[ \t]*(?:mcp_servers|"mcp_servers")[ \t]*=/m.test(content);
+}
+
+function inspectCodexMcpContent(
+  content: string,
+  path: string,
+  cwd: string,
+  home: string,
+): ManualMcpRegistration | undefined {
+  if (!hasCodexMcpContent(content)) return undefined;
+  try {
+    const parsed = parse(content);
+    if (hasUnprobedProjectIntegrationOverride(parsed, cwd, home)) {
+      return manualMcpRegistration({
+        path,
+        scope: "codex-global",
+        status: "unknown",
+        value: undefined,
+      });
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.mcp_servers)) {
+      return manualMcpRegistration({
+        path,
+        scope: "codex-global",
+        status: "unknown",
+        value: undefined,
+      });
+    }
+    if (!("kyoso" in parsed.mcp_servers)) return undefined;
+    return manualMcpRegistration({
+      path,
+      scope: "codex-global",
+      status: mcpEntryStatus(parsed.mcp_servers.kyoso),
+      value: parsed.mcp_servers.kyoso,
+    });
+  } catch {
+    return manualMcpRegistration({
+      path,
+      scope: "codex-global",
+      status: "unknown",
+      value: undefined,
+    });
+  }
+}
+
+function inspectClaudeProjectMcp(
+  current: Record<string, unknown>,
+  path: string,
+): ManualMcpRegistration | undefined {
+  if (!("mcpServers" in current)) return undefined;
+  if (!isRecord(current.mcpServers)) {
+    return manualMcpRegistration({
+      path,
+      scope: "claude-project",
+      status: "unknown",
+      value: undefined,
+    });
+  }
+  if (!("kyoso" in current.mcpServers)) return undefined;
+  return manualMcpRegistration({
+    path,
+    scope: "claude-project",
+    status: mcpEntryStatus(current.mcpServers.kyoso),
+    value: current.mcpServers.kyoso,
+  });
+}
+
+function manualMcpRegistration(options: {
+  path: string;
+  scope: ManualMcpScope;
+  status: ManualMcpStatus;
+  value: unknown;
+}): ManualMcpRegistration {
+  const { value, ...registration } = options;
+  const invocation = inspectManualMcpInvocation(value);
+  return {
+    ...registration,
+    invocation,
+    autoMigrationEligible:
+      (options.scope === "codex-global" ||
+        options.scope === "claude-project") &&
+      invocation.kind === "legacy",
+  };
+}
+
+function preservedMcpResult(
+  title: string,
+  registration: ManualMcpRegistration,
+  detail: string,
+): StepResult {
+  return {
+    kind: "mcp",
+    registration: "preserved",
+    title,
+    status: "skipped",
+    path: registration.path,
+    detail,
+  };
+}
+
+function codexPreservedDetail(registration: ManualMcpRegistration): string {
+  if (registration.status === "disabled") {
+    return disabledCodexMcpDetail(registration.path);
+  }
+  if (registration.invocation.kind === "current") {
+    return "existing [mcp_servers.kyoso] uses the current explicit package/executable invocation and was kept.";
+  }
+  if (registration.invocation.kind === "legacy") {
+    return "existing [mcp_servers.kyoso] uses a legacy invocation and was kept unchanged.";
+  }
+  return `existing [mcp_servers.kyoso] is ${formatInvocationKind(registration.invocation.kind)} and was kept unchanged. ${registration.invocation.reason}`;
+}
+
+function claudePreservedDetail(registration: ManualMcpRegistration): string {
+  if (registration.status === "disabled") {
+    return disabledClaudeMcpDetail(registration.path);
+  }
+  if (registration.invocation.kind === "current") {
+    return "existing mcpServers.kyoso uses the current explicit package/executable invocation and was kept.";
+  }
+  if (registration.invocation.kind === "legacy") {
+    return "existing mcpServers.kyoso uses a legacy invocation and was kept unchanged.";
+  }
+  return `existing mcpServers.kyoso is ${formatInvocationKind(registration.invocation.kind)} and was kept unchanged. ${registration.invocation.reason}`;
+}
+
+function formatInvocationKind(
+  kind: ManualMcpInvocationInspection["kind"],
+): string {
+  if (kind === "custom") return "custom/unverified";
+  return kind;
+}
+
+function legacyMigrationDetail(
+  path: string,
+  invocation: ManualMcpInvocationInspection,
+  replacement: McpCommand,
+): string {
+  const legacyArgs = invocation.legacyArgs;
+  if (!invocation.runner || !legacyArgs) {
+    return "legacy package-runner invocation detected; only --write --force may migrate it. The migration preview is unavailable because its exact command arguments could not be reconstructed.";
+  }
+  return [
+    "legacy package-runner invocation detected; only --write --force may migrate it.",
+    `--- ${formatMigrationPreviewValue(path)}`,
+    `+++ ${formatMigrationPreviewValue(path)}`,
+    "@@ Kyoso MCP invocation",
+    `- command = ${formatMigrationPreviewValue(invocation.runner)}`,
+    `- args = ${formatMigrationPreviewArgs(legacyArgs)}`,
+    `+ command = ${formatMigrationPreviewValue(replacement.command)}`,
+    `+ args = ${formatMigrationPreviewArgs(replacement.args)}`,
+    "Only the Kyoso command and arguments are shown; other configuration values remain unchanged.",
+  ].join("\n");
+}
+
+function patchCodexLegacyInvocation(
+  content: string,
+  replacement: McpCommand,
+): string | undefined {
+  const tableMatches = [
+    ...content.matchAll(/^\s*\[mcp_servers\.(?:"kyoso"|kyoso)]\s*$/gm),
+  ];
+  if (tableMatches.length !== 1) return undefined;
+  const table = tableMatches[0];
+  if (table?.index === undefined) return undefined;
+  const bodyStart = table.index + table[0].length;
+  const remaining = content.slice(bodyStart);
+  const nextTableOffset = remaining.search(/^\s*\[/m);
+  const bodyEnd =
+    nextTableOffset === -1 ? content.length : bodyStart + nextTableOffset;
+  const body = content.slice(bodyStart, bodyEnd);
+  const commandMatches = [
+    ...body.matchAll(
+      /^([ \t]*command[ \t]*=[ \t]*)"[^"\r\n]*"([ \t]*(?:#.*)?)(\r?\n|$)/gm,
+    ),
+  ];
+  const argsMatches = [
+    ...body.matchAll(/^([ \t]*args[ \t]*=[ \t]*)([^\r\n]*)(\r?\n|$)/gm),
+  ];
+  if (commandMatches.length !== 1 || argsMatches.length !== 1) return undefined;
+  const argsMatch = argsMatches[0];
+  const argsLine = argsMatch?.[0];
+  const argsPrefix = argsMatch?.[1];
+  const argsValue = argsMatch?.[2];
+  const argsNewline = argsMatch?.[3];
+  if (
+    argsLine === undefined ||
+    argsPrefix === undefined ||
+    argsValue === undefined ||
+    argsNewline === undefined
+  ) {
+    return undefined;
+  }
+  const patchedArgsValue = patchTomlInlineArrayValue(
+    argsValue,
+    replacement.args,
+  );
+  if (patchedArgsValue === undefined) return undefined;
+  const commandPatched = body.replace(
+    /^([ \t]*command[ \t]*=[ \t]*)"[^"\r\n]*"([ \t]*(?:#.*)?)(\r?\n|$)/m,
+    (_line, prefix: string, suffix: string, newline: string) =>
+      `${prefix}${JSON.stringify(replacement.command)}${suffix}${newline}`,
+  );
+  const nextBody = commandPatched.replace(
+    argsLine,
+    `${argsPrefix}${patchedArgsValue}${argsNewline}`,
+  );
+  return `${content.slice(0, bodyStart)}${nextBody}${content.slice(bodyEnd)}`;
+}
+
+function patchTomlInlineArrayValue(
+  value: string,
+  replacement: string[],
+): string | undefined {
+  const closingIndex = tomlInlineArrayClosingIndex(value);
+  if (closingIndex === undefined) return undefined;
+  const suffix = value.slice(closingIndex + 1);
+  if (!/^[ \t]*(?:#.*)?$/.test(suffix)) return undefined;
+  return `${JSON.stringify(replacement)}${suffix}`;
+}
+
+function tomlInlineArrayClosingIndex(value: string): number | undefined {
+  if (!value.startsWith("[")) return undefined;
+  let depth = 0;
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === undefined) return undefined;
+    if (quote) {
+      if (quote === '"' && character === "\\") {
+        index += 1;
+        continue;
+      }
+      if (character === quote) {
+        if (quote === "'" && value[index + 1] === "'") {
+          index += 1;
+          continue;
+        }
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") {
+      depth += 1;
+      continue;
+    }
+    if (character === "]") {
+      depth -= 1;
+      if (depth === 0) return index;
+      if (depth < 0) return undefined;
+    }
+  }
+  return undefined;
+}
+
+function isCurrentMcpCommand(
+  invocation: ManualMcpInvocationInspection | undefined,
+  replacement: McpCommand,
+): boolean {
+  if (
+    invocation?.kind !== "current" ||
+    invocation.runner !== replacement.command
+  ) {
+    return false;
+  }
+  const packageSpec =
+    replacement.command === "npx"
+      ? replacement.args[1]?.slice("--package=".length)
+      : replacement.args[1];
+  return invocation.packageSpec === packageSpec;
+}
+
+function migrationReplacementForContext(
+  context: SetupContext,
+  invocation: ManualMcpInvocationInspection,
+): McpCommand | undefined {
+  const replacement = invocation.replacement;
+  if (
+    !replacement ||
+    context.customCommand ||
+    !context.runnerExplicit ||
+    !isKyosoPackageRunner(context.mcpCommand.command) ||
+    context.mcpCommand.command === replacement.command
+  ) {
+    return replacement;
+  }
+  const packageSpec = invocation.packageSpec;
+  if (
+    packageSpec === undefined ||
+    (packageSpec !== KYOSO_PACKAGE_NAME &&
+      !packageSpec.startsWith(`${KYOSO_PACKAGE_NAME}@`))
+  ) {
+    return replacement;
+  }
+  const version =
+    packageSpec === KYOSO_PACKAGE_NAME
+      ? undefined
+      : packageSpec.slice(`${KYOSO_PACKAGE_NAME}@`.length);
+  return buildKyosoPackageCommand({
+    runner: context.mcpCommand.command,
+    ...(version === undefined ? {} : { version }),
+    cliArgs: ["mcp"],
+  });
+}
+
+function isKyosoPackageRunner(value: string): value is KyosoPackageRunner {
+  return value === "npx" || value === "bunx";
+}
+
+function patchClaudeProjectMcpInvocation(
+  content: string,
+  replacement: McpCommand,
+): string | undefined {
+  try {
+    JSON.parse(content);
+    const root = scanJsonValue(content, skipJsonWhitespace(content, 0));
+    if (skipJsonWhitespace(content, root.end) !== content.length)
+      return undefined;
+    const mcpServers = singleJsonObjectProperty(root, "mcpServers");
+    const kyoso = mcpServers && singleJsonObjectProperty(mcpServers, "kyoso");
+    const command = kyoso && singleJsonProperty(kyoso, "command");
+    const args = kyoso && singleJsonProperty(kyoso, "args");
+    if (!command || !args) return undefined;
+    return replaceJsonValueSpans(content, [
+      { ...command.value, replacement: JSON.stringify(replacement.command) },
+      { ...args.value, replacement: JSON.stringify(replacement.args) },
+    ]);
+  } catch {
+    return undefined;
+  }
+}
+
+type JsonValueNode = {
+  kind: "object" | "array" | "scalar";
+  start: number;
+  end: number;
+  entries?: JsonObjectEntry[];
+};
+
+type JsonObjectEntry = {
+  key: string;
+  value: JsonValueNode;
+};
+
+function scanJsonValue(content: string, start: number): JsonValueNode {
+  const index = skipJsonWhitespace(content, start);
+  const character = content[index];
+  if (character === "{") return scanJsonObject(content, index);
+  if (character === "[") return scanJsonArray(content, index);
+  if (character === '"') {
+    const end = scanJsonStringEnd(content, index);
+    return { kind: "scalar", start: index, end };
+  }
+  let end = index;
+  while (end < content.length && !/[\s,\]}]/.test(content[end] ?? "")) {
+    end += 1;
+  }
+  if (end === index) throw new Error("expected JSON value");
+  return { kind: "scalar", start: index, end };
+}
+
+function scanJsonObject(content: string, start: number): JsonValueNode {
+  let index = skipJsonWhitespace(content, start + 1);
+  const entries: JsonObjectEntry[] = [];
+  if (content[index] === "}") {
+    return { kind: "object", start, end: index + 1, entries };
+  }
+  for (;;) {
+    if (content[index] !== '"') throw new Error("expected JSON object key");
+    const keyEnd = scanJsonStringEnd(content, index);
+    const key = JSON.parse(content.slice(index, keyEnd)) as unknown;
+    if (typeof key !== "string") throw new Error("invalid JSON object key");
+    index = skipJsonWhitespace(content, keyEnd);
+    if (content[index] !== ":")
+      throw new Error("expected JSON object separator");
+    const value = scanJsonValue(content, index + 1);
+    entries.push({ key, value });
+    index = skipJsonWhitespace(content, value.end);
+    if (content[index] === "}") {
+      return { kind: "object", start, end: index + 1, entries };
+    }
+    if (content[index] !== ",")
+      throw new Error("expected JSON object delimiter");
+    index = skipJsonWhitespace(content, index + 1);
+  }
+}
+
+function scanJsonArray(content: string, start: number): JsonValueNode {
+  let index = skipJsonWhitespace(content, start + 1);
+  if (content[index] === "]") return { kind: "array", start, end: index + 1 };
+  for (;;) {
+    const value = scanJsonValue(content, index);
+    index = skipJsonWhitespace(content, value.end);
+    if (content[index] === "]") return { kind: "array", start, end: index + 1 };
+    if (content[index] !== ",")
+      throw new Error("expected JSON array delimiter");
+    index = skipJsonWhitespace(content, index + 1);
+  }
+}
+
+function scanJsonStringEnd(content: string, start: number): number {
+  let escaped = false;
+  for (let index = start + 1; index < content.length; index += 1) {
+    const character = content[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') return index + 1;
+  }
+  throw new Error("unterminated JSON string");
+}
+
+function skipJsonWhitespace(content: string, start: number): number {
+  let index = start;
+  while (index < content.length && /\s/.test(content[index] ?? "")) index += 1;
+  return index;
+}
+
+function singleJsonObjectProperty(
+  object: JsonValueNode,
+  key: string,
+): JsonValueNode | undefined {
+  const property = singleJsonProperty(object, key);
+  return property?.value.kind === "object" ? property.value : undefined;
+}
+
+function singleJsonProperty(
+  object: JsonValueNode,
+  key: string,
+): JsonObjectEntry | undefined {
+  if (object.kind !== "object") return undefined;
+  const matches = object.entries?.filter((entry) => entry.key === key) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function replaceJsonValueSpans(
+  content: string,
+  replacements: Array<JsonValueNode & { replacement: string }>,
+): string | undefined {
+  const sorted = [...replacements].sort(
+    (left, right) => right.start - left.start,
+  );
+  if (sorted[0]?.start === sorted[1]?.start) return undefined;
+  let next = content;
+  for (const replacement of sorted) {
+    next = `${next.slice(0, replacement.start)}${replacement.replacement}${next.slice(replacement.end)}`;
+  }
+  return next;
+}
+
+type MigrationFileSafety = {
+  mode: number;
+  dev: number;
+  ino: number;
+};
+
+async function inspectMigrationFile(
+  path: string,
+  options: {
+    expectedContents?: string;
+    expectedSafety?: MigrationFileSafety;
+    expectedNlink?: number;
+  } = {},
+): Promise<
+  { ok: true; safety: MigrationFileSafety } | { ok: false; detail: string }
+> {
+  try {
+    const before = await lstat(path);
+    if (
+      !isSafeMigrationFile(
+        before,
+        options.expectedSafety,
+        options.expectedNlink,
+      )
+    ) {
+      return {
+        ok: false,
+        detail:
+          "The existing config is not an unlinked regular file and was left for manual migration.",
+      };
+    }
+    if (options.expectedContents !== undefined) {
+      const contents = await readFile(path, "utf8");
+      const after = await lstat(path);
+      if (
+        !isSafeMigrationFile(
+          after,
+          options.expectedSafety,
+          options.expectedNlink,
+        ) ||
+        !sameMigrationFileIdentity(before, after) ||
+        contents !== options.expectedContents
+      ) {
+        return {
+          ok: false,
+          detail:
+            "The existing config changed after final migration validation and was left unchanged.",
+        };
+      }
+      return { ok: true, safety: migrationFileSafety(after) };
+    }
+    return { ok: true, safety: migrationFileSafety(before) };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: `The existing config could not be safely inspected: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+function isSafeMigrationFile(
+  metadata: Stats,
+  expectedSafety?: MigrationFileSafety,
+  expectedNlink = 1,
+): boolean {
+  if (
+    metadata.isSymbolicLink() ||
+    !metadata.isFile() ||
+    metadata.nlink !== expectedNlink
+  ) {
+    return false;
+  }
+  return (
+    expectedSafety === undefined ||
+    (sameMigrationFileIdentity(metadata, expectedSafety) &&
+      (metadata.mode & 0o777) === expectedSafety.mode)
+  );
+}
+
+function sameMigrationFileIdentity(
+  metadata: { dev: number | bigint; ino: number | bigint },
+  expected: { dev: number | bigint; ino: number | bigint },
+): boolean {
+  return metadata.dev === expected.dev && metadata.ino === expected.ino;
+}
+
+function migrationFileSafety(metadata: Stats): MigrationFileSafety {
+  return {
+    mode: metadata.mode & 0o777,
+    dev: metadata.dev,
+    ino: metadata.ino,
+  };
+}
+
+class MigrationConflictError extends Error {}
+
+class MigrationCommittedError extends Error {}
+
+function migrationConflictResult(
+  title: "Codex MCP" | "Claude Code MCP",
+  path: string,
+  detail: string,
+): StepResult {
+  return {
+    kind: "mcp",
+    registration: "preserved",
+    title,
+    status: "conflict",
+    path,
+    detail,
+  };
+}
+
+async function writeFileAtomically(
+  path: string,
+  contents: string,
+  expectedSafety: MigrationFileSafety,
+  expectedContents: string,
+  options: {
+    beforeCommit?: (path: string) => void | Promise<void>;
+    afterExpectedContentsCheck?: (path: string) => void | Promise<void>;
+    beforeRename?: (path: string) => void | Promise<void>;
+    replace?: (source: string, destination: string) => Promise<void>;
+  },
+): Promise<void> {
+  const directory = dirname(path);
+  const temporaryPath = join(
+    directory,
+    `.${basename(path)}.kyoso-${process.pid}-${randomUUID()}.tmp`,
+  );
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let replacementCommitted = false;
+  try {
+    handle = await open(temporaryPath, "wx", expectedSafety.mode);
+    await handle.writeFile(contents, "utf8");
+    await chmod(temporaryPath, expectedSafety.mode);
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await options.beforeCommit?.(path);
+    await options.afterExpectedContentsCheck?.(path);
+    await options.beforeRename?.(path);
+    const beforeRename = await inspectMigrationFile(path, {
+      expectedContents,
+      expectedSafety,
+    });
+    if (!beforeRename.ok) {
+      throw new MigrationConflictError(beforeRename.detail);
+    }
+    try {
+      await (options.replace ?? rename)(temporaryPath, path);
+      replacementCommitted = true;
+    } catch (error) {
+      const installed = await inspectMigrationFile(path, {
+        expectedContents: contents,
+      });
+      if (installed.ok && installed.safety.mode === expectedSafety.mode) {
+        throw new MigrationCommittedError(
+          "manual MCP migration may have been committed before replacement reported an error",
+        );
+      }
+      throw error;
+    }
+    await syncDirectory(directory);
+    const installed = await inspectMigrationFile(path, {
+      expectedContents: contents,
+    });
+    if (!installed.ok || installed.safety.mode !== expectedSafety.mode) {
+      throw new MigrationCommittedError(
+        "the replacement config could not be verified after installation",
+      );
+    }
+  } catch (error) {
+    if (
+      error instanceof MigrationConflictError ||
+      error instanceof MigrationCommittedError
+    ) {
+      throw error;
+    }
+    if (replacementCommitted) {
+      throw new MigrationCommittedError(
+        `manual MCP migration may have been committed but could not be verified: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    throw new MigrationConflictError(
+      `manual MCP migration failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    await handle.sync();
+  } catch (error) {
+    if (isUnsupportedDirectorySyncError(error)) return;
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function isUnsupportedDirectorySyncError(error: unknown): boolean {
+  const code = errorCode(error);
+  return (
+    code === "EINVAL" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    (process.platform === "win32" && code === "EPERM")
+  );
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function unsupportedBunxResult(
+  context: SetupContext,
+  title: "Codex MCP" | "Claude Code MCP",
+  path: string,
+  command: McpCommand,
+  options: { migration?: boolean } = {},
+): StepResult | undefined {
+  if (
+    !context.write ||
+    (options.migration && !context.force) ||
+    context.customCommand ||
+    command.command !== "bunx"
+  ) {
+    return undefined;
+  }
+  const probe =
+    context.bunxProbe ??
+    (context.bunxProbe = context.bunxVersionProbe({
+      cwd: context.cwd,
+      env: context.env,
+    }));
+  if (probe.status === "verified") return undefined;
+  const fallback = formatBunxFallbackCommand(context, title, options);
+  return {
+    kind: "mcp",
+    registration: "blocked",
+    title,
+    status: "skipped",
+    path,
+    detail: `bunx was not verified for explicit package selection (${probe.detail}). No MCP config was written. Use ${fallback}, or install Bun 1.3.14 or newer and retry --runner bunx.`,
+  };
+}
+
+function formatBunxFallbackCommand(
+  context: SetupContext,
+  title: "Codex MCP" | "Claude Code MCP",
+  options: { migration?: boolean },
+): string {
+  const cliArgs = [
+    "setup",
+    title === "Codex MCP" ? "codex" : "claude-code",
+    "--write",
+    "--runner",
+    "npx",
+  ];
+  if (context.scope === "global") cliArgs.push("--global");
+  if (context.withOpenRouter) cliArgs.push("--with-openrouter");
+  if (options.migration) cliArgs.push("--force");
+  return formatKyosoPackageCommand({ runner: "npx", cliArgs });
+}
+
+function bunxVerificationPendingDetail(
+  context: SetupContext,
+  command: McpCommand,
+): string {
+  if (context.customCommand || command.command !== "bunx") return "";
+  return "\nBun 1.3.14 or newer will be verified before any MCP config is written.";
+}
+
+function formatMigrationPreviewValue(value: string): string {
+  return JSON.stringify(sanitizeTextForDisplay(value));
+}
+
+function formatMigrationPreviewArgs(args: readonly string[]): string {
+  return `[${args.map(formatMigrationPreviewValue).join(", ")}]`;
+}
+
+export function probeBunxVersion(options: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): BunxVersionProbeResult {
+  const probeDirectory = mkdtempSync(join(tmpdir(), "kyoso-bunx-probe-"));
+  try {
+    const result = spawnSync("bunx", ["--version"], {
+      cwd: probeDirectory,
+      env: sanitizedBunxProbeEnv(options.env, probeDirectory),
+      encoding: "utf8",
+      timeout: 2_000,
+      shell: false,
+    });
+    const errorCode =
+      result.error && "code" in result.error
+        ? (result.error as { code?: unknown }).code
+        : undefined;
+    if (errorCode === "ENOENT") {
+      return { status: "missing", detail: "bunx was not found on PATH" };
+    }
+    if (errorCode === "ETIMEDOUT" || result.signal) {
+      return { status: "timeout", detail: "bunx --version timed out" };
+    }
+    if (result.status !== 0) {
+      return {
+        status: "failed",
+        detail: `bunx --version exited ${result.status ?? "without a status"}`,
+      };
+    }
+    const version = result.stdout.trim();
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+      return {
+        status: "invalid",
+        detail: "bunx --version did not return a stable SemVer",
+      };
+    }
+    if (!isCompleteSemVer(version) || !isMinimumBunVersion(version, "1.3.14")) {
+      return {
+        status: "unsupported",
+        detail: `bunx ${version} is older than the verified minimum 1.3.14`,
+      };
+    }
+    return { status: "verified", version };
+  } finally {
+    rmSync(probeDirectory, { force: true, recursive: true });
+  }
+}
+
+function sanitizedBunxProbeEnv(
+  env: NodeJS.ProcessEnv,
+  temporaryDirectory: string,
+): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {
+    PATH: env.PATH ?? "",
+    HOME: env.HOME ?? "",
+    TMPDIR: temporaryDirectory,
+  };
+  for (const key of ["SystemRoot", "ComSpec", "PATHEXT", "WINDIR"] as const) {
+    if (env[key]) result[key] = env[key];
+  }
+  return result;
+}
+
+function isMinimumBunVersion(version: string, minimum: string): boolean {
+  const actualParts = version.split(".").map(Number);
+  const minimumParts = minimum.split(".").map(Number);
+  for (let index = 0; index < minimumParts.length; index += 1) {
+    const actual = actualParts[index] ?? 0;
+    const required = minimumParts[index] ?? 0;
+    if (actual > required) return true;
+    if (actual < required) return false;
+  }
+  return true;
 }
 
 function hasCodexMcpContent(content: string): boolean {
@@ -666,27 +2003,65 @@ function disabledClaudeMcpDetail(configPath: string): string {
 type McpDetection = {
   status: ManualMcpStatus;
   paths: string[];
+  registrations: ManualMcpRegistration[];
 };
 
 function detectCodexMcp(path: string, cwd: string, home: string): McpDetection {
-  if (!existsSync(path)) return { status: "missing", paths: [] };
+  if (!existsSync(path)) return missingMcpDetection();
 
   try {
     const parsed = parse(readTextSync(path));
     if (hasUnprobedProjectIntegrationOverride(parsed, cwd, home)) {
-      return { status: "unknown", paths: [path] };
+      return singleMcpDetection(
+        manualMcpRegistration({
+          path,
+          scope: "codex-global",
+          status: "unknown",
+          value: undefined,
+        }),
+      );
     }
-    if (!isRecord(parsed)) return { status: "unknown", paths: [path] };
-    if (!("mcp_servers" in parsed)) return { status: "missing", paths: [] };
+    if (!isRecord(parsed)) {
+      return singleMcpDetection(
+        manualMcpRegistration({
+          path,
+          scope: "codex-global",
+          status: "unknown",
+          value: undefined,
+        }),
+      );
+    }
+    if (!("mcp_servers" in parsed)) return missingMcpDetection();
     if (!isRecord(parsed.mcp_servers)) {
-      return { status: "unknown", paths: [path] };
+      return singleMcpDetection(
+        manualMcpRegistration({
+          path,
+          scope: "codex-global",
+          status: "unknown",
+          value: undefined,
+        }),
+      );
     }
     if (!("kyoso" in parsed.mcp_servers)) {
-      return { status: "missing", paths: [] };
+      return missingMcpDetection();
     }
-    return { status: mcpEntryStatus(parsed.mcp_servers.kyoso), paths: [path] };
+    return singleMcpDetection(
+      manualMcpRegistration({
+        path,
+        scope: "codex-global",
+        status: mcpEntryStatus(parsed.mcp_servers.kyoso),
+        value: parsed.mcp_servers.kyoso,
+      }),
+    );
   } catch {
-    return { status: "unknown", paths: [path] };
+    return singleMcpDetection(
+      manualMcpRegistration({
+        path,
+        scope: "codex-global",
+        status: "unknown",
+        value: undefined,
+      }),
+    );
   }
 }
 
@@ -695,51 +2070,114 @@ function detectClaudeMcp(
   cwd: string,
   home: string,
 ): McpDetection {
-  if (!existsSync(path)) return { status: "missing", paths: [] };
+  if (!existsSync(path)) return missingMcpDetection();
 
   try {
     const parsed: unknown = JSON.parse(readTextSync(path));
-    const statuses = jsonMcpStatuses(parsed, cwd, home);
-    if (statuses.length === 0) return { status: "missing", paths: [] };
-    return { status: mergeMcpStatuses(statuses), paths: [path] };
+    const registrations = jsonMcpRegistrations(parsed, path, cwd, home);
+    return registrations.length === 0
+      ? missingMcpDetection()
+      : mergeMcpDetections([
+          {
+            status: mergeMcpStatuses(
+              registrations.map((entry) => entry.status),
+            ),
+            paths: [path],
+            registrations,
+          },
+        ]);
   } catch {
-    return { status: "unknown", paths: [path] };
+    return singleMcpDetection(
+      manualMcpRegistration({
+        path,
+        scope: path.endsWith(".mcp.json") ? "claude-project" : "claude-global",
+        status: "unknown",
+        value: undefined,
+      }),
+    );
   }
 }
 
-function jsonMcpStatuses(
+function jsonMcpRegistrations(
   value: unknown,
+  path: string,
   cwd: string,
   home: string,
-): ManualMcpStatus[] {
-  if (!isRecord(value)) return ["unknown"];
+): ManualMcpRegistration[] {
+  const directScope: ManualMcpScope = path.endsWith(".mcp.json")
+    ? "claude-project"
+    : "claude-global";
+  if (!isRecord(value)) {
+    return [
+      manualMcpRegistration({
+        path,
+        scope: directScope,
+        status: "unknown",
+        value: undefined,
+      }),
+    ];
+  }
 
-  const statuses = directMcpStatuses(value);
-  if (!("projects" in value)) return statuses;
-  if (!isRecord(value.projects)) return [...statuses, "unknown"];
+  const registrations = directMcpRegistrations(value, path, directScope);
+  if (!("projects" in value)) return registrations;
+  if (!isRecord(value.projects)) {
+    return [
+      ...registrations,
+      manualMcpRegistration({
+        path,
+        scope: "claude-global-project",
+        status: "unknown",
+        value: undefined,
+      }),
+    ];
+  }
 
   const currentProject = normalizeProjectPath(cwd, home);
   for (const [projectPath, projectConfig] of Object.entries(value.projects)) {
     if (normalizeProjectPath(projectPath, home) !== currentProject) continue;
     if (!isRecord(projectConfig)) {
-      statuses.push("unknown");
+      registrations.push(
+        manualMcpRegistration({
+          path,
+          scope: "claude-global-project",
+          status: "unknown",
+          value: undefined,
+        }),
+      );
       continue;
     }
-    statuses.push(...directMcpStatuses(projectConfig));
+    registrations.push(
+      ...directMcpRegistrations(projectConfig, path, "claude-global-project"),
+    );
   }
-  return statuses;
+  return registrations;
 }
 
-function directMcpStatuses(value: Record<string, unknown>): ManualMcpStatus[] {
-  const statuses: ManualMcpStatus[] = [];
-  if ("mcpServers" in value) {
-    if (!isRecord(value.mcpServers)) {
-      statuses.push("unknown");
-    } else if ("kyoso" in value.mcpServers) {
-      statuses.push(mcpEntryStatus(value.mcpServers.kyoso));
-    }
+function directMcpRegistrations(
+  value: Record<string, unknown>,
+  path: string,
+  scope: ManualMcpScope,
+): ManualMcpRegistration[] {
+  if (!("mcpServers" in value)) return [];
+  if (!isRecord(value.mcpServers)) {
+    return [
+      manualMcpRegistration({
+        path,
+        scope,
+        status: "unknown",
+        value: undefined,
+      }),
+    ];
   }
-  return statuses;
+  if (!("kyoso" in value.mcpServers)) return [];
+  return [
+    manualMcpRegistration({
+      path,
+      scope,
+      status: mcpEntryStatus(value.mcpServers.kyoso),
+      value: value.mcpServers.kyoso,
+    }),
+  ];
 }
 
 function nestedMcpEntryStatus(value: unknown, path: string[]): ManualMcpStatus {
@@ -800,10 +2238,38 @@ function mcpEntryStatus(value: unknown): ManualMcpStatus {
 }
 
 function mergeMcpDetections(detections: McpDetection[]): McpDetection {
+  const registrations = detections.flatMap(
+    (detection) => detection.registrations,
+  );
+  if (registrations.length === 0) return missingMcpDetection();
   return {
-    status: mergeMcpStatuses(detections.map((detection) => detection.status)),
-    paths: detections.flatMap((detection) => detection.paths),
+    status:
+      registrations.length === 1
+        ? (registrations[0]?.status ?? "unknown")
+        : "unknown",
+    paths: [...new Set(registrations.map((registration) => registration.path))],
+    registrations,
   };
+}
+
+function missingMcpDetection(): McpDetection {
+  return { status: "missing", paths: [], registrations: [] };
+}
+
+function singleMcpDetection(registration: ManualMcpRegistration): McpDetection {
+  return {
+    status: registration.status,
+    paths: [registration.path],
+    registrations: [registration],
+  };
+}
+
+function isCurrentManualMcp(detection: McpDetection): boolean {
+  return (
+    detection.status === "enabled" &&
+    detection.registrations.length === 1 &&
+    detection.registrations[0]?.invocation.kind === "current"
+  );
 }
 
 function mergeMcpStatuses(statuses: ManualMcpStatus[]): ManualMcpStatus {

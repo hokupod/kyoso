@@ -32,9 +32,11 @@ import {
   detectCli,
   determineNonPluginIntegration,
   formatCliAvailability,
+  formatRunnerAvailability,
   type CliDetection,
   type IntegrationMode,
 } from "./integration.js";
+import { formatKyosoPackageCommand } from "./packageRunner.js";
 import {
   detectCodexPluginMcpOverride,
   detectSetup,
@@ -152,10 +154,10 @@ export async function runDoctor(options: {
 
   lines.push("", "MCP", "  stdio server: ok");
   lines.push(
-    `  Codex registration: ${formatManualMcpStatus(setup.codex.manualMcpStatus)}`,
+    `  Codex registration: ${formatManualMcpStatus(setup.codex, cli)}`,
   );
   lines.push(
-    `  Claude Code registration: ${formatManualMcpStatus(setup["claude-code"].manualMcpStatus)}`,
+    `  Claude Code registration: ${formatManualMcpStatus(setup["claude-code"], cli)}`,
   );
 
   lines.push("", "Skills");
@@ -562,6 +564,8 @@ function determineCodexIntegration(options: {
     options.setup,
     options.cli,
   );
+  const hasReadyManualMcp =
+    fallback.mode === "manual-mcp" || fallback.mode === "mcp-only";
   const plugin = options.pluginInspector({
     cwd: options.cwd,
     env: options.env,
@@ -617,10 +621,22 @@ function determineCodexIntegration(options: {
       "unknown",
     );
   }
-  if (
-    options.setup.manualMcpStatus === "enabled" &&
-    override.status !== "disabled"
-  ) {
+  if (options.setup.manualMcpStatus === "enabled" && !hasReadyManualMcp) {
+    return withPluginDetails(
+      withIntegrationWarnings(
+        fallback,
+        [
+          ...pluginWarnings,
+          "Plugin MCP origin is unknown because an enabled manual MCP registration is legacy, custom, unverified, or its runner is unavailable.",
+        ],
+        "unknown",
+        "unknown",
+      ),
+      "installed, enabled",
+      "unknown",
+    );
+  }
+  if (hasReadyManualMcp && override.status !== "disabled") {
     return withPluginDetails(
       withIntegrationWarnings(
         {
@@ -655,10 +671,7 @@ function determineCodexIntegration(options: {
       "unknown",
     );
   }
-  if (
-    override.status === "disabled" &&
-    options.setup.manualMcpStatus === "enabled"
-  ) {
+  if (override.status === "disabled" && hasReadyManualMcp) {
     return withPluginDetails(
       withIntegrationWarnings(
         {
@@ -812,6 +825,7 @@ function determineClientIntegration(
 ): DoctorIntegration {
   const integration = determineNonPluginIntegration({
     manualMcpStatus: setup.manualMcpStatus,
+    manualMcpRegistrations: setup.manualMcpRegistrations,
     hasSkill: setup.skill,
     cli,
   });
@@ -863,7 +877,7 @@ function appendIntegration(
 ): void {
   lines.push(`  ${integration.client} integration: ${integration.mode}`);
   lines.push(
-    `    manual MCP: ${formatManualMcpStatus(integration.setup.manualMcpStatus)}`,
+    `    manual MCP: ${formatManualMcpStatus(integration.setup, integration.cli)}`,
   );
   if (integration.setup.mcpPaths.length > 0) {
     lines.push(
@@ -877,8 +891,8 @@ function appendIntegration(
     );
   }
   lines.push(`    CLI: ${formatCliAvailability(integration.cli.kyoso)}`);
-  lines.push(`    npx: ${integration.cli.npx ? "available" : "missing"}`);
-  lines.push(`    bunx: ${integration.cli.bunx ? "available" : "missing"}`);
+  lines.push(`    npx: ${formatRunnerAvailability(integration.cli.npx)}`);
+  lines.push(`    bunx: ${formatRunnerAvailability(integration.cli.bunx)}`);
   if (integration.plugin) lines.push(`    Plugin: ${integration.plugin}`);
   if (integration.pluginMcp) {
     lines.push(`    Plugin MCP: ${integration.pluginMcp}`);
@@ -889,9 +903,25 @@ function appendIntegration(
   lines.push(`    ${integration.advice}`);
 }
 
-function formatManualMcpStatus(status: ManualMcpStatus): string {
-  if (status === "enabled") return "ok";
-  return status;
+function formatManualMcpStatus(
+  setup: SetupDetection,
+  cli: CliDetection,
+): string {
+  if (setup.manualMcpStatus !== "enabled") return setup.manualMcpStatus;
+  if (setup.manualMcpRegistrations.length !== 1) return "unknown";
+  const invocation = setup.manualMcpRegistrations[0]?.invocation;
+  if (invocation?.kind === "current") {
+    if (invocation.runner === "npx") {
+      return cli.npx === "available" ? "ok" : "npx missing";
+    }
+    if (invocation.runner === "bunx") {
+      return cli.bunx === "missing" ? "bunx missing" : "bunx unverified";
+    }
+    return "unknown";
+  }
+  if (invocation?.kind === "legacy") return "repair required (legacy)";
+  if (invocation?.kind === "custom") return "custom/unverified";
+  return "unknown";
 }
 
 function integrationAdvice(
@@ -911,7 +941,10 @@ function integrationAdvice(
     return "status: runnable on demand; package-runner fallback may need network access.";
   }
   if (mode === "mcp-only") {
-    return `next: run \`npx @kyo-so/cli setup ${client} --write --skill-only\``;
+    return `next: run \`${formatKyosoPackageCommand({
+      runner: "npx",
+      cliArgs: ["setup", client, "--write", "--skill-only"],
+    })}\``;
   }
   if (mode === "cli-only") {
     return `next: run \`kyoso setup ${client} --write --skill-only\``;

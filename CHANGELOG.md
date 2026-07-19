@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-19
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.2` and make its Codex and Claude Code

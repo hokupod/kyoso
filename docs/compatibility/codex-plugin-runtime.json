@@ -3,9 +3,9 @@
   "minimumSupportedCodexVersion": "0.144.0-alpha.4",
   "expectedContract": {
     "distribution": {
-      "pluginVersion": "0.7.2",
+      "pluginVersion": "0.7.3",
       "mcpCommand": "npx",
-      "mcpPackagePin": "@kyo-so/cli@0.13.1",
+      "mcpPackagePin": "@kyo-so/cli@0.14.0",
       "mcpExecutable": "kyoso"
     },
     "marketplace": {
@@ -124,7 +124,7 @@
   "probes": [
     {
       "codexVersion": "0.144.0-alpha.4",
-      "verifiedAt": "2026-07-18",
+      "verifiedAt": "2026-07-19",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",
@@ -134,7 +134,7 @@
     },
     {
       "codexVersion": "0.144.1",
-      "verifiedAt": "2026-07-18",
+      "verifiedAt": "2026-07-19",
       "os": {
         "platform": "darwin",
         "release": "25.5.0",

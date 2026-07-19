@@ -321,7 +321,7 @@ export async function runMcpPackageRunnerSmoke(options) {
       sourceEnv.CI === "true" &&
       (options.runner === "npx" || options.runner === "bunx")
     ) {
-      assertRunnerUsesSafeChainShim({
+      target.command = assertRunnerUsesSafeChainShim({
         command: target.command,
         env,
         platform,
@@ -458,16 +458,18 @@ export function assertRunnerUsesSafeChainShim({
     dependencies.getSafeChainInstallDir ?? defaultSafeChainInstallDir;
   const lstatPath = dependencies.lstatPath ?? lstatSync;
   const realpathPath = dependencies.realpathPath ?? realpathSync;
-  const runnerPath = resolveExecutable(command, env.PATH, platform, env);
-  if (!runnerPath) {
-    throw new Error(`safe-chain CI check could not resolve ${command}`);
-  }
   const installDir = getSafeChainInstallDir(env);
   const shimDirectory = resolve(installDir, "shims");
   const shimStats = lstatPath(shimDirectory);
   if (!shimStats.isDirectory() || shimStats.isSymbolicLink()) {
     throw new Error(
       `safe-chain CI check requires a non-symlink shims directory: ${shimDirectory}`,
+    );
+  }
+  const runnerPath = resolveExecutable(command, shimDirectory, platform, env);
+  if (!runnerPath) {
+    throw new Error(
+      `safe-chain CI check could not resolve ${command} under ${shimDirectory}`,
     );
   }
   const runnerStats = lstatPath(runnerPath);
@@ -489,6 +491,7 @@ export function assertRunnerUsesSafeChainShim({
       `safe-chain CI check requires ${command} under ${resolvedShimDirectory}; resolved ${resolvedRunner}`,
     );
   }
+  return resolvedRunner;
 }
 
 function defaultResolveExecutable(command, pathValue, platform, env) {

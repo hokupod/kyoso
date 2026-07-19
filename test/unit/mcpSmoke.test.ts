@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -431,26 +437,44 @@ describe("MCP smoke harness", () => {
       const home = join(root, "home");
       const bin = join(root, "bin");
       const shims = join(home, ".safe-chain", "shims");
+      const server = join(root, "fake-mcp-server.mjs");
       mkdirSync(bin, { recursive: true });
       mkdirSync(shims, { recursive: true });
       const safeChain = join(bin, "safe-chain");
+      const ambientNpx = join(bin, "npx");
       const npx = join(shims, "npx");
       writeFileSync(
         safeChain,
         '#!/bin/sh\necho "Install directory is only available for packaged safe-chain binaries." >&2\nexit 1\n',
         "utf8",
       );
-      writeFileSync(npx, "#!/bin/sh\nexit 0\n", "utf8");
+      writeFileSync(ambientNpx, "#!/bin/sh\nexit 66\n", "utf8");
+      writeFileSync(server, fakeMcpServerProgram(), "utf8");
+      writeFileSync(
+        npx,
+        `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(server)}\n`,
+        "utf8",
+      );
       chmodSync(safeChain, 0o755);
+      chmodSync(ambientNpx, 0o755);
       chmodSync(npx, 0o755);
       const env = {
-        PATH: `${shims}${delimiter}${bin}`,
+        PATH: `${bin}${delimiter}${sourceEnv.PATH}`,
         HOME: home,
+        CI: "true",
       };
 
-      expect(() =>
-        assertRunnerUsesSafeChainShim({ command: "npx", env }),
-      ).not.toThrow();
+      expect(assertRunnerUsesSafeChainShim({ command: "npx", env })).toBe(
+        realpathSync(npx),
+      );
+      const result = await runMcpPackageRunnerSmoke({
+        runner: "npx",
+        command: "npx",
+        args: ["--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+        expectedVersion: version,
+        sourceEnv: env,
+      });
+      expect(result).toMatchObject({ serverInfo: { name: "kyoso", version } });
 
       writeFileSync(
         safeChain,

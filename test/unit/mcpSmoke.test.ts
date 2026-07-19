@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 // @ts-expect-error The smoke harness is intentionally shipped as a standalone Node.js script.
 import * as mcpSmoke from "../../scripts/mcp-smoke.mjs";
 
@@ -420,6 +420,46 @@ describe("MCP smoke harness", () => {
           },
         }),
       ).toThrow("requires a non-symlink runner");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("accepts npm-installed safe-chain setup-ci shims under HOME", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kyoso-safe-chain-npm-"));
+    try {
+      const home = join(root, "home");
+      const bin = join(root, "bin");
+      const shims = join(home, ".safe-chain", "shims");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(shims, { recursive: true });
+      const safeChain = join(bin, "safe-chain");
+      const npx = join(shims, "npx");
+      writeFileSync(
+        safeChain,
+        '#!/bin/sh\necho "Install directory is only available for packaged safe-chain binaries." >&2\nexit 1\n',
+        "utf8",
+      );
+      writeFileSync(npx, "#!/bin/sh\nexit 0\n", "utf8");
+      chmodSync(safeChain, 0o755);
+      chmodSync(npx, 0o755);
+      const env = {
+        PATH: `${shims}${delimiter}${bin}`,
+        HOME: home,
+      };
+
+      expect(() =>
+        assertRunnerUsesSafeChainShim({ command: "npx", env }),
+      ).not.toThrow();
+
+      writeFileSync(
+        safeChain,
+        '#!/bin/sh\necho "unexpected install-dir failure" >&2\nexit 1\n',
+        "utf8",
+      );
+      expect(() =>
+        assertRunnerUsesSafeChainShim({ command: "npx", env }),
+      ).toThrow("unexpected install-dir failure");
     } finally {
       await rm(root, { force: true, recursive: true });
     }

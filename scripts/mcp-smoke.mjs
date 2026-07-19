@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, relative, resolve, sep } from "node:path";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const KYOSO_PATH_SENTINEL_EXIT_CODE = 97;
 export const MCP_SMOKE_EXPECTED_TOOLS = [
@@ -523,16 +523,25 @@ function defaultSafeChainInstallDir(env) {
     env,
     timeout: 10_000,
   });
-  if (
-    result.error ||
-    result.status !== 0 ||
-    result.stdout.trim().length === 0
-  ) {
-    throw new Error(
-      `safe-chain CI check could not resolve its install directory: ${(result.error?.message ?? result.stderr ?? "unknown error").trim()}`,
-    );
+  if (!result.error && result.status === 0 && result.stdout.trim().length > 0) {
+    return result.stdout.trim();
   }
-  return result.stdout.trim();
+
+  const home = env.HOME;
+  if (
+    !result.error &&
+    result.status === 1 &&
+    result.stderr.trim() ===
+      "Install directory is only available for packaged safe-chain binaries." &&
+    typeof home === "string" &&
+    isAbsolute(home)
+  ) {
+    return join(home, ".safe-chain");
+  }
+
+  throw new Error(
+    `safe-chain CI check could not resolve its install directory: ${(result.error?.message ?? result.stderr ?? "unknown error").trim()}`,
+  );
 }
 
 function runBoundedProcess(options) {

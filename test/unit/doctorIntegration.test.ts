@@ -789,7 +789,7 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
     expect(output).toContain("Codex registration: repair required (legacy)");
     expect(output).toContain("Codex integration: unknown");
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup codex --write --force",
+      "npx -y --package=@kyo-so/cli kyoso setup codex --write --runner npx --force",
     );
     expect(output).not.toContain("Codex integration: manual-mcp");
   });
@@ -814,7 +814,29 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
       "Claude Code registration: repair required (legacy)",
     );
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup claude-code --write --force",
+      "npx -y --package=@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
+    );
+  });
+
+  test("prints an executable npx repair command for a legacy bunx MCP", async () => {
+    const context = await doctorFixture();
+    await createExecutable(join(context.bin, "npx"));
+    await createExecutable(join(context.bin, "bunx"));
+    await writeFile(
+      join(context.cwd, ".mcp.json"),
+      '{"mcpServers":{"kyoso":{"command":"bunx","args":["@kyo-so/cli","mcp"]}}}\n',
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      ignoreConfig: true,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain(
+      "npx -y --package=@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
     );
   });
 
@@ -909,6 +931,7 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
       "utf8",
     );
     await createSkill(context, "codex");
+    await createExecutable(join(context.bin, "npx"));
     await writeFile(
       bunxPath,
       `#!/bin/sh\ntouch ${JSON.stringify(invocationPath)}\nexit 0\n`,
@@ -928,6 +951,9 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
     expect(output).toContain("bunx: present-unverified");
     expect(output).toContain(
       "normal doctor does not verify the required Bun capability",
+    );
+    expect(output).toContain(
+      "npx -y --package=@kyo-so/cli kyoso setup codex --write --runner bunx",
     );
     expect(existsSync(invocationPath)).toBe(false);
   });

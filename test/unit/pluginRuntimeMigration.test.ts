@@ -164,6 +164,27 @@ describe("plugin runtime contract migration", () => {
     expect(await readFile(recordPath, "utf8")).toBe(concurrent);
     expect(await migrationTemps(recordPath)).toEqual([]);
   });
+
+  test("leaves the record unchanged when directory sync fails before commit", async () => {
+    const recordPath = await writeSourceRecord();
+    const before = await readFile(recordPath, "utf8");
+
+    await expect(
+      migratePluginRuntimeContract(
+        { recordPath, write: true },
+        {
+          readBundledContract: () => bundledContract,
+          runProbe: recordSuccessfulProbe,
+          syncDirectory: async () => {
+            throw new Error("directory sync failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("directory sync failed");
+
+    expect(await readFile(recordPath, "utf8")).toBe(before);
+    expect(await migrationTemps(recordPath)).toEqual([]);
+  });
 });
 
 type ProbeOptions = { version: string; recordPath: string };

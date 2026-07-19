@@ -502,6 +502,65 @@ describe("setup", () => {
     expect(await readFile(configPath, "utf8")).toBe(legacy);
   });
 
+  test("verifies an existing current bunx registration only for an explicit write", async () => {
+    const { cwd, home } = await setupTempDirs(
+      "kyoso-setup-current-bunx-verify-",
+    );
+    const configPath = join(cwd, ".mcp.json");
+    const current =
+      '{"mcpServers":{"kyoso":{"command":"bunx","args":["--package","@kyo-so/cli","kyoso","mcp"]}}}\n';
+    await writeFile(configPath, current, "utf8");
+    let probeCalls = 0;
+
+    const dryRun = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: false,
+      global: false,
+      runner: "bunx",
+      env: { HOME: home },
+      bunxVersionProbe: () => {
+        probeCalls += 1;
+        return verifiedBunxVersion();
+      },
+    });
+    const verified = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: true,
+      global: false,
+      runner: "bunx",
+      env: { HOME: home },
+      bunxVersionProbe: () => {
+        probeCalls += 1;
+        return verifiedBunxVersion();
+      },
+    });
+    const blocked = await runSetup({
+      cwd,
+      client: "claude-code",
+      write: true,
+      global: false,
+      runner: "bunx",
+      env: { HOME: home },
+      bunxVersionProbe: () => {
+        probeCalls += 1;
+        return {
+          status: "unsupported",
+          detail: "bunx 1.2.15 is older than the verified minimum 1.3.14",
+        };
+      },
+    });
+
+    expect(dryRun).toContain("Claude Code MCP: skipped");
+    expect(verified).toContain("bunx 1.3.14 was verified");
+    expect(verified).toContain("no MCP config bytes changed");
+    expect(blocked).toContain("existing current bunx registration was kept");
+    expect(blocked).toContain("bunx 1.2.15 is older");
+    expect(probeCalls).toBe(2);
+    expect(await readFile(configPath, "utf8")).toBe(current);
+  });
+
   test("losslessly patches only the legacy Claude MCP command and args", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-lossless-json-");
     const configPath = join(cwd, ".mcp.json");
@@ -762,16 +821,14 @@ describe("setup", () => {
     );
   });
 
-  test("migrates a quoted Codex MCP table", async () => {
+  test("preserves a quoted Codex MCP table for manual migration", async () => {
     const { cwd, home } = await setupTempDirs("kyoso-setup-quoted-codex-");
     const codexHome = join(cwd, "codex-state");
     const configPath = join(codexHome, "config.toml");
     await mkdir(codexHome, { recursive: true });
-    await writeFile(
-      configPath,
-      '[mcp_servers."kyoso"]\ncommand = "npx"\nargs = ["@kyo-so/cli", "mcp"]\n',
-      "utf8",
-    );
+    const quoted =
+      '[mcp_servers."kyoso"]\ncommand = "npx"\nargs = ["@kyo-so/cli", "mcp"]\n';
+    await writeFile(configPath, quoted, "utf8");
 
     const output = await runSetup({
       cwd,
@@ -782,10 +839,9 @@ describe("setup", () => {
       env: { HOME: home, CODEX_HOME: codexHome },
     });
 
-    expect(output).toContain("Codex MCP: updated");
-    expect(await readFile(configPath, "utf8")).toContain(
-      'args = ["-y","--package=@kyo-so/cli","kyoso","mcp"]',
-    );
+    expect(output).toContain("Codex MCP: skipped");
+    expect(output).toContain("migrate it manually");
+    expect(await readFile(configPath, "utf8")).toBe(quoted);
   });
 
   test("preserves bracketed trailing comments while migrating Codex args", async () => {

@@ -24,6 +24,7 @@ export async function migratePluginRuntimeContract(
     dependencies.readBundledContract?.(root) ??
     readBundledPluginRuntimeContract(root);
   const runProbe = dependencies.runProbe ?? runPluginRuntimeProbe;
+  const syncRecordDirectory = dependencies.syncDirectory ?? syncDirectory;
   const originalBytes = await readFile(recordPath);
   const originalHash = sha256(originalBytes);
   const original = parseRecord(originalBytes, recordPath);
@@ -100,9 +101,9 @@ export async function migratePluginRuntimeContract(
       );
     }
     await flushPath(candidatePath);
+    await syncRecordDirectory(dirname(recordPath));
     await rename(candidatePath, recordPath);
     committed = true;
-    await syncDirectory(dirname(recordPath));
 
     return {
       action: "updated",
@@ -255,12 +256,26 @@ async function flushPath(path) {
 }
 
 async function syncDirectory(path) {
-  const handle = await open(path, "r");
+  let handle;
   try {
+    handle = await open(path, "r");
     await handle.sync();
+  } catch (error) {
+    if (isUnsupportedDirectorySyncError(error)) return;
+    throw error;
   } finally {
-    await handle.close();
+    await handle?.close();
   }
+}
+
+function isUnsupportedDirectorySyncError(error) {
+  const code = error?.code;
+  return (
+    code === "EINVAL" ||
+    code === "ENOTSUP" ||
+    code === "EOPNOTSUPP" ||
+    (process.platform === "win32" && code === "EPERM")
+  );
 }
 
 function parseOptions(args) {

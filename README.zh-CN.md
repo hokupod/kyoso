@@ -240,9 +240,9 @@ managed install会把canonical directory digest和CLI version记录到`.kyoso-in
 
 ### 手动 MCP 迁移
 
-先运行 `kyoso setup codex` 或 `kyoso setup claude-code` 检查现有注册。dry-run 与 `--write` 会保留所有现有 MCP entry。`--write --force` 会把完全匹配、已识别的 legacy npx Kyoso command 迁移为上文的显式 package-and-executable 形式。对于完全匹配的 legacy bunx command，省略 `--runner` 会保留它且不执行probe；使用 `--write --runner bunx --force` 可验证 Bun 并迁移为显式 bunx，或使用 `--write --runner npx --force` 有意迁移为 npx。每种迁移都会保留 legacy command 中的 complete SemVer pin。
+先运行 `kyoso setup codex` 或 `kyoso setup claude-code` 检查现有注册。dry-run 与 `--write` 会保留所有现有 MCP entry。`--write --force` 会把环境字段限于生成时allowlist的完全匹配 legacy npx Kyoso command迁移为上文的显式package-and-executable形式。对于完全匹配的 legacy bunx command，省略 `--runner` 会保留它且不执行probe；使用 `--write --runner bunx --force` 可验证 Bun 并迁移为显式 bunx，或使用 `--write --runner npx --force` 有意迁移为 npx。每种迁移都会保留 legacy command 中的 complete SemVer pin。对于当前的显式bunx注册，可运行`--write --runner bunx`；setup会验证Bun且不改变注册bytes。
 
-`--force` 只能替换 managed Skill，并按上述runner policy迁移完全匹配的 legacy MCP entry。它绝不会修改 custom `--command` entry、unknown structure、所选安全目标之外的 global / nested registration，或 Marketplace Plugin / cache。`kyoso doctor` 不会把保留的 entry 标记为 ready，而会显示为 `legacy`、`custom-unverified` 或 `unknown`；请依据 examples 手动修复后再运行 doctor。
+`--force` 只能替换 managed Skill，并按上述runner policy迁移安全且完全匹配的 legacy MCP entry。它绝不会修改`NODE_OPTIONS`等可能改变execution的env、custom `--command` entry、unknown structure、所选安全目标之外的 global / nested registration，或 Marketplace Plugin / cache。`kyoso doctor` 不会把保留的 entry 标记为 ready，而会显示为 `legacy`、`custom-unverified` 或 `unknown`；请依据 examples 手动修复后再运行 doctor。
 
 ## Review contract 与 finding admission
 

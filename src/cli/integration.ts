@@ -103,7 +103,7 @@ export function determineNonPluginIntegration(options: {
     }
     if (options.cli.bunx === "present-unverified") {
       warnings.push(
-        "bunx is present but unverified; run setup --runner bunx to verify Bun 1.3.14 or newer, or use npx/PATH installation.",
+        "bunx is present but unverified; install Kyoso on PATH or npx first, then run the client-specific setup with --write --runner bunx to verify Bun 1.3.14 or newer.",
       );
     }
     if (options.cli.kyoso.kind === "unknown") {
@@ -262,8 +262,15 @@ function manualMcpWarnings(
         "Manual MCP registration uses bunx, but bunx is not available on PATH.",
       ];
     }
+    const verificationCommand = registration
+      ? manualMcpSetupCommand(registration, cli, [
+          "--write",
+          "--runner",
+          "bunx",
+        ])
+      : undefined;
     return [
-      "Manual MCP registration uses bunx, but normal doctor does not verify the required Bun capability. Run setup --runner bunx before treating it as ready.",
+      `Manual MCP registration uses bunx, but normal doctor does not verify the required Bun capability.${verificationCommand ? ` Run \`${verificationCommand}\` before treating it as ready.` : " Run setup with --write --runner bunx from an installed Kyoso CLI before treating it as ready."}`,
     ];
   }
   return [];
@@ -285,19 +292,44 @@ function legacyManualMcpRepairWarning(
   if (!client) {
     return `Manual MCP registration at ${registration.path} uses legacy package-runner arguments. Its ${registration.scope} scope is not automatically migrated; update it manually.`;
   }
-  const command =
-    cli.kyoso.kind === "installed"
-      ? `kyoso setup ${client} --write --force`
-      : cli.npx === "available"
-        ? formatKyosoPackageCommand({
-            runner: "npx",
-            cliArgs: ["setup", client, "--write", "--force"],
-          })
+  const runner =
+    cli.npx === "available"
+      ? "npx"
+      : cli.kyoso.kind === "installed" && cli.bunx === "present-unverified"
+        ? "bunx"
         : undefined;
+  const command = runner
+    ? manualMcpSetupCommand(registration, cli, [
+        "--write",
+        "--runner",
+        runner,
+        "--force",
+      ])
+    : undefined;
   if (!command) {
     return `Manual MCP registration at ${registration.path} uses legacy package-runner arguments, but no executable Kyoso repair path is available. Update it manually.`;
   }
   return `Manual MCP registration uses legacy package-runner arguments. Run \`${command}\` to migrate this exact registration.`;
+}
+
+function manualMcpSetupCommand(
+  registration: ManualMcpRegistration,
+  cli: CliDetection,
+  setupArgs: string[],
+): string | undefined {
+  const client =
+    registration.scope === "codex-global"
+      ? "codex"
+      : registration.scope === "claude-project"
+        ? "claude-code"
+        : undefined;
+  if (!client) return undefined;
+  const cliArgs = ["setup", client, ...setupArgs];
+  if (cli.kyoso.kind === "installed") {
+    return `kyoso ${cliArgs.join(" ")}`;
+  }
+  if (cli.npx !== "available") return undefined;
+  return formatKyosoPackageCommand({ runner: "npx", cliArgs });
 }
 
 function hasCurrentManualMcp(

@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@kyo-so/cli@0.13.1`, avoiding ambiguous npm executable inference.
 - Align new manual MCP setup, Skill fallbacks, documentation, and client
   examples with explicit npx/bunx package-and-executable commands. Existing
-  custom or unknown registrations remain untouched; `--write --force` migrates
-  an exact legacy npx command, while legacy bunx is preserved without a
-  `--runner` and requires explicit `--runner bunx` verification or intentional
-  `--runner npx` migration.
+  custom, execution-altering environment, or unknown registrations remain
+  untouched; `--write --force` migrates a safe exact legacy npx command. Legacy
+  bunx is preserved without a `--runner` and requires explicit `--runner bunx`
+  verification or intentional `--runner npx` migration. Current bunx
+  registrations can be capability-checked without changing their bytes.
 - Add local multi-bin package smoke, exact published npx/bunx artifact smoke,
   PATH-sentinel fallback detection, and fail-closed promotion verification with
   rollback after a post-write failure. These durable CLI changes ship with the

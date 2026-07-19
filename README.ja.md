@@ -240,9 +240,9 @@ managed installはcanonical directoryのdigestとCLI versionを`.kyoso-install.j
 
 ### 手動 MCP の移行
 
-最初に `kyoso setup codex` または `kyoso setup claude-code` を実行し、既存登録を確認します。dry-run と `--write` は既存の MCP entry をすべて保持します。`--write --force` は認識済みの完全一致 legacy npx Kyoso command を上記の package と executable を分離した形式へ移行します。完全一致 legacy bunx command は `--runner` を省略するとprobeせず保持します。`--write --runner bunx --force` は Bun を検証して明示bunx形式へ移行し、`--write --runner npx --force` は意図的にnpx形式へ移行します。いずれもlegacy commandにcomplete SemVer pinがあった場合は保持します。
+最初に `kyoso setup codex` または `kyoso setup claude-code` を実行し、既存登録を確認します。dry-run と `--write` は既存の MCP entry をすべて保持します。`--write --force` は生成時allowlist内のenvを持つ認識済み完全一致 legacy npx Kyoso commandを、上記のpackageとexecutableを分離した形式へ移行します。完全一致 legacy bunx command は `--runner` を省略するとprobeせず保持します。`--write --runner bunx --force` は Bun を検証して明示bunx形式へ移行し、`--write --runner npx --force` は意図的にnpx形式へ移行します。いずれもlegacy commandにcomplete SemVer pinがあった場合は保持します。currentの明示bunx登録は`--write --runner bunx`で確認でき、setupは登録bytesを変えずにBunを検証します。
 
-`--force` が対象にできるのは managed Skill の置換と、上記runner policyに従う完全一致 legacy MCP entry の移行だけです。custom `--command` entry、unknown structure、選択対象外の global / nested registration、Marketplace Plugin / cache は変更しません。`kyoso doctor` は保持したentryを ready とせず、`legacy`、`custom-unverified`、`unknown` として表示します。examplesを使って手動修復してから doctor を再実行してください。
+`--force` が対象にできるのは managed Skill の置換と、上記runner policyに従う安全な完全一致 legacy MCP entry の移行だけです。`NODE_OPTIONS`などexecutionを変え得るenv、custom `--command` entry、unknown structure、選択対象外の global / nested registration、Marketplace Plugin / cache は変更しません。`kyoso doctor` は保持したentryを ready とせず、`legacy`、`custom-unverified`、`unknown` として表示します。examplesを使って手動修復してから doctor を再実行してください。
 
 ## Review contract と finding admission
 

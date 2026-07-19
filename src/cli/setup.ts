@@ -538,6 +538,12 @@ async function ensureExistingCodexMcp(
   current: string,
   existing: ManualMcpRegistration,
 ): Promise<StepResult> {
+  const currentBunxVerification = verifyCurrentBunxRegistration(
+    context,
+    "Codex MCP",
+    existing,
+  );
+  if (currentBunxVerification) return currentBunxVerification;
   if (existing.invocation.kind !== "legacy") {
     return preservedMcpResult(
       "Codex MCP",
@@ -673,6 +679,12 @@ async function ensureExistingClaudeProjectMcp(
   content: string,
   existing: ManualMcpRegistration,
 ): Promise<StepResult> {
+  const currentBunxVerification = verifyCurrentBunxRegistration(
+    context,
+    "Claude Code MCP",
+    existing,
+  );
+  if (currentBunxVerification) return currentBunxVerification;
   if (existing.invocation.kind !== "legacy") {
     return preservedMcpResult(
       "Claude Code MCP",
@@ -1319,9 +1331,7 @@ function patchCodexLegacyInvocation(
   content: string,
   replacement: McpCommand,
 ): string | undefined {
-  const tableMatches = [
-    ...content.matchAll(/^\s*\[mcp_servers\.(?:"kyoso"|kyoso)]\s*$/gm),
-  ];
+  const tableMatches = [...content.matchAll(/^\s*\[mcp_servers\.kyoso]\s*$/gm)];
   if (tableMatches.length !== 1) return undefined;
   const table = tableMatches[0];
   if (table?.index === undefined) return undefined;
@@ -1857,12 +1867,7 @@ function unsupportedBunxResult(
   ) {
     return undefined;
   }
-  const probe =
-    context.bunxProbe ??
-    (context.bunxProbe = context.bunxVersionProbe({
-      cwd: context.cwd,
-      env: context.env,
-    }));
+  const probe = ensureBunxProbe(context);
   if (probe.status === "verified") return undefined;
   const fallback = formatBunxFallbackCommand(context, title, options);
   return {
@@ -1873,6 +1878,55 @@ function unsupportedBunxResult(
     path,
     detail: `bunx was not verified for explicit package selection (${probe.detail}). No MCP config was written. Use ${fallback}, or install Bun 1.3.14 or newer and retry --runner bunx.`,
   };
+}
+
+function verifyCurrentBunxRegistration(
+  context: SetupContext,
+  title: "Codex MCP" | "Claude Code MCP",
+  existing: ManualMcpRegistration,
+): StepResult | undefined {
+  if (
+    !context.write ||
+    !context.runnerExplicit ||
+    context.customCommand ||
+    context.mcpCommand.command !== "bunx" ||
+    existing.invocation.kind !== "current" ||
+    existing.invocation.runner !== "bunx"
+  ) {
+    return undefined;
+  }
+
+  const probe = ensureBunxProbe(context);
+  if (probe.status !== "verified") {
+    return {
+      kind: "mcp",
+      registration: "blocked",
+      title,
+      status: "skipped",
+      path: existing.path,
+      detail: `existing current bunx registration was kept unchanged. bunx could not be verified for explicit package selection (${probe.detail}). Install Bun 1.3.14 or newer before treating this registration as ready.`,
+    };
+  }
+
+  const detail =
+    title === "Codex MCP"
+      ? codexPreservedDetail(existing)
+      : claudePreservedDetail(existing);
+  return preservedMcpResult(
+    title,
+    existing,
+    `${detail} bunx ${probe.version} was verified for explicit package selection; no MCP config bytes changed.`,
+  );
+}
+
+function ensureBunxProbe(context: SetupContext): BunxVersionProbeResult {
+  return (
+    context.bunxProbe ??
+    (context.bunxProbe = context.bunxVersionProbe({
+      cwd: context.cwd,
+      env: context.env,
+    }))
+  );
 }
 
 function requiresExplicitBunxRunnerForMigration(

@@ -23,7 +23,16 @@ import {
 } from "../audit/trace.js";
 import { buildContext } from "../context/buildContext.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "./constants.js";
-import { KyosoRequestError } from "./errors.js";
+import {
+  KyosoCancellationError,
+  KyosoRequestError,
+  throwIfAborted,
+} from "./errors.js";
+import {
+  createProgressDispatcher,
+  type ProgressDispatcher,
+} from "./progressDispatcher.js";
+import type { ReviewPhase, ReviewProgressSink } from "./progress.js";
 import type {
   AgentName,
   AgentProgressEvent,
@@ -108,6 +117,9 @@ export type RunReviewOptions = LoadConfigOptions & {
   mcpNetworkMode?: NetworkMode;
   entrypoint?: "cli" | "mcp" | "core";
   traceWriterFactory?: (options: TraceWriterOptions) => TraceWriter;
+  onProgress?: ReviewProgressSink;
+  signal?: AbortSignal;
+  progressHeartbeatMs?: number;
 };
 
 function requestForRecursionFingerprint(
@@ -132,43 +144,352 @@ export async function runReview(
   const auditEnv = { ...process.env, ...options.env };
   const traceWriterFactory = options.traceWriterFactory ?? createTraceWriter;
   let snapshot: Snapshot | undefined;
+  let activeTrace: TraceWriter | undefined;
+  let progressDeliveryFailure: string | undefined;
+  let writeProgressDeliveryFailure: ((reason: string) => void) | undefined;
+  let reviewFailureReported = false;
+  const dispatcher = createProgressDispatcher(options.onProgress, {
+    onSinkDisabled: (reason) => {
+      if (progressDeliveryFailure !== undefined) return;
+      progressDeliveryFailure = reason;
+      writeProgressDeliveryFailure?.(reason);
+    },
+  });
+  const phaseStartedAt = new Map<ReviewPhase, number>();
+
+  const startPhase = (phase: ReviewPhase): void => {
+    throwIfAborted(options.signal);
+    phaseStartedAt.set(phase, Date.now());
+    dispatcher.emit({
+      type: "phase_started",
+      traceId,
+      phase,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const completePhase = (phase: ReviewPhase): void => {
+    dispatcher.emit({
+      type: "phase_completed",
+      traceId,
+      phase,
+      durationMs: Math.max(
+        0,
+        Date.now() - (phaseStartedAt.get(phase) ?? Date.now()),
+      ),
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const skipPhase = (phase: ReviewPhase, reason: string): void => {
+    dispatcher.emit({
+      type: "phase_skipped",
+      traceId,
+      phase,
+      reason,
+      timestamp: new Date().toISOString(),
+    });
+  };
+
+  const reportReviewCompleted = async (
+    result: Pick<KyosoResult, "decision" | "completion" | "audit">,
+  ): Promise<void> => {
+    dispatcher.emit({
+      type: "review_completed",
+      traceId,
+      decision: result.decision,
+      completionStatus: result.completion.status,
+      durationMs: Math.max(0, Date.now() - startedAtEpochMs),
+      timestamp: new Date().toISOString(),
+    });
+    await dispatcher.flush();
+    if (progressDeliveryFailure !== undefined) {
+      result.audit.warnings = Array.from(
+        new Set([
+          ...(result.audit.warnings ?? []),
+          `PROGRESS_DELIVERY_FAILED: ${progressDeliveryFailure}`,
+        ]),
+      );
+    }
+  };
+
+  const completeReview = async (result: KyosoResult): Promise<KyosoResult> => {
+    await reportReviewCompleted(result);
+    return result;
+  };
+
+  const reportReviewFailure = async (
+    error: unknown,
+    trace: TraceWriter | undefined,
+  ): Promise<void> => {
+    if (reviewFailureReported) return;
+    reviewFailureReported = true;
+    const timestamp = new Date().toISOString();
+    if (error instanceof KyosoCancellationError) {
+      dispatcher.emit({ type: "review_cancelled", traceId, timestamp });
+      await trace
+        ?.write({ type: "review_cancelled", traceId, timestamp })
+        .catch(() => undefined);
+    } else {
+      dispatcher.emit({
+        type: "review_failed",
+        traceId,
+        ...(error instanceof KyosoRequestError
+          ? { errorCode: error.code }
+          : {}),
+        timestamp,
+      });
+      await trace
+        ?.write({
+          type: "review_failed",
+          traceId,
+          ...(error instanceof KyosoRequestError
+            ? { errorCode: error.code }
+            : {}),
+          timestamp,
+        })
+        .catch(() => undefined);
+    }
+    await dispatcher.flush();
+  };
+
+  dispatcher.emit({
+    type: "review_started",
+    traceId,
+    tool,
+    timestamp: new Date().toISOString(),
+  });
 
   try {
-    assertNotChildAgent(options.env ?? process.env);
-  } catch (error) {
-    if (error instanceof KyosoRequestError) {
-      const config = kyosoConfigSchema.parse(defaultConfig);
-      const reviewBudget = resolveReviewBudget(config.reviewBudget, undefined);
+    try {
+      throwIfAborted(options.signal);
+      assertNotChildAgent(options.env ?? process.env);
+    } catch (error) {
+      if (error instanceof KyosoRequestError) {
+        const config = kyosoConfigSchema.parse(defaultConfig);
+        const reviewBudget = resolveReviewBudget(
+          config.reviewBudget,
+          undefined,
+        );
+        const budgetTracker = new ReviewBudgetTracker(
+          reviewBudget,
+          startedAtEpochMs,
+          configuredReviewModelCallPlan(
+            config,
+            reviewBudget,
+            options.env ?? process.env,
+          ),
+        );
+        const requestFingerprint = createRequestFingerprint({
+          tool,
+          request: requestForRecursionFingerprint(request),
+          config,
+          roles: resolveAgentRoles(config),
+          budget: reviewBudget,
+          entrypoint: options.entrypoint,
+        });
+        const trace = traceWriterFactory({
+          enabled: config.audit.enabled,
+          directory: config.audit.directory,
+          traceId,
+          cwd,
+          env: auditEnv,
+        });
+        activeTrace = trace;
+        writeProgressDeliveryFailure = (reason) => {
+          void trace
+            .write({
+              type: "progress_delivery_failed",
+              traceId,
+              reason,
+              timestamp: new Date().toISOString(),
+            })
+            .catch(() => undefined);
+        };
+        if (progressDeliveryFailure !== undefined) {
+          writeProgressDeliveryFailure(progressDeliveryFailure);
+        }
+        try {
+          await trace.write({
+            type: "request_received",
+            traceId,
+            tool,
+            timestamp: new Date().toISOString(),
+          });
+          await writeReviewBudgetPlanned({
+            trace,
+            traceId,
+            budgetTracker,
+            requestFingerprint,
+          });
+          return await completeReview(
+            await buildPolicyBlockResult({
+              tool,
+              trace,
+              traceId,
+              startedAt,
+              networkMode: config.network.defaultMode,
+              cisaPolicy: config.securityReview.cisaSecureByDesign,
+              warning: error.message,
+              budgetTracker,
+              requestFingerprint,
+              coverage: unavailableReviewCoverage(
+                requestForRecursionFingerprint(request),
+                "recursive invocation blocked before agent execution",
+                config.reviewPolicy.additionalLenses,
+              ),
+              finding: {
+                id: "KYOSO-1",
+                severity: "critical",
+                category: "other",
+                title: "Recursive Kyoso invocation blocked",
+                evidence: error.message,
+                recommendation:
+                  "Do not expose Kyoso MCP tools to Kyoso child agents.",
+                disposition: "gate",
+                changeRelation: "unknown",
+                evidenceQuality: "concrete",
+                evidenceRefs: [],
+                policyReasons: ["kyoso_policy", "recursive_invocation"],
+                fingerprint: "",
+                sourceAgents: ["kyoso_policy"],
+                confidence: "high",
+              },
+              redactionsApplied: 0,
+            }),
+          );
+        } finally {
+          await trace.finalize();
+        }
+      }
+      throw error;
+    }
+
+    startPhase("preflight");
+    const baseLoaded =
+      options.config !== undefined
+        ? {
+            config: options.config,
+            configHash: options.configHash,
+            configTrustStatus: "trusted" as const,
+            sources: [],
+            warnings: [] as string[],
+          }
+        : await loadConfig({
+            cwd,
+            configPath: options.configPath,
+            ignoreConfig: options.ignoreConfig,
+            trustConfig: options.trustConfig,
+            allowUnknownConfig: options.allowUnknownConfig,
+            promptForTrust: options.promptForTrust,
+            trustStorePath: options.trustStorePath,
+            env: options.env,
+            trustPrompt: options.trustPrompt,
+          });
+    const loaded =
+      options.configOverrides && options.configOverrides.length > 0
+        ? {
+            ...baseLoaded,
+            config: applyConfigOverrides(
+              baseLoaded.config,
+              options.configOverrides,
+            ),
+          }
+        : baseLoaded;
+    completePhase("preflight");
+
+    const trace = traceWriterFactory({
+      enabled: loaded.config.audit.enabled,
+      directory: loaded.config.audit.directory,
+      traceId,
+      cwd,
+      includeRawAgentOutput: loaded.config.audit.includeRawAgentOutput,
+      env: auditEnv,
+    });
+    activeTrace = trace;
+
+    const warnings: string[] = [...loaded.warnings, ...trace.warnings];
+    writeProgressDeliveryFailure = (reason) => {
+      warnings.push(`PROGRESS_DELIVERY_FAILED: ${reason}`);
+      void trace
+        .write({
+          type: "progress_delivery_failed",
+          traceId,
+          reason,
+          timestamp: new Date().toISOString(),
+        })
+        .catch(() => undefined);
+    };
+    if (progressDeliveryFailure !== undefined) {
+      writeProgressDeliveryFailure(progressDeliveryFailure);
+    }
+
+    try {
+      await trace.write({
+        type: "request_received",
+        traceId,
+        tool,
+        timestamp: new Date().toISOString(),
+      });
+      await trace.write({
+        type: "config_loaded",
+        traceId,
+        configHash: loaded.configHash,
+        configPath: loaded.configPath,
+        configSources: loaded.sources,
+        configTrustStatus: loaded.configTrustStatus,
+        timestamp: new Date().toISOString(),
+      });
+
+      validateReviewRequest(tool, request);
+      const reviewBudget = resolveReviewBudget(
+        loaded.config.reviewBudget,
+        request.options?.reviewBudget,
+      );
       const budgetTracker = new ReviewBudgetTracker(
         reviewBudget,
         startedAtEpochMs,
         configuredReviewModelCallPlan(
-          config,
+          loaded.config,
           reviewBudget,
           options.env ?? process.env,
+          request.options?.judgeProvider,
         ),
       );
-      const requestFingerprint = createRequestFingerprint({
-        tool,
-        request: requestForRecursionFingerprint(request),
-        config,
-        roles: resolveAgentRoles(config),
-        budget: reviewBudget,
-        entrypoint: options.entrypoint,
-      });
-      const trace = traceWriterFactory({
-        enabled: config.audit.enabled,
-        directory: config.audit.directory,
-        traceId,
+      assertTrustedWorkspaceRoot(
+        request.workspace?.root,
+        loaded.config.workspace.root,
         cwd,
-        env: auditEnv,
-      });
-      try {
-        await trace.write({
-          type: "request_received",
-          traceId,
+      );
+      const networkMode = resolveNetworkMode(
+        request.options?.network,
+        loaded.config.network.defaultMode,
+        options.mcpNetworkMode,
+      );
+      if (
+        networkMode === "unrestricted" &&
+        !loaded.config.network.allowUnrestricted
+      ) {
+        throw new KyosoRequestError(
+          "unrestricted network mode is disabled by config",
+          "NETWORK_MODE_DISABLED",
+        );
+      }
+
+      const disabledPolicy = disabledReviewPolicy(
+        tool,
+        loaded.config,
+        options.entrypoint,
+      );
+      if (disabledPolicy) {
+        const redactedRequest = requestForRecursionFingerprint(request);
+        const requestFingerprint = createRequestFingerprint({
           tool,
-          timestamp: new Date().toISOString(),
+          request: redactedRequest,
+          config: loaded.config,
+          roles: resolveAgentRoles(loaded.config),
+          budget: reviewBudget,
+          entrypoint: options.entrypoint,
         });
         await writeReviewBudgetPlanned({
           trace,
@@ -176,641 +497,537 @@ export async function runReview(
           budgetTracker,
           requestFingerprint,
         });
-        return await buildPolicyBlockResult({
-          tool,
-          trace,
-          traceId,
-          startedAt,
-          networkMode: config.network.defaultMode,
-          cisaPolicy: config.securityReview.cisaSecureByDesign,
-          warning: error.message,
-          budgetTracker,
-          requestFingerprint,
-          coverage: unavailableReviewCoverage(
-            requestForRecursionFingerprint(request),
-            "recursive invocation blocked before agent execution",
-            config.reviewPolicy.additionalLenses,
-          ),
-          finding: {
-            id: "KYOSO-1",
-            severity: "critical",
-            category: "other",
-            title: "Recursive Kyoso invocation blocked",
-            evidence: error.message,
-            recommendation:
-              "Do not expose Kyoso MCP tools to Kyoso child agents.",
-            disposition: "gate",
-            changeRelation: "unknown",
-            evidenceQuality: "concrete",
-            evidenceRefs: [],
-            policyReasons: ["kyoso_policy", "recursive_invocation"],
-            fingerprint: "",
-            sourceAgents: ["kyoso_policy"],
-            confidence: "high",
-          },
-          redactionsApplied: 0,
-        });
-      } finally {
-        await trace.finalize();
-      }
-    }
-    throw error;
-  }
-
-  const baseLoaded =
-    options.config !== undefined
-      ? {
-          config: options.config,
-          configHash: options.configHash,
-          configTrustStatus: "trusted" as const,
-          sources: [],
-          warnings: [] as string[],
-        }
-      : await loadConfig({
-          cwd,
-          configPath: options.configPath,
-          ignoreConfig: options.ignoreConfig,
-          trustConfig: options.trustConfig,
-          allowUnknownConfig: options.allowUnknownConfig,
-          promptForTrust: options.promptForTrust,
-          trustStorePath: options.trustStorePath,
-          env: options.env,
-          trustPrompt: options.trustPrompt,
-        });
-  const loaded =
-    options.configOverrides && options.configOverrides.length > 0
-      ? {
-          ...baseLoaded,
-          config: applyConfigOverrides(
-            baseLoaded.config,
-            options.configOverrides,
-          ),
-        }
-      : baseLoaded;
-
-  const trace = traceWriterFactory({
-    enabled: loaded.config.audit.enabled,
-    directory: loaded.config.audit.directory,
-    traceId,
-    cwd,
-    includeRawAgentOutput: loaded.config.audit.includeRawAgentOutput,
-    env: auditEnv,
-  });
-
-  const warnings: string[] = [...loaded.warnings, ...trace.warnings];
-
-  try {
-    await trace.write({
-      type: "request_received",
-      traceId,
-      tool,
-      timestamp: new Date().toISOString(),
-    });
-    await trace.write({
-      type: "config_loaded",
-      traceId,
-      configHash: loaded.configHash,
-      configPath: loaded.configPath,
-      configSources: loaded.sources,
-      configTrustStatus: loaded.configTrustStatus,
-      timestamp: new Date().toISOString(),
-    });
-
-    validateReviewRequest(tool, request);
-    const reviewBudget = resolveReviewBudget(
-      loaded.config.reviewBudget,
-      request.options?.reviewBudget,
-    );
-    const budgetTracker = new ReviewBudgetTracker(
-      reviewBudget,
-      startedAtEpochMs,
-      configuredReviewModelCallPlan(
-        loaded.config,
-        reviewBudget,
-        options.env ?? process.env,
-        request.options?.judgeProvider,
-      ),
-    );
-    assertTrustedWorkspaceRoot(
-      request.workspace?.root,
-      loaded.config.workspace.root,
-      cwd,
-    );
-    const networkMode = resolveNetworkMode(
-      request.options?.network,
-      loaded.config.network.defaultMode,
-      options.mcpNetworkMode,
-    );
-    if (
-      networkMode === "unrestricted" &&
-      !loaded.config.network.allowUnrestricted
-    ) {
-      throw new KyosoRequestError(
-        "unrestricted network mode is disabled by config",
-        "NETWORK_MODE_DISABLED",
-      );
-    }
-
-    const disabledPolicy = disabledReviewPolicy(
-      tool,
-      loaded.config,
-      options.entrypoint,
-    );
-    if (disabledPolicy) {
-      const redactedRequest = requestForRecursionFingerprint(request);
-      const requestFingerprint = createRequestFingerprint({
-        tool,
-        request: redactedRequest,
-        config: loaded.config,
-        roles: resolveAgentRoles(loaded.config),
-        budget: reviewBudget,
-        entrypoint: options.entrypoint,
-      });
-      await writeReviewBudgetPlanned({
-        trace,
-        traceId,
-        budgetTracker,
-        requestFingerprint,
-      });
-      const warning = disabledPolicy.warning;
-      return await buildPolicyBlockResult({
-        tool,
-        trace,
-        traceId,
-        startedAt,
-        configHash: loaded.configHash,
-        networkMode,
-        cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
-        warning,
-        budgetTracker,
-        requestFingerprint,
-        coverage: unavailableReviewCoverage(
-          redactedRequest,
-          disabledPolicy.coverageReason,
-          loaded.config.reviewPolicy.additionalLenses,
-        ),
-        finding: {
-          id: "KYOSO-1",
-          severity: "critical",
-          category: "other",
-          title: disabledPolicy.title,
-          evidence: warning,
-          recommendation: disabledPolicy.recommendation,
-          disposition: "gate",
-          changeRelation: "unknown",
-          evidenceQuality: "concrete",
-          evidenceRefs: [],
-          policyReasons: ["kyoso_policy", disabledPolicy.policyReason],
-          fingerprint: "",
-          sourceAgents: ["kyoso_policy"],
-          confidence: "high",
-        },
-        redactionsApplied: 0,
-      });
-    }
-    if (
-      networkMode === "unrestricted" &&
-      loaded.config.network.warnOnUnrestricted
-    ) {
-      warnings.push(
-        "Network mode is unrestricted; write policy remains denied.",
-      );
-    }
-
-    const secretScan = scanAndRedactSecrets(request);
-    await trace.write({
-      type: "secret_scan_completed",
-      traceId,
-      detected: secretScan.detected,
-      redactions: secretScan.redactions,
-      timestamp: new Date().toISOString(),
-    });
-
-    const allowSecretOverride =
-      loaded.config.secrets.allowOverride &&
-      request.options?.allowSecretRedaction === true;
-    if (
-      secretScan.detected &&
-      loaded.config.secrets.blockOnDetectedSecret &&
-      !allowSecretOverride
-    ) {
-      const requestFingerprint = createRequestFingerprint({
-        tool,
-        request: secretScan.redactedRequest,
-        config: loaded.config,
-        roles: resolveAgentRoles(loaded.config),
-        budget: reviewBudget,
-        entrypoint: options.entrypoint,
-      });
-      await writeReviewBudgetPlanned({
-        trace,
-        traceId,
-        budgetTracker,
-        requestFingerprint,
-      });
-      return await buildSecretBlockResult({
-        tool,
-        trace,
-        traceId,
-        startedAt,
-        configHash: loaded.configHash,
-        networkMode,
-        cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
-        additionalLenses: loaded.config.reviewPolicy.additionalLenses,
-        secretScan,
-        warnings,
-        budgetTracker,
-        requestFingerprint,
-      });
-    }
-
-    const denyPatterns = mergeDenyPatterns(
-      loaded.config.workspace.deny,
-      secretScan.redactedRequest.workspace?.denyRead,
-    );
-    const allowPatterns = secretScan.redactedRequest.workspace?.allowRead ?? [];
-    const built = buildContext(secretScan.redactedRequest, {
-      maxContextBytes: loaded.config.workspace.maxContextBytes,
-      maxDiffBytes: loaded.config.workspace.maxDiffBytes,
-      denyPatterns,
-      allowPatterns,
-    });
-    warnings.push(...built.warnings);
-
-    const agentRoles = resolveAgentRoles(loaded.config);
-    const requestFingerprint = createRequestFingerprint({
-      tool,
-      request: built.request,
-      config: loaded.config,
-      roles: agentRoles,
-      budget: reviewBudget,
-      entrypoint: options.entrypoint,
-    });
-    await writeReviewBudgetPlanned({
-      trace,
-      traceId,
-      budgetTracker,
-      requestFingerprint,
-    });
-    warnings.push(...plannedBudgetWarnings(budgetTracker));
-    snapshot = await createSnapshot(traceId, tool, built.request, {
-      denyPatterns,
-      allowPatterns,
-      agentRoles,
-    });
-    await trace.write({
-      type: "snapshot_created",
-      traceId,
-      path: snapshot.root,
-      fileCount: snapshot.fileCount,
-      timestamp: new Date().toISOString(),
-    });
-
-    const manager =
-      options.agentManager ??
-      defaultAgentManager(loaded.config, options.env ?? process.env);
-    const agentResults = await runAgents({
-      tool,
-      request: built.request,
-      config: loaded.config,
-      traceId,
-      workspaceDir: snapshot.root,
-      networkMode,
-      manager,
-      trace,
-      warnings,
-      budgetTracker,
-    });
-
-    warnings.push(
-      ...agentResults.flatMap((result) =>
-        (result.warnings ?? []).map(
-          (warning) => `Agent ${result.agent} ${warning}`,
-        ),
-      ),
-    );
-
-    const normalizedAgentResults = agentResults.map((result) =>
-      normalizeAgentRunResult(result, reviewBudget.maxFindingsPerAgent),
-    );
-    for (const result of normalizedAgentResults.filter(
-      (item) => item.findingsTargetExceeded,
-    )) {
-      warnings.push(
-        `Agent ${result.agent} reported ${result.reportedFindings} findings, above the soft target of ${reviewBudget.maxFindingsPerAgent}; all findings were retained.`,
-      );
-    }
-    const enabledAgents = (["codex", "claude"] as const).filter(
-      (agent) => loaded.config.agents[agent].enabled,
-    );
-    const agentsUsed = normalizedAgentResults
-      .filter((result) => result.status !== "skipped")
-      .map((result) => result.agent);
-    const reviewMode =
-      enabledAgents.length === 1 ? "single_agent" : "multi_agent";
-    const completed = normalizedAgentResults.filter(
-      (result) => result.status === "completed",
-    );
-    const attempted = normalizedAgentResults.filter(
-      (result) => result.status !== "skipped",
-    );
-    const degraded =
-      completed.length !== attempted.length || enabledAgents.length === 0;
-    const coverage = buildReviewCoverage({
-      request: built.request,
-      additionalLenses: loaded.config.reviewPolicy.additionalLenses,
-      agentResults: normalizedAgentResults,
-    });
-    if (
-      isCoverageIncomplete(coverage, {
-        multiAgentRequired: loaded.config.reviewPolicy.multiAgentRequired,
-      })
-    ) {
-      budgetTracker.markIncomplete("coverage_incomplete");
-      warnings.push(formatCoverageWarning(coverage, loaded.config));
-    }
-    let aggregate = aggregateAgentResults(normalizedAgentResults, {
-      reviewMode,
-    });
-
-    if (secretScan.detected && allowSecretOverride) {
-      aggregate = {
-        ...aggregate,
-        findings: reindexFindings([
-          buildSecretFinding(secretScan, {
-            id: "KYOSO-1",
-            blocked: false,
+        const warning = disabledPolicy.warning;
+        return await completeReview(
+          await buildPolicyBlockResult({
+            tool,
+            trace,
+            traceId,
+            startedAt,
+            configHash: loaded.configHash,
+            networkMode,
+            cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
+            warning,
+            budgetTracker,
+            requestFingerprint,
+            coverage: unavailableReviewCoverage(
+              redactedRequest,
+              disabledPolicy.coverageReason,
+              loaded.config.reviewPolicy.additionalLenses,
+            ),
+            finding: {
+              id: "KYOSO-1",
+              severity: "critical",
+              category: "other",
+              title: disabledPolicy.title,
+              evidence: warning,
+              recommendation: disabledPolicy.recommendation,
+              disposition: "gate",
+              changeRelation: "unknown",
+              evidenceQuality: "concrete",
+              evidenceRefs: [],
+              policyReasons: ["kyoso_policy", disabledPolicy.policyReason],
+              fingerprint: "",
+              sourceAgents: ["kyoso_policy"],
+              confidence: "high",
+            },
+            redactionsApplied: 0,
           }),
-          ...aggregate.findings,
-        ]),
-      };
-    }
-
-    if (
-      completed.length === 0 &&
-      (attempted.length > 0 || enabledAgents.length === 0)
-    ) {
-      const noPrimaryAgents = enabledAgents.length === 0;
-      if (noPrimaryAgents) {
-        budgetTracker.markIncomplete("coverage_incomplete");
-        warnings.push(
-          "No primary review agents are enabled; review coverage is incomplete.",
         );
       }
+      if (
+        networkMode === "unrestricted" &&
+        loaded.config.network.warnOnUnrestricted
+      ) {
+        warnings.push(
+          "Network mode is unrestricted; write policy remains denied.",
+        );
+      }
+
+      startPhase("context");
+      const secretScan = scanAndRedactSecrets(request);
+      await trace.write({
+        type: "secret_scan_completed",
+        traceId,
+        detected: secretScan.detected,
+        redactions: secretScan.redactions,
+        timestamp: new Date().toISOString(),
+      });
+
+      const allowSecretOverride =
+        loaded.config.secrets.allowOverride &&
+        request.options?.allowSecretRedaction === true;
+      if (
+        secretScan.detected &&
+        loaded.config.secrets.blockOnDetectedSecret &&
+        !allowSecretOverride
+      ) {
+        const requestFingerprint = createRequestFingerprint({
+          tool,
+          request: secretScan.redactedRequest,
+          config: loaded.config,
+          roles: resolveAgentRoles(loaded.config),
+          budget: reviewBudget,
+          entrypoint: options.entrypoint,
+        });
+        await writeReviewBudgetPlanned({
+          trace,
+          traceId,
+          budgetTracker,
+          requestFingerprint,
+        });
+        skipPhase("context", "secret_detected");
+        return await completeReview(
+          await buildSecretBlockResult({
+            tool,
+            trace,
+            traceId,
+            startedAt,
+            configHash: loaded.configHash,
+            networkMode,
+            cisaPolicy: loaded.config.securityReview.cisaSecureByDesign,
+            additionalLenses: loaded.config.reviewPolicy.additionalLenses,
+            secretScan,
+            warnings,
+            budgetTracker,
+            requestFingerprint,
+          }),
+        );
+      }
+
+      const denyPatterns = mergeDenyPatterns(
+        loaded.config.workspace.deny,
+        secretScan.redactedRequest.workspace?.denyRead,
+      );
+      const allowPatterns =
+        secretScan.redactedRequest.workspace?.allowRead ?? [];
+      const built = buildContext(secretScan.redactedRequest, {
+        maxContextBytes: loaded.config.workspace.maxContextBytes,
+        maxDiffBytes: loaded.config.workspace.maxDiffBytes,
+        denyPatterns,
+        allowPatterns,
+      });
+      warnings.push(...built.warnings);
+      completePhase("context");
+
+      const agentRoles = resolveAgentRoles(loaded.config);
+      const requestFingerprint = createRequestFingerprint({
+        tool,
+        request: built.request,
+        config: loaded.config,
+        roles: agentRoles,
+        budget: reviewBudget,
+        entrypoint: options.entrypoint,
+      });
+      await writeReviewBudgetPlanned({
+        trace,
+        traceId,
+        budgetTracker,
+        requestFingerprint,
+      });
+      warnings.push(...plannedBudgetWarnings(budgetTracker));
+      startPhase("snapshot");
+      snapshot = await createSnapshot(traceId, tool, built.request, {
+        denyPatterns,
+        allowPatterns,
+        agentRoles,
+      });
+      await trace.write({
+        type: "snapshot_created",
+        traceId,
+        path: snapshot.root,
+        fileCount: snapshot.fileCount,
+        timestamp: new Date().toISOString(),
+      });
+      completePhase("snapshot");
+
+      const manager =
+        options.agentManager ??
+        defaultAgentManager(loaded.config, options.env ?? process.env);
+      startPhase("primary");
+      const agentResults = await runAgents({
+        tool,
+        request: built.request,
+        config: loaded.config,
+        traceId,
+        workspaceDir: snapshot.root,
+        networkMode,
+        manager,
+        trace,
+        warnings,
+        budgetTracker,
+        progressDispatcher: dispatcher,
+        signal: options.signal,
+        progressHeartbeatMs: options.progressHeartbeatMs,
+      });
+      completePhase("primary");
+
+      warnings.push(
+        ...agentResults.flatMap((result) =>
+          (result.warnings ?? []).map(
+            (warning) => `Agent ${result.agent} ${warning}`,
+          ),
+        ),
+      );
+
+      startPhase("aggregation");
+      const normalizedAgentResults = agentResults.map((result) =>
+        normalizeAgentRunResult(result, reviewBudget.maxFindingsPerAgent),
+      );
+      for (const result of normalizedAgentResults.filter(
+        (item) => item.findingsTargetExceeded,
+      )) {
+        warnings.push(
+          `Agent ${result.agent} reported ${result.reportedFindings} findings, above the soft target of ${reviewBudget.maxFindingsPerAgent}; all findings were retained.`,
+        );
+      }
+      const enabledAgents = (["codex", "claude"] as const).filter(
+        (agent) => loaded.config.agents[agent].enabled,
+      );
+      const agentsUsed = normalizedAgentResults
+        .filter((result) => result.status !== "skipped")
+        .map((result) => result.agent);
+      const reviewMode =
+        enabledAgents.length === 1 ? "single_agent" : "multi_agent";
+      const completed = normalizedAgentResults.filter(
+        (result) => result.status === "completed",
+      );
+      const attempted = normalizedAgentResults.filter(
+        (result) => result.status !== "skipped",
+      );
+      const degraded =
+        completed.length !== attempted.length || enabledAgents.length === 0;
+      const coverage = buildReviewCoverage({
+        request: built.request,
+        additionalLenses: loaded.config.reviewPolicy.additionalLenses,
+        agentResults: normalizedAgentResults,
+      });
+      if (
+        isCoverageIncomplete(coverage, {
+          multiAgentRequired: loaded.config.reviewPolicy.multiAgentRequired,
+        })
+      ) {
+        budgetTracker.markIncomplete("coverage_incomplete");
+        warnings.push(formatCoverageWarning(coverage, loaded.config));
+      }
+      let aggregate = aggregateAgentResults(normalizedAgentResults, {
+        reviewMode,
+      });
+
+      if (secretScan.detected && allowSecretOverride) {
+        aggregate = {
+          ...aggregate,
+          findings: reindexFindings([
+            buildSecretFinding(secretScan, {
+              id: "KYOSO-1",
+              blocked: false,
+            }),
+            ...aggregate.findings,
+          ]),
+        };
+      }
+
+      if (
+        completed.length === 0 &&
+        (attempted.length > 0 || enabledAgents.length === 0)
+      ) {
+        const noPrimaryAgents = enabledAgents.length === 0;
+        if (noPrimaryAgents) {
+          budgetTracker.markIncomplete("coverage_incomplete");
+          warnings.push(
+            "No primary review agents are enabled; review coverage is incomplete.",
+          );
+        }
+        aggregate = {
+          ...aggregate,
+          findings: [
+            ...aggregate.findings,
+            {
+              id: `KYOSO-${aggregate.findings.length + 1}`,
+              severity: "critical",
+              category: "other",
+              title: noPrimaryAgents
+                ? "No primary review agents enabled"
+                : "All backend agents failed",
+              evidence: noPrimaryAgents
+                ? "Both configured primary reviewers are disabled."
+                : normalizedAgentResults
+                    .map(
+                      (result) =>
+                        `${result.agent}: ${result.error?.code ?? result.status}`,
+                    )
+                    .join("; "),
+              recommendation: noPrimaryAgents
+                ? "Enable at least one primary reviewer before running Kyoso."
+                : "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
+              disposition: "gate",
+              changeRelation: "unknown",
+              evidenceQuality: "concrete",
+              evidenceRefs: [],
+              policyReasons: ["kyoso_policy", "coverage_incomplete"],
+              fingerprint: "",
+              sourceAgents: ["kyoso_policy"],
+              confidence: "high",
+            },
+          ],
+        };
+      }
+
       aggregate = {
         ...aggregate,
-        findings: [
-          ...aggregate.findings,
-          {
-            id: `KYOSO-${aggregate.findings.length + 1}`,
-            severity: "critical",
-            category: "other",
-            title: noPrimaryAgents
-              ? "No primary review agents enabled"
-              : "All backend agents failed",
-            evidence: noPrimaryAgents
-              ? "Both configured primary reviewers are disabled."
-              : normalizedAgentResults
-                  .map(
-                    (result) =>
-                      `${result.agent}: ${result.error?.code ?? result.status}`,
-                  )
-                  .join("; "),
-            recommendation: noPrimaryAgents
-              ? "Enable at least one primary reviewer before running Kyoso."
-              : "Run kyoso doctor and retry after agent authentication or adapter issues are fixed.",
-            disposition: "gate",
-            changeRelation: "unknown",
-            evidenceQuality: "concrete",
-            evidenceRefs: [],
-            policyReasons: ["kyoso_policy", "coverage_incomplete"],
-            fingerprint: "",
-            sourceAgents: ["kyoso_policy"],
-            confidence: "high",
-          },
-        ],
-      };
-    }
-
-    aggregate = {
-      ...aggregate,
-      findings: admitFindings({
-        tool,
-        request: built.request,
-        findings: aggregate.findings,
-        reviewMode,
-      }),
-    };
-
-    await trace.write({
-      type: "aggregation_completed",
-      traceId,
-      findingCount: aggregate.findings.length,
-      timestamp: new Date().toISOString(),
-    });
-
-    const verificationMode =
-      loaded.config.verification.enabled && reviewMode === "single_agent"
-        ? "skipped_single_agent"
-        : loaded.config.verification.enabled && enabledAgents.length > 1
-          ? "cross_agent"
-          : undefined;
-    if (verificationMode === "cross_agent") {
-      warnings.push(
-        ...(await runFindingVerification({
+        findings: admitFindings({
           tool,
           request: built.request,
-          config: loaded.config,
-          traceId,
-          workspaceDir: snapshot.root,
-          networkMode,
-          manager,
-          trace,
           findings: aggregate.findings,
-          budgetTracker,
-        })),
-      );
-    }
+          reviewMode,
+        }),
+      };
 
-    aggregate = {
-      ...aggregate,
-      findings: admitFindings({
-        tool,
-        request: built.request,
-        findings: aggregate.findings,
-        reviewMode,
-      }),
-    };
-
-    if (
-      aggregate.findings.some((finding) => finding.disposition === "disputed")
-    ) {
-      budgetTracker.markIncomplete("disputed_finding");
-    }
-
-    const cisaPolicy = loaded.config.securityReview.cisaSecureByDesign;
-    const cisa =
-      tool === "security_review" && cisaPolicy.enabled
-        ? computeCisaGate(
-            aggregate.findings,
-            normalizedAgentResults,
-            cisaPolicy,
-          )
-        : undefined;
-    const budgetBeforeJudge = budgetTracker.snapshot();
-    const decision =
-      budgetBeforeJudge.completion.status === "incomplete"
-        ? "block"
-        : decide({
-            tool,
-            findings: aggregate.findings,
-            cisa: cisaPolicy.gate ? cisa : undefined,
-            degraded,
-            secretScan: { detected: secretScan.detected, blocked: false },
-          });
-
-    const completedAt = new Date().toISOString();
-    const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
-      decision,
-      completion: budgetBeforeJudge.completion,
-      executionBudget: budgetBeforeJudge.executionBudget,
-      requestFingerprint,
-      degraded,
-      agentsUsed,
-      reviewMode,
-      coverage,
-      ...(verificationMode ? { verificationMode } : {}),
-      findings: aggregate.findings,
-      cisaSecureByDesign: cisa,
-      disagreements: aggregate.disagreements,
-      testsToAdd: selectRegressionTests(aggregate.testsToAdd),
-      residualRisks:
-        tool === "security_review" && aggregate.residualRisks.length === 0
-          ? [
-              "No residual risks were reported by completed agents; verify security assumptions before release.",
-            ]
-          : aggregate.residualRisks,
-      openQuestions: Array.from(
-        new Set([
-          ...aggregate.openQuestions,
-          ...buildAdmissionOpenQuestions(aggregate.findings),
-        ]),
-      ),
-      agentOpinions: normalizedAgentResults.map((result) =>
-        agentOpinionSummary(
-          result,
-          request.options?.includeAgentRawOutputs === true,
-        ),
-      ),
-      audit: {
+      await trace.write({
+        type: "aggregation_completed",
         traceId,
-        startedAt,
-        completedAt,
+        findingCount: aggregate.findings.length,
+        timestamp: new Date().toISOString(),
+      });
+      completePhase("aggregation");
+
+      const verificationMode =
+        loaded.config.verification.enabled && reviewMode === "single_agent"
+          ? "skipped_single_agent"
+          : loaded.config.verification.enabled && enabledAgents.length > 1
+            ? "cross_agent"
+            : undefined;
+      if (verificationMode === "cross_agent") {
+        startPhase("verification");
+        warnings.push(
+          ...(await runFindingVerification({
+            tool,
+            request: built.request,
+            config: loaded.config,
+            traceId,
+            workspaceDir: snapshot.root,
+            networkMode,
+            manager,
+            trace,
+            findings: aggregate.findings,
+            budgetTracker,
+            signal: options.signal,
+          })),
+        );
+        completePhase("verification");
+      } else {
+        skipPhase(
+          "verification",
+          verificationMode === "skipped_single_agent"
+            ? "single_agent_review"
+            : "verification_disabled",
+        );
+      }
+
+      aggregate = {
+        ...aggregate,
+        findings: admitFindings({
+          tool,
+          request: built.request,
+          findings: aggregate.findings,
+          reviewMode,
+        }),
+      };
+
+      if (
+        aggregate.findings.some((finding) => finding.disposition === "disputed")
+      ) {
+        budgetTracker.markIncomplete("disputed_finding");
+      }
+
+      const cisaPolicy = loaded.config.securityReview.cisaSecureByDesign;
+      const cisa =
+        tool === "security_review" && cisaPolicy.enabled
+          ? computeCisaGate(
+              aggregate.findings,
+              normalizedAgentResults,
+              cisaPolicy,
+            )
+          : undefined;
+      const budgetBeforeJudge = budgetTracker.snapshot();
+      const decision =
+        budgetBeforeJudge.completion.status === "incomplete"
+          ? "block"
+          : decide({
+              tool,
+              findings: aggregate.findings,
+              cisa: cisaPolicy.gate ? cisa : undefined,
+              degraded,
+              secretScan: { detected: secretScan.detected, blocked: false },
+            });
+
+      const completedAt = new Date().toISOString();
+      const resultWithoutMarkdown: Omit<KyosoResult, "summaryMarkdown"> = {
+        decision,
+        completion: budgetBeforeJudge.completion,
+        executionBudget: budgetBeforeJudge.executionBudget,
+        requestFingerprint,
+        degraded,
         agentsUsed,
-        redactionsApplied: secretScan.redactions,
-        networkMode,
-        workspaceMode: "temp_snapshot",
-        configHash: loaded.configHash,
-        warnings: Array.from(new Set([...warnings, ...trace.warnings])),
-        modelCalls: budgetBeforeJudge.modelCalls,
-      },
-    };
-    const summaryText = defaultSummaryText(resultWithoutMarkdown);
-    const judge = await runBudgetedJudge({
-      tool,
-      result: resultWithoutMarkdown,
-      summaryText,
-      agentFindings: buildJudgeAgentFindings(normalizedAgentResults),
-      config: loaded.config.judge,
-      requestedProvider: request.options?.judgeProvider,
-      env: options.env ?? process.env,
-      budgetTracker,
-      trace,
-      traceId,
-    });
-    const judgeComments = new Map(
-      judge.output.disagreementComments.map((comment) => [
-        comment.topic,
-        comment.judgeComment,
-      ]),
-    );
-    const disagreements = resultWithoutMarkdown.disagreements.map(
-      (disagreement) => ({
-        ...disagreement,
-        judgeComment:
-          judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
-      }),
-    );
-    const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
-    const budgetAfterJudge = budgetTracker.snapshot();
-    const finalWarnings = Array.from(
-      new Set([
-        ...(resultWithoutMarkdown.audit.warnings ?? []),
-        ...outputWarningMessages(budgetAfterJudge),
-        ...tokenUsageWarningMessages(budgetTracker, budgetAfterJudge),
-      ]),
-    );
-    const finalDecision =
-      budgetAfterJudge.completion.status === "incomplete" ? "block" : decision;
-    const resultAfterJudge: Omit<KyosoResult, "summaryMarkdown"> = {
-      ...resultWithoutMarkdown,
-      decision: finalDecision,
-      completion: budgetAfterJudge.completion,
-      executionBudget: budgetAfterJudge.executionBudget,
-      disagreements,
-      ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
-      audit: {
-        ...resultWithoutMarkdown.audit,
-        completedAt: new Date().toISOString(),
-        warnings: finalWarnings,
-        modelCalls: budgetAfterJudge.modelCalls,
-      },
-    };
-    const judgeEvent: Record<string, unknown> = {
-      type: "judge_completed",
-      traceId,
-      provider: judge.provider,
-      status: judge.status,
-      ...(judge.executionIdentity
-        ? { executionIdentity: judge.executionIdentity }
-        : {}),
-      timestamp: new Date().toISOString(),
-    };
-    if (judge.error) judgeEvent.error = judge.error;
-    await trace.write(judgeEvent);
-    resultAfterJudge.audit.completedAt = new Date().toISOString();
+        reviewMode,
+        coverage,
+        ...(verificationMode ? { verificationMode } : {}),
+        findings: aggregate.findings,
+        cisaSecureByDesign: cisa,
+        disagreements: aggregate.disagreements,
+        testsToAdd: selectRegressionTests(aggregate.testsToAdd),
+        residualRisks:
+          tool === "security_review" && aggregate.residualRisks.length === 0
+            ? [
+                "No residual risks were reported by completed agents; verify security assumptions before release.",
+              ]
+            : aggregate.residualRisks,
+        openQuestions: Array.from(
+          new Set([
+            ...aggregate.openQuestions,
+            ...buildAdmissionOpenQuestions(aggregate.findings),
+          ]),
+        ),
+        agentOpinions: normalizedAgentResults.map((result) =>
+          agentOpinionSummary(
+            result,
+            request.options?.includeAgentRawOutputs === true,
+          ),
+        ),
+        audit: {
+          traceId,
+          startedAt,
+          completedAt,
+          agentsUsed,
+          redactionsApplied: secretScan.redactions,
+          networkMode,
+          workspaceMode: "temp_snapshot",
+          configHash: loaded.configHash,
+          warnings: Array.from(new Set([...warnings, ...trace.warnings])),
+          modelCalls: budgetBeforeJudge.modelCalls,
+        },
+      };
+      const summaryText = defaultSummaryText(resultWithoutMarkdown);
+      startPhase("judge");
+      const judge = await runBudgetedJudge({
+        tool,
+        result: resultWithoutMarkdown,
+        summaryText,
+        agentFindings: buildJudgeAgentFindings(normalizedAgentResults),
+        config: loaded.config.judge,
+        requestedProvider: request.options?.judgeProvider,
+        env: options.env ?? process.env,
+        budgetTracker,
+        trace,
+        traceId,
+      });
+      completePhase("judge");
+      startPhase("finalize");
+      const judgeComments = new Map(
+        judge.output.disagreementComments.map((comment) => [
+          comment.topic,
+          comment.judgeComment,
+        ]),
+      );
+      const disagreements = resultWithoutMarkdown.disagreements.map(
+        (disagreement) => ({
+          ...disagreement,
+          judgeComment:
+            judgeComments.get(disagreement.topic) ?? disagreement.judgeComment,
+        }),
+      );
+      const crossModelAnalysis = buildCrossModelAnalysis(judge, reviewMode);
+      const budgetAfterJudge = budgetTracker.snapshot();
+      const finalWarnings = Array.from(
+        new Set([
+          ...(resultWithoutMarkdown.audit.warnings ?? []),
+          ...outputWarningMessages(budgetAfterJudge),
+          ...tokenUsageWarningMessages(budgetTracker, budgetAfterJudge),
+        ]),
+      );
+      const finalDecision =
+        budgetAfterJudge.completion.status === "incomplete"
+          ? "block"
+          : decision;
+      const resultAfterJudge: Omit<KyosoResult, "summaryMarkdown"> = {
+        ...resultWithoutMarkdown,
+        decision: finalDecision,
+        completion: budgetAfterJudge.completion,
+        executionBudget: budgetAfterJudge.executionBudget,
+        disagreements,
+        ...(crossModelAnalysis ? { crossModelAnalysis } : {}),
+        audit: {
+          ...resultWithoutMarkdown.audit,
+          completedAt: new Date().toISOString(),
+          warnings: finalWarnings,
+          modelCalls: budgetAfterJudge.modelCalls,
+        },
+      };
+      const judgeEvent: Record<string, unknown> = {
+        type: "judge_completed",
+        traceId,
+        provider: judge.provider,
+        status: judge.status,
+        ...(judge.executionIdentity
+          ? { executionIdentity: judge.executionIdentity }
+          : {}),
+        timestamp: new Date().toISOString(),
+      };
+      if (judge.error) judgeEvent.error = judge.error;
+      await trace.write(judgeEvent);
+      resultAfterJudge.audit.completedAt = new Date().toISOString();
 
-    await writeReviewBudgetCompleted({
-      trace,
-      traceId,
-      budgetTracker,
-      requestFingerprint,
-    });
+      await writeReviewBudgetCompleted({
+        trace,
+        traceId,
+        budgetTracker,
+        requestFingerprint,
+      });
 
-    await trace.write({
-      type: "decision_completed",
-      traceId,
-      decision: finalDecision,
-      timestamp: new Date().toISOString(),
-    });
-    await trace.write({
-      type: "response_sent",
-      traceId,
-      timestamp: new Date().toISOString(),
-    });
-    return await finalizeReviewResult({
-      tool,
-      trace,
-      result: resultAfterJudge,
-      summaryText:
-        resultAfterJudge.completion.status === "incomplete"
-          ? defaultSummaryText(resultAfterJudge)
-          : judge.output.summaryText,
-    });
-  } finally {
-    await trace.finalize();
-    if (snapshot) await cleanupSnapshot(snapshot.root);
+      await trace.write({
+        type: "decision_completed",
+        traceId,
+        decision: finalDecision,
+        timestamp: new Date().toISOString(),
+      });
+      await trace.write({
+        type: "response_sent",
+        traceId,
+        timestamp: new Date().toISOString(),
+      });
+      completePhase("finalize");
+      await reportReviewCompleted(resultAfterJudge);
+      return await finalizeReviewResult({
+        tool,
+        trace,
+        result: resultAfterJudge,
+        summaryText:
+          resultAfterJudge.completion.status === "incomplete"
+            ? defaultSummaryText(resultAfterJudge)
+            : judge.output.summaryText,
+      });
+    } catch (error) {
+      await reportReviewFailure(error, trace);
+      throw error;
+    } finally {
+      await trace.finalize();
+      if (snapshot) await cleanupSnapshot(snapshot.root);
+    }
+  } catch (error) {
+    await reportReviewFailure(error, activeTrace);
+    throw error;
   }
+}
+
+function durationMsBetween(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+): number {
+  if (!startedAt || !completedAt) return 0;
+  const start = Date.parse(startedAt);
+  const end = Date.parse(completedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, end - start);
 }
 
 async function runFindingVerification(input: {
@@ -824,6 +1041,7 @@ async function runFindingVerification(input: {
   trace: { write(event: Record<string, unknown>): Promise<void> };
   findings: KyosoFinding[];
   budgetTracker: ReviewBudgetTracker;
+  signal?: AbortSignal;
 }): Promise<string[]> {
   // Phase 1: allowDemotion is intentionally a no-op. Verification may adjust
   // confidence and notes, but it never changes severity or decision.
@@ -1037,6 +1255,7 @@ async function runFindingVerification(input: {
     warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
     maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
     networkMode: input.networkMode,
+    signal: input.signal,
     onStarted: (executionIdentity?: ModelExecutionIdentity) => {
       input.budgetTracker.markStarted(group.reservation, executionIdentity);
       const event = buildAgentStartedEvent({
@@ -1059,6 +1278,7 @@ async function runFindingVerification(input: {
   try {
     results = await input.manager.runAll(agentInputs);
   } catch (error) {
+    if (error instanceof KyosoCancellationError) throw error;
     for (const group of scheduledGroups) {
       applyVerificationVerdicts(group.targets, group.verifier, undefined);
       await finalizeModelCallResult({
@@ -1349,6 +1569,9 @@ async function runAgents(input: {
   trace: { write(event: Record<string, unknown>): Promise<void> };
   warnings: string[];
   budgetTracker: ReviewBudgetTracker;
+  progressDispatcher: ProgressDispatcher;
+  signal?: AbortSignal;
+  progressHeartbeatMs?: number;
 }): Promise<AgentRunResult[]> {
   const agentRoles = resolveAgentRoles(input.config);
   const enabledAgents = (["codex", "claude"] as const).filter(
@@ -1500,14 +1723,33 @@ async function runAgents(input: {
       warnOutputBytes: input.budgetTracker.budget.effectiveWarnAgentOutputBytes,
       maxOutputBytes: input.budgetTracker.budget.maxAgentOutputBytes,
       networkMode: input.networkMode,
+      signal: input.signal,
+      heartbeatMs: input.progressHeartbeatMs,
+      ...(agent === "codex" &&
+      input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER &&
+      openRouter.streamIdleTimeoutMs !== undefined
+        ? { streamIdleTimeoutMs: openRouter.streamIdleTimeoutMs }
+        : {}),
       onStarted: (executionIdentity?: ModelExecutionIdentity) => {
         input.budgetTracker.markStarted(reservation, executionIdentity);
         if (!acceptingStartedEvents) return Promise.resolve();
+        const progressExecutionIdentity =
+          input.budgetTracker.executionIdentity(reservation);
+        input.progressDispatcher.emit({
+          type: "agent_started",
+          traceId: input.traceId,
+          agent,
+          role,
+          ...(progressExecutionIdentity
+            ? { executionIdentity: progressExecutionIdentity }
+            : {}),
+          timestamp: new Date().toISOString(),
+        });
         const event = buildAgentStartedEvent({
           traceId: input.traceId,
           agent,
           role,
-          executionIdentity: input.budgetTracker.executionIdentity(reservation),
+          executionIdentity: progressExecutionIdentity,
         });
         const write = (async () => {
           try {
@@ -1523,6 +1765,8 @@ async function runAgents(input: {
       },
       onProgress: (event: AgentProgressEvent) => {
         if (!acceptingStartedEvents) return;
+        input.progressDispatcher.emit({ ...event, traceId: input.traceId });
+        if (event.type !== "agent_retrying") return;
         if (emittedRetryProgressEvents >= MAX_AGENT_RETRY_PROGRESS_EVENTS) {
           if (!retryProgressLimitWarned) {
             retryProgressLimitWarned = true;
@@ -1555,6 +1799,7 @@ async function runAgents(input: {
   try {
     results = await input.manager.runAll(agentInputs);
   } catch (error) {
+    if (error instanceof KyosoCancellationError) throw error;
     const detail = sanitizeTextForDisplay(
       error instanceof Error ? error.message : String(error),
     );
@@ -1615,6 +1860,20 @@ async function runAgents(input: {
     if (result.status !== "completed") {
       input.budgetTracker.markIncomplete("coverage_incomplete");
     }
+    input.progressDispatcher.emit({
+      type: "agent_completed",
+      traceId: input.traceId,
+      agent: result.agent,
+      status: result.status,
+      durationMs: durationMsBetween(result.startedAt, result.completedAt),
+      ...(result.outputBytes === undefined
+        ? {}
+        : { outputBytes: result.outputBytes }),
+      ...(result.observedStreamRetries === undefined
+        ? {}
+        : { observedStreamRetries: result.observedStreamRetries }),
+      timestamp: new Date().toISOString(),
+    });
   }
   await Promise.all(
     normalizedResults.map((result) => {

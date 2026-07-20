@@ -3,6 +3,7 @@ import type {
   AgentRunResult,
   NormalizedAgentOpinion,
 } from "../core/types.js";
+import { throwIfAborted } from "../core/errors.js";
 import { BaseAcpAgentManager } from "./AcpAgentManager.js";
 
 export type FakeAgentScenario =
@@ -48,6 +49,7 @@ export class FakeAgentManager extends BaseAcpAgentManager {
   }
 
   async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+    throwIfAborted(input.signal);
     this.calls.push(input);
     const startedAt = new Date().toISOString();
     if (input.role === "finding_verifier") {

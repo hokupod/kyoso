@@ -261,16 +261,32 @@ export type CrossModelAnalysis = {
   provider: string;
 };
 
-export type AgentProgressEvent = {
-  type: "agent_retrying";
-  agent: AgentName;
-  observedRetry: number;
-  attempt?: number;
-  maxRetries?: number;
-  reason: string;
-  discardedMessageBytes: number;
-  timestamp: string;
-};
+export type AgentProgressEvent =
+  | {
+      type: "agent_retrying";
+      agent: AgentName;
+      observedRetry: number;
+      attempt?: number;
+      maxRetries?: number;
+      reason: string;
+      discardedMessageBytes: number;
+      timestamp: string;
+    }
+  | {
+      type: "agent_activity";
+      agent: AgentName;
+      activity: "message" | "thought" | "protocol";
+      totalOutputBytes: number;
+      timestamp: string;
+    }
+  | {
+      type: "agent_waiting";
+      agent: AgentName;
+      elapsedMs: number;
+      sinceLastAcpUpdateMs: number;
+      streamIdleTimeoutMs?: number;
+      timestamp: string;
+    };
 
 export type AgentRunInput = {
   traceId: string;
@@ -284,6 +300,9 @@ export type AgentRunInput = {
   warnOutputBytes?: number;
   maxOutputBytes?: number;
   networkMode: NetworkMode;
+  signal?: AbortSignal;
+  heartbeatMs?: number;
+  streamIdleTimeoutMs?: number;
   // Called once after the agent process has actually started. Preflight failures
   // and spawn failures must not invoke this callback. Managers await a returned
   // promise before settling a started agent result.

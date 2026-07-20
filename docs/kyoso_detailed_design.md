@@ -375,11 +375,17 @@ Options:
 --constraint <text>          # repeatable
 --json
 --markdown
+--progress auto|plain|jsonl|off
 --network model_only|unrestricted
 --set <key>=<value>         # repeatable
 ```
 
 `--set` is available on `plan`, `security`, and `diff`.
+
+`--progress` controls review-only progress output. `auto` is plain output only
+when stderr is a TTY; `plain` forces `[mm:ss]` lines, `jsonl` writes one typed
+event per stderr line, and `off` disables progress. Final Markdown or JSON is
+always stdout, while progress and errors are stderr.
 
 ### 6.4 `kyoso security`
 
@@ -993,6 +999,34 @@ All three MCP tools use the same pipeline.
 - If judge LLM fails: use deterministic fallback.
 - If a model-call reservation, deadline, output limit, verification coverage, or disputed verification makes the review incomplete: return a normal `block` result with `completion.retryable = false`; this block describes incomplete review coverage rather than a proven code defect.
 - If audit write fails: continue but include warning in result audit metadata.
+
+### 11.2 Progress and cancellation
+
+`runReview` exposes a typed `ReviewProgressEvent` sink rather than presentation
+strings. Events cover review start/end, phase start/completion/skip, primary
+agent lifecycle, throttled message/thought byte activity, ACP waiting state,
+and observed stream retries. They must not contain prompts, selected-file
+contents, diffs, model message/thought text, credentials, child stderr, raw
+error bodies, or snapshot paths.
+
+Progress delivery uses a bounded queue (128 events by default), serial delivery,
+coalescing for adjacent activity/waiting events from one agent, and a two-second
+per-sink timeout. Sink failures disable only that sink, record a sanitized
+`PROGRESS_DELIVERY_FAILED` warning and trace event, and never change review
+execution or its result.
+
+The CLI adapts these events to stderr. JSON/Markdown result stdout remains
+strictly free of progress lines. A heartbeat reports only that the process is
+alive and how long it has been since the last ACP update; it does not claim that
+the model is making progress.
+
+CLI SIGINT creates a `KyosoCancellationError` (`REQUEST_CANCELLED`). The signal
+is checked at phase boundaries and reaches primary and verifier ACP subprocesses.
+After a session exists, Kyoso best-effort sends `session/cancel`, terminates the
+child with the existing TERM-to-KILL escalation, clears heartbeat timers, removes
+the temporary snapshot, and exits 130. Cancellation is propagated rather than
+converted into a degraded review result. Judge-signal propagation and MCP
+progress notifications remain a later integration phase.
 
 ---
 

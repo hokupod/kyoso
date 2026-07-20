@@ -17,6 +17,10 @@ if (process.env.FAKE_ACP_PID_FILE) {
   writeFileSync(process.env.FAKE_ACP_PID_FILE, String(process.pid));
 }
 
+if (mode === "hang_ignore_sigterm") {
+  process.on("SIGTERM", () => undefined);
+}
+
 if (mode === "crash") {
   console.error("auth failed: fake ACP crash");
   process.exit(1);
@@ -86,7 +90,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       });
     };
 
-    if (mode === "hang") {
+    if (mode === "hang" || mode === "hang_ignore_sigterm") {
       await new Promise(() => {});
     }
 

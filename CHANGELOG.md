@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixed provider preset without changing omitted Codex runtime defaults.
 - Record observed ACP stream retries, discarded retry-message bytes, and ACP
   output timestamps in model-call audit records and JSONL trace events.
+- Add typed core review-progress events, bounded non-blocking progress delivery,
+  CLI stderr renderers (`auto`, `plain`, `jsonl`, and `off`), and graceful
+  SIGINT cancellation through primary and verifier ACP subprocesses.
 
 ### Fixed
 

@@ -10,6 +10,7 @@ import {
   kyosoConfigSchema,
   type KyosoConfig,
 } from "../../src/config/schema.js";
+import { KyosoCancellationError } from "../../src/core/errors.js";
 import type {
   AgentName,
   AgentProgressEvent,
@@ -135,8 +136,14 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.discardedRetryMessageBytes).toBe(
       Buffer.byteLength(partial, "utf8"),
     );
-    expect(progress).toHaveLength(1);
-    expect(progress[0]).toMatchObject({
+    const retries = progress.filter(
+      (
+        event,
+      ): event is Extract<AgentProgressEvent, { type: "agent_retrying" }> =>
+        event.type === "agent_retrying",
+    );
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatchObject({
       type: "agent_retrying",
       agent: "codex",
       observedRetry: 1,
@@ -176,7 +183,16 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
       Buffer.byteLength(firstPartial, "utf8") +
         Buffer.byteLength(secondPartial, "utf8"),
     );
-    expect(progress.map((event) => event.observedRetry)).toEqual([1, 2]);
+    expect(
+      progress
+        .filter(
+          (
+            event,
+          ): event is Extract<AgentProgressEvent, { type: "agent_retrying" }> =>
+            event.type === "agent_retrying",
+        )
+        .map((event) => event.observedRetry),
+    ).toEqual([1, 2]);
   });
 
   test("uses an unknown-phase final retry epoch as a fallback", async () => {
@@ -613,6 +629,37 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     });
     await Bun.sleep(1_000);
     expect(isProcessAlive(pid)).toBe(false);
+  });
+
+  test("cancels a hung ACP session and terminates its child process", async () => {
+    const cwd = await fakeWorkspace();
+    const pidPath = join(cwd, "cancelled-agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("hang", { FAKE_ACP_PID_FILE: pidPath }),
+    );
+    const controller = new AbortController();
+    const progress: AgentProgressEvent[] = [];
+    const result = manager.runAgent(
+      agentInput(cwd, {
+        signal: controller.signal,
+        heartbeatMs: 10,
+        onProgress: (event) => {
+          progress.push(event);
+        },
+      }),
+    );
+
+    await waitFor(() => existsSync(pidPath));
+    await waitFor(() =>
+      progress.some((event) => event.type === "agent_waiting"),
+    );
+    controller.abort(new KyosoCancellationError("test cancellation"));
+
+    await expect(result).rejects.toMatchObject({ code: "REQUEST_CANCELLED" });
+    const pid = Number(await readFile(pidPath, "utf8"));
+    await Bun.sleep(250);
+    expect(isProcessAlive(pid)).toBe(false);
+    expect(progress.some((event) => event.type === "agent_waiting")).toBe(true);
   });
 });
 

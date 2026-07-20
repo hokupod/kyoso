@@ -1,5 +1,11 @@
 export { defineConfig } from "./config/defineConfig.js";
 export { runReview } from "./core/runReview.js";
+export { KyosoCancellationError } from "./core/errors.js";
+export type {
+  ReviewPhase,
+  ReviewProgressEvent,
+  ReviewProgressSink,
+} from "./core/progress.js";
 export type {
   ChangeRelation,
   CisaSecureByDesignResult,

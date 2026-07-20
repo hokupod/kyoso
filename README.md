@@ -168,6 +168,26 @@ kyoso setup codex --write --skill-only
 kyoso setup claude-code --write --skill-only
 ```
 
+### Progress and cancellation
+
+Review results always use stdout: Markdown by default and JSON with `--json`.
+Progress and errors use stderr, so structured output remains pipe-safe.
+
+```bash
+kyoso plan --goal "Review this plan" --plan plan.md --json --progress jsonl \
+  >result.json 2>progress.jsonl
+```
+
+`--progress auto|plain|jsonl|off` defaults to `auto`: it shows plain,
+line-oriented progress only when stderr is a TTY. Use `plain` to force
+human-readable stderr output, `jsonl` for one typed event per stderr line, or
+`off` to suppress progress. Progress never includes prompts, selected-file
+contents, diffs, or model message/thought text.
+
+Press Ctrl-C once to request graceful cancellation of the review and its ACP
+child agents; Kyoso exits with status 130 after cleanup. Press it a second time
+to force immediate exit.
+
 ## Usage Examples
 
 Review an implementation plan with selected code:

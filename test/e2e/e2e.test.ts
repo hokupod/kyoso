@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ describe("e2e surfaces", () => {
     expect(stdout.match(/\[--set <key>=<value>\]\.\.\./g)).toHaveLength(3);
     expect(stdout.match(/\[--focus <lens>\]\.\.\./g)).toHaveLength(3);
     expect(stdout).toContain(
-      "[--set <key>=<value>]... [--json] [--allow-secret-redaction]",
+      "[--set <key>=<value>]... [--json] [--progress auto|plain|jsonl|off] [--allow-secret-redaction]",
     );
     expect(stdout).toContain(
       "setup codex|claude-code --skill-only [--write] [--global] [--force]",
@@ -73,6 +74,191 @@ describe("e2e surfaces", () => {
     expect(exitCode).toBe(0);
     expect(result.coverage.requiredLenses).toEqual(
       expect.arrayContaining(["performance", "documentation"]),
+    );
+  });
+
+  test("CLI keeps JSON stdout valid while plain progress uses stderr", async () => {
+    const { stdout, stderr, exitCode } = await runProgressReview("plain", true);
+
+    expect(exitCode).toBe(0);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(stdout).not.toContain("[00:");
+    expect(stderr).toContain("Kyoso review started");
+  });
+
+  test("CLI off progress leaves stderr empty", async () => {
+    const { stdout, stderr, exitCode } = await runProgressReview("off", true);
+
+    expect(exitCode).toBe(0);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(stderr).toBe("");
+  });
+
+  test("CLI JSONL progress writes parseable events to stderr", async () => {
+    const { stdout, stderr, exitCode } = await runProgressReview("jsonl", true);
+    const events = stderr
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type?: string });
+
+    expect(exitCode).toBe(0);
+    expect(() => JSON.parse(stdout)).not.toThrow();
+    expect(events[0]?.type).toBe("review_started");
+    expect(events.at(-1)?.type).toBe("review_completed");
+  });
+
+  test("CLI never mixes plain progress into Markdown stdout", async () => {
+    const { stdout, stderr, exitCode } = await runProgressReview(
+      "plain",
+      false,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toMatch(/^\[\d{2}:\d{2}\]/m);
+    expect(stderr).toContain("Kyoso review started");
+  });
+
+  test("CLI SIGINT exits 130 after cancelling an in-flight review", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-progress-sigint-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-progress-sigint-home-"));
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const pidPath = join(cwd, "sigint-agent.pid");
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+
+[agents.codex.env]
+FAKE_ACP_MODE = "hang_ignore_sigterm"
+FAKE_ACP_PID_FILE = ${JSON.stringify(pidPath)}
+
+[agents.claude]
+enabled = false
+`,
+      "utf8",
+    );
+    const proc = spawn(
+      "bun",
+      [
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "cancel review",
+        "--json",
+        "--progress",
+        "plain",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_STATE_HOME: join(home, "state"),
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+        },
+      },
+    );
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const exit = new Promise<number | null>((resolve) => {
+      proc.once("close", (code) => resolve(code));
+    });
+
+    await waitForCondition(
+      () => stderr.includes("Primary reviewers started: codex"),
+      5_000,
+    );
+    await waitForCondition(() => existsSync(pidPath), 5_000);
+    proc.kill("SIGINT");
+
+    expect(await exit).toBe(130);
+    const pid = Number(await readFile(pidPath, "utf8"));
+    expect(isProcessAlive(pid)).toBe(false);
+    expect(stderr).toContain(
+      "Cancelling... (press Ctrl-C again to force quit)",
+    );
+    expect(stderr).toContain("Review cancelled.");
+  });
+
+  test("CLI JSONL progress keeps stderr parseable while cancelling", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-progress-jsonl-sigint-"));
+    const home = await mkdtemp(
+      join(tmpdir(), "kyoso-progress-jsonl-sigint-home-"),
+    );
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const pidPath = join(cwd, "jsonl-sigint-agent.pid");
+    await mkdir(join(home, ".config", "kyoso"), { recursive: true });
+    await writeFile(
+      join(home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+command = "bun"
+args = ["run", ${JSON.stringify(fixture)}]
+timeoutMs = 5000
+
+[agents.codex.env]
+FAKE_ACP_MODE = "hang"
+FAKE_ACP_PID_FILE = ${JSON.stringify(pidPath)}
+
+[agents.claude]
+enabled = false
+`,
+      "utf8",
+    );
+    const proc = spawn(
+      "bun",
+      [
+        join(process.cwd(), "src/cli/main.ts"),
+        "plan",
+        "--goal",
+        "cancel JSONL review",
+        "--json",
+        "--progress",
+        "jsonl",
+      ],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          HOME: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_STATE_HOME: join(home, "state"),
+          OPENAI_API_KEY: "",
+          CODEX_API_KEY: "",
+          ANTHROPIC_API_KEY: "",
+        },
+      },
+    );
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const exit = new Promise<number | null>((resolve) => {
+      proc.once("close", (code) => resolve(code));
+    });
+
+    await waitForCondition(() => existsSync(pidPath), 5_000);
+    await waitForCondition(
+      () => stderr.includes('"type":"agent_started"'),
+      5_000,
+    );
+    proc.kill("SIGINT");
+
+    expect(await exit).toBe(130);
+    const lines = stderr.split("\n").filter((line) => line.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+    expect(lines.map((line) => JSON.parse(line).type)).toContain(
+      "review_cancelled",
     );
   });
 
@@ -910,6 +1096,69 @@ function writeJson(
   message: Record<string, unknown>,
 ): void {
   proc.stdin.write(`${JSON.stringify(message)}\n`);
+}
+
+async function runProgressReview(
+  progress: "plain" | "off" | "jsonl",
+  json: boolean,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const cwd = await mkdtemp(join(tmpdir(), "kyoso-progress-cli-"));
+  const home = await mkdtemp(join(tmpdir(), "kyoso-progress-home-"));
+  const proc = Bun.spawn(
+    [
+      "bun",
+      "run",
+      join(process.cwd(), "src/cli/main.ts"),
+      "plan",
+      "--goal",
+      "review progress",
+      "--ignore-config",
+      "--progress",
+      progress,
+      ...(json ? ["--json"] : []),
+    ],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_STATE_HOME: join(home, "state"),
+        OPENAI_API_KEY: "",
+        CODEX_API_KEY: "",
+        ANTHROPIC_API_KEY: "",
+        KYOSO_TEST_FAKE_AGENTS: "1",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { stdout, stderr, exitCode };
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const attempts = Math.ceil(timeoutMs / 10);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (condition()) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForResponse(

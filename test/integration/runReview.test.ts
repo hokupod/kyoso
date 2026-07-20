@@ -14,6 +14,8 @@ import {
   type KyosoConfig,
   kyosoConfigSchema,
 } from "../../src/config/schema.js";
+import { KyosoCancellationError } from "../../src/core/errors.js";
+import type { ReviewProgressEvent } from "../../src/core/progress.js";
 import { runReview } from "../../src/core/runReview.js";
 import type {
   AgentRunInput,
@@ -84,6 +86,231 @@ describe("runReview", () => {
     expect(manager.calls).toHaveLength(1);
     expect(manager.calls[0]?.agent).toBe("codex");
     expect(manager.calls[0]?.timeoutMs).toBe(1_234);
+  });
+
+  test("emits ordered review progress phases through a collecting sink", async () => {
+    const progress: ReviewProgressEvent[] = [];
+
+    await runReview(
+      "plan_review",
+      { goal: "review progress" },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("codex"),
+        agentManager: new FakeAgentManager(),
+        onProgress: (event) => {
+          progress.push(event);
+        },
+      },
+    );
+
+    expect(progress[0]?.type).toBe("review_started");
+    expect(progress.at(-1)?.type).toBe("review_completed");
+    for (const [index, event] of progress.entries()) {
+      if (event.type !== "phase_started") continue;
+      expect(
+        progress
+          .slice(index + 1)
+          .some(
+            (next) =>
+              next.type === "phase_completed" && next.phase === event.phase,
+          ),
+      ).toBe(true);
+    }
+  });
+
+  test("continues when progress delivery fails and records the warning", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("codex");
+    const result = await runReview(
+      "plan_review",
+      { goal: "review progress failure" },
+      {
+        cwd,
+        config,
+        agentManager: new FakeAgentManager(),
+        onProgress: () => {
+          throw new Error("progress write failed");
+        },
+      },
+    );
+    const events = await readTraceEvents(cwd, config, result);
+
+    expect(result.decision).toBeDefined();
+    expect(result.audit.warnings).toContain(
+      "PROGRESS_DELIVERY_FAILED: Progress sink threw while handling an event.",
+    );
+    expect(
+      events.some((event) => event.type === "progress_delivery_failed"),
+    ).toBe(true);
+  });
+
+  test("propagates a pre-aborted signal as cancellation without starting fake agents", async () => {
+    const controller = new AbortController();
+    const manager = new FakeAgentManager();
+    const progress: ReviewProgressEvent[] = [];
+    controller.abort(new KyosoCancellationError("cancel before review"));
+
+    await expect(
+      runReview(
+        "plan_review",
+        { goal: "cancelled" },
+        {
+          cwd: await tempCwd(),
+          config: singleAgentConfig("codex"),
+          agentManager: manager,
+          signal: controller.signal,
+          onProgress: (event) => {
+            progress.push(event);
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(KyosoCancellationError);
+
+    expect(manager.calls).toHaveLength(0);
+    expect(progress.map((event) => event.type)).toEqual([
+      "review_started",
+      "review_cancelled",
+    ]);
+  });
+
+  test("does not convert an in-flight primary cancellation into degraded success", async () => {
+    const controller = new AbortController();
+    let started = false;
+    const manager = {
+      async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+        started = true;
+        await input.onStarted?.();
+        return new Promise<AgentRunResult>((_resolve, reject) => {
+          input.signal?.addEventListener(
+            "abort",
+            () => reject(new KyosoCancellationError("cancel during primary")),
+            { once: true },
+          );
+        });
+      },
+      async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+        return Promise.all(inputs.map((input) => manager.runAgent(input)));
+      },
+    };
+    const result = runReview(
+      "plan_review",
+      { goal: "cancel during primary" },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("codex"),
+        agentManager: manager,
+        signal: controller.signal,
+      },
+    );
+
+    await waitFor(() => started);
+    controller.abort(new KyosoCancellationError("cancel during primary"));
+
+    await expect(result).rejects.toBeInstanceOf(KyosoCancellationError);
+  });
+
+  test("propagates cancellation through a running finding verifier", async () => {
+    const controller = new AbortController();
+    const baseConfig = kyosoConfigSchema.parse(defaultConfig);
+    const config: KyosoConfig = {
+      ...baseConfig,
+      verification: { ...baseConfig.verification, enabled: true },
+    };
+    const primaryManager = verificationAgentManager({
+      codexFindings: [highFinding()],
+      claudeFindings: [],
+    });
+    let verifierStarted = false;
+    const manager = {
+      async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+        if (input.role !== "finding_verifier") {
+          return primaryManager.runAgent(input);
+        }
+        verifierStarted = true;
+        await input.onStarted?.();
+        return new Promise<AgentRunResult>((_resolve, reject) => {
+          input.signal?.addEventListener(
+            "abort",
+            () =>
+              reject(new KyosoCancellationError("cancel during verification")),
+            { once: true },
+          );
+        });
+      },
+      async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+        return Promise.all(inputs.map((input) => manager.runAgent(input)));
+      },
+    };
+    const result = runReview(
+      "plan_review",
+      { goal: "cancel during verification", currentPlan: "do it" },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: manager,
+        signal: controller.signal,
+      },
+    );
+
+    await waitFor(() => verifierStarted);
+    controller.abort(new KyosoCancellationError("cancel during verification"));
+
+    await expect(result).rejects.toBeInstanceOf(KyosoCancellationError);
+  });
+
+  test("cancels a hanging ACP child and cleans up its snapshot", async () => {
+    const cwd = await tempCwd();
+    const pidPath = join(cwd, "cancelled-acp.pid");
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          env: {
+            FAKE_ACP_MODE: "hang",
+            FAKE_ACP_PID_FILE: pidPath,
+          },
+        },
+      },
+    };
+    const acpManager = new SubprocessAcpAgentManager(config);
+    let snapshotDir = "";
+    const manager = {
+      async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
+        snapshotDir = input.workspaceDir;
+        return acpManager.runAgent(input);
+      },
+      async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
+        return Promise.all(inputs.map((input) => manager.runAgent(input)));
+      },
+    };
+    const controller = new AbortController();
+    const result = runReview(
+      "plan_review",
+      { goal: "cancel ACP child", options: { maxAgentTimeoutMs: 5_000 } },
+      {
+        cwd,
+        config,
+        agentManager: manager,
+        signal: controller.signal,
+      },
+    );
+
+    await waitFor(() => existsSync(pidPath));
+    controller.abort(new KyosoCancellationError("cancel ACP child"));
+
+    await expect(result).rejects.toBeInstanceOf(KyosoCancellationError);
+    const pid = Number(await readFile(pidPath, "utf8"));
+    await Bun.sleep(250);
+    expect(isProcessAlive(pid)).toBe(false);
+    expect(snapshotDir).not.toBe("");
+    expect(existsSync(snapshotDir)).toBe(false);
   });
 
   test("rejects a user-global disabled tool before agent execution", async () => {
@@ -3550,4 +3777,12 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("Timed out waiting for condition");
 }

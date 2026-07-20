@@ -26,6 +26,7 @@ import { DEFAULT_AGENT_TIMEOUT_MS } from "./constants.js";
 import { KyosoRequestError } from "./errors.js";
 import type {
   AgentName,
+  AgentProgressEvent,
   AgentRunResult,
   AgentRole,
   CisaSecureByDesignResult,
@@ -95,6 +96,8 @@ import {
   parseVerificationVerdicts,
   selectVerificationTargets,
 } from "./verification.js";
+
+const MAX_AGENT_RETRY_PROGRESS_EVENTS = 100;
 
 export type RunReviewOptions = LoadConfigOptions & {
   config?: KyosoConfig;
@@ -1471,6 +1474,8 @@ async function runAgents(input: {
   const agentInputs = enabledAgents.map((agent) => {
     const agentConfig = input.config.agents[agent];
     const role = agentRoles[agent] ?? agentConfig.role;
+    let emittedRetryProgressEvents = 0;
+    let retryProgressLimitWarned = false;
     const reservation = reservations.get(agent);
     if (!reservation) {
       throw new Error(`Missing primary budget reservation for ${agent}.`);
@@ -1515,6 +1520,33 @@ async function runAgents(input: {
         })();
         startedWrites.push(write);
         return write;
+      },
+      onProgress: (event: AgentProgressEvent) => {
+        if (!acceptingStartedEvents) return;
+        if (emittedRetryProgressEvents >= MAX_AGENT_RETRY_PROGRESS_EVENTS) {
+          if (!retryProgressLimitWarned) {
+            retryProgressLimitWarned = true;
+            input.warnings.push(
+              `AGENT_RETRY_PROGRESS_LIMIT: ${agent} emitted more than ${MAX_AGENT_RETRY_PROGRESS_EVENTS} retry progress events; later events were omitted from the audit trace.`,
+            );
+          }
+          return;
+        }
+        emittedRetryProgressEvents += 1;
+        const write = (async () => {
+          try {
+            await input.trace.write({
+              ...event,
+              traceId: input.traceId,
+              type: "agent_retrying",
+            });
+          } catch {
+            input.warnings.push(
+              "AUDIT_WRITE_FAILED: agent_retrying event could not be recorded.",
+            );
+          }
+        })();
+        startedWrites.push(write);
       },
     };
   });
@@ -1707,6 +1739,20 @@ async function finalizeModelCallResult(input: {
     ...(thoughtBytes === undefined ? {} : { thoughtBytes }),
     ...(outputBytes === undefined ? {} : { outputBytes }),
     ...(outputWarningTriggered === undefined ? {} : { outputWarningTriggered }),
+    ...(input.result.observedStreamRetries === undefined
+      ? {}
+      : { observedStreamRetries: input.result.observedStreamRetries }),
+    ...(input.result.discardedRetryMessageBytes === undefined
+      ? {}
+      : {
+          discardedRetryMessageBytes: input.result.discardedRetryMessageBytes,
+        }),
+    ...(input.result.firstOutputAt === undefined
+      ? {}
+      : { firstOutputAt: input.result.firstOutputAt }),
+    ...(input.result.lastAcpUpdateAt === undefined
+      ? {}
+      : { lastAcpUpdateAt: input.result.lastAcpUpdateAt }),
     ...(input.result.salvaged === undefined
       ? {}
       : { salvaged: input.result.salvaged }),
@@ -1761,6 +1807,20 @@ async function finalizeModelCallResult(input: {
     ...(thoughtBytes === undefined ? {} : { thoughtBytes }),
     ...(outputBytes === undefined ? {} : { outputBytes }),
     ...(outputWarningTriggered === undefined ? {} : { outputWarningTriggered }),
+    ...(input.result.observedStreamRetries === undefined
+      ? {}
+      : { observedStreamRetries: input.result.observedStreamRetries }),
+    ...(input.result.discardedRetryMessageBytes === undefined
+      ? {}
+      : {
+          discardedRetryMessageBytes: input.result.discardedRetryMessageBytes,
+        }),
+    ...(input.result.firstOutputAt === undefined
+      ? {}
+      : { firstOutputAt: input.result.firstOutputAt }),
+    ...(input.result.lastAcpUpdateAt === undefined
+      ? {}
+      : { lastAcpUpdateAt: input.result.lastAcpUpdateAt }),
     ...(input.result.salvaged === undefined
       ? {}
       : { salvaged: input.result.salvaged }),

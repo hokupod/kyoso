@@ -61,6 +61,31 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     return { configOptions: [] };
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
+    const notifyMessageChunk = async (
+      text: string,
+      messageId: string,
+      phase?: "commentary" | "final_answer",
+    ): Promise<void> => {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId,
+          content: { type: "text", text },
+          ...(phase === undefined ? {} : { _meta: { codex: { phase } } }),
+        } as never,
+      });
+    };
+    const notifyRetry = async (message: string): Promise<void> => {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { codex: { error: { willRetry: true, message } } },
+        } as never,
+      });
+    };
+
     if (mode === "hang") {
       await new Promise(() => {});
     }
@@ -244,6 +269,44 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       residualRisks: ["fake ACP subprocess residual risk"],
       openQuestions: [],
     };
+    if (mode === "retry_partial_then_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-b",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_twice_then_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk('{"summary":"pas', "msg-b");
+      await notifyRetry("Reconnecting... 2/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-c",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_then_unknown_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(JSON.stringify(opinion), "msg-b");
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_then_overflow") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-b",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
     await ctx.client.notify(methods.client.session.update, {
       sessionId: ctx.params.sessionId,
       update: {

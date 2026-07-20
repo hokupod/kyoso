@@ -261,6 +261,17 @@ export type CrossModelAnalysis = {
   provider: string;
 };
 
+export type AgentProgressEvent = {
+  type: "agent_retrying";
+  agent: AgentName;
+  observedRetry: number;
+  attempt?: number;
+  maxRetries?: number;
+  reason: string;
+  discardedMessageBytes: number;
+  timestamp: string;
+};
+
 export type AgentRunInput = {
   traceId: string;
   agent: AgentName;
@@ -277,6 +288,8 @@ export type AgentRunInput = {
   // and spawn failures must not invoke this callback. Managers await a returned
   // promise before settling a started agent result.
   onStarted?: (executionIdentity?: ModelExecutionIdentity) => unknown;
+  // Progress notification. It may not be awaited; callers must swallow errors.
+  onProgress?: (event: AgentProgressEvent) => unknown;
 };
 
 export type AgentRunResult = {
@@ -297,6 +310,10 @@ export type AgentRunResult = {
   thoughtBytes?: number;
   outputBytes?: number;
   outputWarningTriggered?: boolean;
+  observedStreamRetries?: number;
+  discardedRetryMessageBytes?: number;
+  firstOutputAt?: string;
+  lastAcpUpdateAt?: string;
   salvaged?: boolean;
   reportedFindings?: number;
   findingsTargetExceeded?: boolean;
@@ -344,6 +361,10 @@ export type ReviewModelCallAudit = {
   thoughtBytes?: number;
   outputBytes?: number;
   outputWarningTriggered?: boolean;
+  observedStreamRetries?: number;
+  discardedRetryMessageBytes?: number;
+  firstOutputAt?: string;
+  lastAcpUpdateAt?: string;
   salvaged?: boolean;
   reportedFindings?: number;
   findingsTargetExceeded?: boolean;

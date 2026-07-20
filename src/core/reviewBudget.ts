@@ -28,6 +28,10 @@ type Reservation = {
   thoughtBytes?: number;
   outputBytes?: number;
   outputWarningTriggered?: boolean;
+  observedStreamRetries?: number;
+  discardedRetryMessageBytes?: number;
+  firstOutputAt?: string;
+  lastAcpUpdateAt?: string;
   salvaged?: boolean;
   reportedFindings?: number;
   findingsTargetExceeded?: boolean;
@@ -312,6 +316,10 @@ export class ReviewBudgetTracker {
       thoughtBytes?: number;
       outputBytes?: number;
       outputWarningTriggered?: boolean;
+      observedStreamRetries?: number;
+      discardedRetryMessageBytes?: number;
+      firstOutputAt?: string;
+      lastAcpUpdateAt?: string;
       salvaged?: boolean;
       reportedFindings?: number;
       findingsTargetExceeded?: boolean;
@@ -333,6 +341,10 @@ export class ReviewBudgetTracker {
     current.thoughtBytes = values.thoughtBytes;
     current.outputBytes = values.outputBytes;
     current.outputWarningTriggered = values.outputWarningTriggered;
+    current.observedStreamRetries = values.observedStreamRetries;
+    current.discardedRetryMessageBytes = values.discardedRetryMessageBytes;
+    current.firstOutputAt = values.firstOutputAt;
+    current.lastAcpUpdateAt = values.lastAcpUpdateAt;
     current.salvaged = values.salvaged;
     current.reportedFindings = values.reportedFindings;
     current.findingsTargetExceeded = values.findingsTargetExceeded;
@@ -499,6 +511,21 @@ export class ReviewBudgetTracker {
           : {}),
         ...(reservation.outputWarningTriggered !== undefined
           ? { outputWarningTriggered: reservation.outputWarningTriggered }
+          : {}),
+        ...(reservation.observedStreamRetries !== undefined
+          ? { observedStreamRetries: reservation.observedStreamRetries }
+          : {}),
+        ...(reservation.discardedRetryMessageBytes !== undefined
+          ? {
+              discardedRetryMessageBytes:
+                reservation.discardedRetryMessageBytes,
+            }
+          : {}),
+        ...(reservation.firstOutputAt !== undefined
+          ? { firstOutputAt: reservation.firstOutputAt }
+          : {}),
+        ...(reservation.lastAcpUpdateAt !== undefined
+          ? { lastAcpUpdateAt: reservation.lastAcpUpdateAt }
           : {}),
         ...(reservation.salvaged !== undefined
           ? { salvaged: reservation.salvaged }

@@ -29,6 +29,12 @@ import {
   AcpNdJsonLineLimitError,
   limitAcpNdJsonLineBytes,
 } from "./ndJsonLineLimit.js";
+import {
+  AgentOutputAccumulator,
+  type AgentOutputMetrics,
+  type MessagePhase,
+} from "./AgentOutputAccumulator.js";
+import { parseCodexRetryUpdate } from "./codexRetryUpdate.js";
 import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
@@ -224,6 +230,10 @@ async function runSubprocessAgent(
           thoughtBytes,
           outputBytes,
           outputWarningTriggered,
+          observedStreamRetries,
+          discardedRetryMessageBytes,
+          firstOutputAt,
+          lastAcpUpdateAt,
           stopReason,
           executionIdentity,
         }) => {
@@ -241,6 +251,12 @@ async function runSubprocessAgent(
             thoughtBytes,
             outputBytes,
             outputWarningTriggered,
+            observedStreamRetries,
+            ...(discardedRetryMessageBytes === 0
+              ? {}
+              : { discardedRetryMessageBytes }),
+            ...(firstOutputAt === undefined ? {} : { firstOutputAt }),
+            ...(lastAcpUpdateAt === undefined ? {} : { lastAcpUpdateAt }),
             stopReason,
             executionIdentity,
             ...(usage ? { usage } : {}),
@@ -271,6 +287,20 @@ async function runSubprocessAgent(
             thoughtBytes: outputLimitError.thoughtBytes,
             outputBytes: outputLimitError.outputBytes,
             outputWarningTriggered: outputLimitError.outputWarningTriggered,
+            observedStreamRetries:
+              outputLimitError.metrics.observedStreamRetries,
+            ...(outputLimitError.metrics.discardedRetryMessageBytes === 0
+              ? {}
+              : {
+                  discardedRetryMessageBytes:
+                    outputLimitError.metrics.discardedRetryMessageBytes,
+                }),
+            ...(outputLimitError.metrics.firstOutputAt === undefined
+              ? {}
+              : { firstOutputAt: outputLimitError.metrics.firstOutputAt }),
+            ...(outputLimitError.metrics.lastAcpUpdateAt === undefined
+              ? {}
+              : { lastAcpUpdateAt: outputLimitError.metrics.lastAcpUpdateAt }),
             stopReason: "cancelled",
             startedAt,
             completedAt: new Date().toISOString(),
@@ -346,6 +376,10 @@ async function runAcpClientWorkflow(
   thoughtBytes: number;
   outputBytes: number;
   outputWarningTriggered: boolean;
+  observedStreamRetries: number;
+  discardedRetryMessageBytes: number;
+  firstOutputAt?: string;
+  lastAcpUpdateAt?: string;
   stopReason: string;
   executionIdentity: ModelExecutionIdentity;
 }> {
@@ -446,7 +480,7 @@ async function runAcpClientWorkflow(
           cancellationSignal: abortController.signal,
         });
         void promptResponse.catch(() => undefined);
-        let rawText = "";
+        const accumulator = new AgentOutputAccumulator();
         let messageBytes = 0;
         let thoughtBytes = 0;
         let outputBytes = 0;
@@ -456,13 +490,14 @@ async function runAcpClientWorkflow(
           if (message.kind === "stop") {
             const usage = normalizeUsage(message.response.usage);
             return {
-              rawText,
+              rawText: accumulator.finalRawText(),
               warnings,
               ...(usage ? { usage } : {}),
               messageBytes,
               thoughtBytes,
               outputBytes,
               outputWarningTriggered,
+              ...accumulator.metrics(),
               stopReason: message.stopReason,
               executionIdentity: withReportedExecutionIdentity(
                 launchExecutionIdentity,
@@ -472,6 +507,31 @@ async function runAcpClientWorkflow(
           }
 
           const update = message.update;
+          accumulator.noteUpdate();
+          const retry = parseCodexRetryUpdate(update);
+          if (retry) {
+            const boundary = accumulator.markRetryBoundary();
+            try {
+              const progress = input.onProgress?.({
+                type: "agent_retrying",
+                agent: input.agent,
+                observedRetry: accumulator.metrics().observedStreamRetries,
+                ...(retry.attempt === undefined
+                  ? {}
+                  : { attempt: retry.attempt }),
+                ...(retry.maxRetries === undefined
+                  ? {}
+                  : { maxRetries: retry.maxRetries }),
+                reason: retry.message,
+                discardedMessageBytes: boundary.discardedMessageBytes,
+                timestamp: new Date().toISOString(),
+              });
+              void Promise.resolve(progress).catch(() => undefined);
+            } catch {
+              // Progress notification failures must not stop the review.
+            }
+            continue;
+          }
           if (
             (update.sessionUpdate !== "agent_message_chunk" &&
               update.sessionUpdate !== "agent_thought_chunk") ||
@@ -492,12 +552,16 @@ async function runAcpClientWorkflow(
             input.maxOutputBytes !== undefined &&
             nextOutputBytes > input.maxOutputBytes
           ) {
-            const retainedRawText = isMessage
-              ? `${rawText}${utf8Prefix(
+            if (isMessage) {
+              accumulator.addMessageChunk(
+                utf8Prefix(
                   update.content.text,
                   input.maxOutputBytes - outputBytes,
-                )}`
-              : rawText;
+                ),
+                readChunkMeta(update),
+              );
+            }
+            const retainedRawText = accumulator.finalRawText();
             await ctx
               .notify(methods.agent.session.cancel, {
                 sessionId: session.sessionId,
@@ -510,12 +574,18 @@ async function runAcpClientWorkflow(
               nextOutputBytes,
               input.maxOutputBytes,
               nextOutputWarningTriggered,
+              accumulator.metrics(),
             );
             abortController.abort(error);
             throw error;
           }
           if (isMessage) {
-            rawText += update.content.text;
+            accumulator.addMessageChunk(
+              update.content.text,
+              readChunkMeta(update),
+            );
+          } else {
+            accumulator.addThoughtChunk(update.content.text);
           }
           messageBytes = nextMessageBytes;
           thoughtBytes = nextThoughtBytes;
@@ -548,6 +618,7 @@ class AgentOutputLimitError extends Error {
     readonly outputBytes: number,
     readonly maxOutputBytes: number,
     readonly outputWarningTriggered: boolean,
+    readonly metrics: AgentOutputMetrics,
   ) {
     super(`Agent output exceeded ${maxOutputBytes} bytes.`);
     this.name = "AgentOutputLimitError";
@@ -586,6 +657,25 @@ function withReportedExecutionIdentity(
     reportedProvider: record.provider,
     reportedModel: record.model,
   });
+}
+
+function readChunkMeta(update: unknown): {
+  messageId?: string;
+  phase: MessagePhase;
+} {
+  const record = isRecord(update) ? update : {};
+  const metadata = isRecord(record._meta) ? record._meta : {};
+  const codex = isRecord(metadata.codex) ? metadata.codex : {};
+  const phase =
+    codex.phase === "commentary" || codex.phase === "final_answer"
+      ? codex.phase
+      : "unknown";
+  return {
+    ...(typeof record.messageId === "string"
+      ? { messageId: record.messageId }
+      : {}),
+    phase,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

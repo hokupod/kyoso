@@ -9,11 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add experimental `agents.codex.openRouter` retry configuration for OpenRouter
-  Codex reviews. It maps idle timeout, stream retries, and request retries to
-  the fixed provider preset without changing omitted Codex runtime defaults;
-  partial-output protection remains pending, so retry is not yet generally
-  recommended.
+- Add `agents.codex.openRouter` retry configuration for OpenRouter Codex
+  reviews. It maps idle timeout, stream retries, and request retries to the
+  fixed provider preset without changing omitted Codex runtime defaults.
+- Record observed ACP stream retries, discarded retry-message bytes, and ACP
+  output timestamps in model-call audit records and JSONL trace events.
+
+### Fixed
+
+- Prevent incomplete Codex message chunks from leaking into final agent output
+  after a structured stream retry, while retaining full wire-byte accounting
+  and output-limit enforcement.
+- Bound retry-progress trace writes per primary agent and preserve retry
+  metrics when an output cap stops a session.
 
 ### Changed
 

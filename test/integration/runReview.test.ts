@@ -2109,6 +2109,137 @@ model = "openai/o4-mini"
     expect(eventTypes.at(-1)).toBe("finalized");
   });
 
+  test("records retry metrics and sanitized retry progress in the audit trail", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("codex");
+    const rawText = JSON.stringify({
+      summary: "retry-safe output",
+      findings: [],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    });
+    const runAgent = async (input: AgentRunInput): Promise<AgentRunResult> => {
+      await input.onStarted?.();
+      void input.onProgress?.({
+        type: "agent_retrying",
+        agent: input.agent,
+        observedRetry: 1,
+        attempt: 1,
+        maxRetries: 3,
+        reason: "model stream retry",
+        discardedMessageBytes: 17,
+        timestamp: "2026-07-20T00:00:00.000Z",
+      });
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "completed",
+        rawText,
+        observedStreamRetries: 1,
+        discardedRetryMessageBytes: 17,
+        firstOutputAt: "2026-07-20T00:00:00.000Z",
+        lastAcpUpdateAt: "2026-07-20T00:00:01.000Z",
+        startedAt: "2026-07-20T00:00:00.000Z",
+        completedAt: "2026-07-20T00:00:01.000Z",
+      };
+    };
+    const agentManager = {
+      runAgent,
+      runAll: async (inputs: AgentRunInput[]) =>
+        Promise.all(inputs.map((input) => runAgent(input))),
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review retry output handling", currentPlan: "do it" },
+      { cwd, config, agentManager },
+    );
+    const events = await readTraceEvents(cwd, config, result);
+    const retryEvent = events.find((event) => event.type === "agent_retrying");
+    const completedEvent = events.find(
+      (event) => event.type === "model_call_completed",
+    );
+
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      agent: "codex",
+      observedStreamRetries: 1,
+      discardedRetryMessageBytes: 17,
+      firstOutputAt: "2026-07-20T00:00:00.000Z",
+      lastAcpUpdateAt: "2026-07-20T00:00:01.000Z",
+    });
+    expect(retryEvent).toMatchObject({
+      type: "agent_retrying",
+      traceId: result.audit.traceId,
+      reason: "model stream retry",
+      discardedMessageBytes: 17,
+    });
+    expect(completedEvent).toMatchObject({
+      type: "model_call_completed",
+      observedStreamRetries: 1,
+      discardedRetryMessageBytes: 17,
+      firstOutputAt: "2026-07-20T00:00:00.000Z",
+      lastAcpUpdateAt: "2026-07-20T00:00:01.000Z",
+    });
+    expect(JSON.stringify(events)).not.toContain('{"summary":"par');
+  });
+
+  test("bounds retry-progress trace writes without truncating final retry metrics", async () => {
+    const cwd = await tempCwd();
+    const config = singleAgentConfig("codex");
+    const rawText = JSON.stringify({
+      summary: "retry-progress limit",
+      findings: [],
+      testsToAdd: [],
+      residualRisks: [],
+      openQuestions: [],
+    });
+    const runAgent = async (input: AgentRunInput): Promise<AgentRunResult> => {
+      await input.onStarted?.();
+      for (let observedRetry = 1; observedRetry <= 101; observedRetry += 1) {
+        void input.onProgress?.({
+          type: "agent_retrying",
+          agent: input.agent,
+          observedRetry,
+          reason: "model stream retry",
+          discardedMessageBytes: 0,
+          timestamp: "2026-07-20T00:00:00.000Z",
+        });
+      }
+      return {
+        agent: input.agent,
+        role: input.role,
+        status: "completed",
+        rawText,
+        observedStreamRetries: 101,
+        startedAt: "2026-07-20T00:00:00.000Z",
+        completedAt: "2026-07-20T00:00:01.000Z",
+      };
+    };
+    const agentManager = {
+      runAgent,
+      runAll: async (inputs: AgentRunInput[]) =>
+        Promise.all(inputs.map((input) => runAgent(input))),
+    };
+
+    const result = await runReview(
+      "plan_review",
+      { goal: "review retry-progress trace limit", currentPlan: "do it" },
+      { cwd, config, agentManager },
+    );
+    const events = await readTraceEvents(cwd, config, result);
+    const retryEvents = events.filter(
+      (event) => event.type === "agent_retrying",
+    );
+
+    expect(retryEvents).toHaveLength(100);
+    expect(retryEvents.at(-1)).toMatchObject({ observedRetry: 100 });
+    expect(result.audit.modelCalls[0]?.observedStreamRetries).toBe(101);
+    expect(result.audit.warnings).toContain(
+      "AGENT_RETRY_PROGRESS_LIMIT: codex emitted more than 100 retry progress events; later events were omitted from the audit trace.",
+    );
+  });
+
   test("omits agent-started audit writes delivered after agents settle", async () => {
     const eventTypes: string[] = [];
     const baseManager = new FakeAgentManager();
@@ -2402,6 +2533,59 @@ export default {};
     );
     expect(result.testsToAdd).toContain("fake ACP subprocess test");
     expect(result.residualRisks).toContain("fake ACP subprocess residual risk");
+  });
+
+  test("does not persist retry-discarded ACP output when raw audit is enabled", async () => {
+    const cwd = await tempCwd();
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        codex: {
+          ...baseConfig.agents.codex,
+          command: "bun",
+          args: ["run", fixture],
+          env: {
+            ...baseConfig.agents.codex.env,
+            FAKE_ACP_MODE: "retry_partial_then_final",
+          },
+        },
+      },
+      audit: { ...baseConfig.audit, includeRawAgentOutput: true },
+    };
+    const partial = '{"summary":"par';
+
+    const result = await runReview(
+      "plan_review",
+      {
+        goal: "review retry output handling",
+        currentPlan: "do it",
+        selectedFiles: [
+          { path: "src/foo.ts", content: "export const foo = 1;" },
+        ],
+      },
+      {
+        cwd,
+        config,
+        agentManager: new SubprocessAcpAgentManager(config),
+      },
+    );
+    const events = await readTraceEvents(cwd, config, result);
+    const retryEvent = events.find((event) => event.type === "agent_retrying");
+
+    expect(result.decision).toBe("approve");
+    expect(result.audit.modelCalls[0]).toMatchObject({
+      observedStreamRetries: 1,
+      discardedRetryMessageBytes: Buffer.byteLength(partial, "utf8"),
+    });
+    expect(retryEvent).toMatchObject({
+      type: "agent_retrying",
+      reason: "Reconnecting... 1/3",
+      discardedMessageBytes: Buffer.byteLength(partial, "utf8"),
+    });
+    expect(JSON.stringify({ result, events })).not.toContain(partial);
   });
 
   test("retains strictly salvaged primary output while keeping coverage incomplete", async () => {

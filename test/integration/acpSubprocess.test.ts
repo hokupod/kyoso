@@ -12,6 +12,7 @@ import {
 } from "../../src/config/schema.js";
 import type {
   AgentName,
+  AgentProgressEvent,
   AgentRunInput,
   ModelExecutionIdentity,
 } from "../../src/core/types.js";
@@ -111,6 +112,113 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
       requestedModel: "openai/o4-mini",
       reportingStatus: "requested_only",
     });
+  });
+
+  test("discards partial output when ACP reports a stream retry", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("retry_partial_then_final"),
+    );
+    const progress: AgentProgressEvent[] = [];
+    const partial = '{"summary":"par';
+
+    const result = await manager.runAgent(
+      agentInput(cwd, { onProgress: (event) => progress.push(event) }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.rawText).not.toContain(partial);
+    expect(result.normalized?.findings[0]?.title).toBe(
+      "Fake ACP subprocess finding",
+    );
+    expect(result.observedStreamRetries).toBe(1);
+    expect(result.discardedRetryMessageBytes).toBe(
+      Buffer.byteLength(partial, "utf8"),
+    );
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatchObject({
+      type: "agent_retrying",
+      agent: "codex",
+      observedRetry: 1,
+      attempt: 1,
+      maxRetries: 3,
+      reason: "Reconnecting... 1/3",
+      discardedMessageBytes: Buffer.byteLength(partial, "utf8"),
+    });
+    expect(result.messageBytes).toBe(
+      Buffer.byteLength(partial, "utf8") +
+        Buffer.byteLength(result.rawText ?? "", "utf8"),
+    );
+    expect(JSON.stringify({ result, progress })).not.toContain(partial);
+  });
+
+  test("keeps only the final result across multiple stream retries", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("retry_twice_then_final"),
+    );
+    const progress: AgentProgressEvent[] = [];
+    const firstPartial = '{"summary":"par';
+    const secondPartial = '{"summary":"pas';
+
+    const result = await manager.runAgent(
+      agentInput(cwd, { onProgress: (event) => progress.push(event) }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.rawText).not.toContain(firstPartial);
+    expect(result.rawText).not.toContain(secondPartial);
+    expect(result.normalized?.findings[0]?.title).toBe(
+      "Fake ACP subprocess finding",
+    );
+    expect(result.observedStreamRetries).toBe(2);
+    expect(result.discardedRetryMessageBytes).toBe(
+      Buffer.byteLength(firstPartial, "utf8") +
+        Buffer.byteLength(secondPartial, "utf8"),
+    );
+    expect(progress.map((event) => event.observedRetry)).toEqual([1, 2]);
+  });
+
+  test("uses an unknown-phase final retry epoch as a fallback", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("retry_then_unknown_final"),
+    );
+    const partial = '{"summary":"par';
+
+    const result = await manager.runAgent(agentInput(cwd));
+
+    expect(result.status).toBe("completed");
+    expect(result.rawText).not.toContain(partial);
+    expect(result.normalized?.findings[0]?.title).toBe(
+      "Fake ACP subprocess finding",
+    );
+    expect(result.observedStreamRetries).toBe(1);
+  });
+
+  test("preserves retry metrics when output limit stops a retried ACP session", async () => {
+    const cwd = await fakeWorkspace();
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("retry_then_overflow"),
+    );
+    const partial = '{"summary":"par';
+
+    const result = await manager.runAgent(
+      agentInput(cwd, {
+        maxOutputBytes: Buffer.byteLength(partial, "utf8") + 1,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      rawText: "{",
+      error: { code: "AGENT_OUTPUT_LIMIT" },
+      observedStreamRetries: 1,
+      discardedRetryMessageBytes: Buffer.byteLength(partial, "utf8"),
+    });
+    expect(result.firstOutputAt).toBeDefined();
+    expect(result.lastAcpUpdateAt).toBeDefined();
+    expect(result.rawText).not.toContain(partial);
   });
 
   test("records only explicitly reported ACP provider and model metadata", async () => {
@@ -519,6 +627,10 @@ type FakeAcpMode =
   | "invalid_then_thought"
   | "partial_then_thought"
   | "valid_with_overflow_suffix"
+  | "retry_partial_then_final"
+  | "retry_twice_then_final"
+  | "retry_then_unknown_final"
+  | "retry_then_overflow"
   | "oversized_ndjson_line";
 
 function fakeAcpConfig(

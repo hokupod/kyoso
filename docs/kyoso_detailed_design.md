@@ -970,7 +970,7 @@ All three MCP tools use the same pipeline.
 11. Resolve required lenses and render the trusted review contract outside untrusted repository context
 12. Generate role-specific prompts and reserve every primary reviewer before starting either subprocess
 13. Spawn Codex ACP and Claude ACP subprocesses
-14. Send prompts over ACP, enforcing an 8 MiB NDJSON transport-line limit before SDK parsing, counting streamed UTF-8 bytes from agent message and thought text chunks, and cancelling output above the configured cap
+14. Send prompts over ACP, enforcing an 8 MiB NDJSON transport-line limit before SDK parsing, counting streamed UTF-8 bytes from agent message and thought text chunks, discarding an unfinished message epoch when Codex reports a stream retry, and cancelling output above the configured cap
 15. Deny write/tool/permission requests that exceed MVP policy
 16. Collect and normalize agent responses; cap findings deterministically
 17. Aggregate candidates, calculate coverage, and run deterministic finding admission
@@ -1127,7 +1127,36 @@ The selected provider forces `MODEL_PROVIDER=kyoso-openrouter` and replaces `mod
 }
 ```
 
-When present, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` are integers mapped to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries` in that preset. `streamIdleTimeoutMs` is at least `1000`; both retry counts are in `0..100`, and `0` remains explicit. Omitted values are absent from `CODEX_CONFIG`, so the installed Codex runtime controls its own defaults. A stream retry regenerates the unfinished response within the same Codex turn; it is not byte-offset resume. This policy is experimental until retry-aware partial-output protection is complete.
+When present, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` are integers mapped to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries` in that preset. `streamIdleTimeoutMs` is at least `1000`; both retry counts are in `0..100`, and `0` remains explicit. Omitted values are absent from `CODEX_CONFIG`, so the installed Codex runtime controls its own defaults. A stream retry regenerates the unfinished response within the same Codex turn; it is not byte-offset resume.
+
+#### Retry-aware output accumulation
+
+Codex retry is recognized only from a defensive parse of
+`session_info_update._meta.codex.error.willRetry === true`. The optional
+display message is sanitized before it reaches progress or trace output;
+`Reconnecting... N/M` supplies best-effort `attempt` and `maxRetries`
+metadata but is not the retry decision.
+
+At a retry boundary Kyoso abandons every un-abandoned message segment in the
+current epoch and records only its discarded UTF-8 byte count. It does not
+persist the discarded text. With no observed retry, final raw text remains the
+byte-for-byte receive-order concatenation of all message chunks. With a retry,
+Kyoso selects the latest remaining `final_answer` segment; if none exists, it
+concatenates remaining `unknown` segments from the final epoch; commentary is
+not a final candidate. Thought text is never retained.
+
+`messageBytes`, `thoughtBytes`, `outputBytes`, and the output hard limit
+continue to count every received wire chunk, including discarded retry text.
+The audit-only metrics are `observedStreamRetries`,
+`discardedRetryMessageBytes`, `firstOutputAt`, and `lastAcpUpdateAt`.
+`observedStreamRetries` is an ACP stream observation, not a total request
+retry count: transport-level `request_max_retries` can complete inside Codex
+without producing an ACP update.
+
+Kyoso records at most 100 `agent_retrying` trace events per primary agent to
+bound trace work. It continues output selection and retains the full
+`observedStreamRetries` value in the completed-model audit record; omitted
+progress events add a stable audit warning.
 
 Apart from rejected top-level `profile` and `profiles` fields, Kyoso preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, but overwrites those fields with the selected model and fixed provider preset. It rejects `profile`, `profiles`, and a non-object `model_providers` value before child launch rather than allowing an existing profile or malformed provider map to select another endpoint with `OPENROUTER_API_KEY`. For an object map, it discards every foreign `model_providers` entry instead of retaining or validating it, so no foreign provider can use the key. When it does, Kyoso emits a sanitized runtime warning with the discarded-entry count only; it never shows provider IDs or configuration values. Project configuration cannot replace the endpoint, auth variable, or wire protocol. OpenRouter mode removes `OPENAI_API_KEY`, `CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` from the Codex child while retaining `CODEX_HOME` for local adapter state; the adapter can still read its local login cache through that directory, so this is defense in depth rather than credential isolation. Audit records provider and model metadata only; it never records the key value.
 
@@ -1808,6 +1837,10 @@ type TraceEvent =
       thoughtBytes?: number;
       outputBytes?: number;
       outputWarningTriggered?: boolean;
+      observedStreamRetries?: number;
+      discardedRetryMessageBytes?: number;
+      firstOutputAt?: string;
+      lastAcpUpdateAt?: string;
       salvaged?: boolean;
       reportedFindings?: number;
       findingsTargetExceeded?: boolean;
@@ -1861,6 +1894,17 @@ type TraceEvent =
       timestamp: string;
     }
   | {
+      type: "agent_retrying";
+      traceId: string;
+      agent: string;
+      observedRetry: number;
+      attempt?: number;
+      maxRetries?: number;
+      reason: string;
+      discardedMessageBytes: number;
+      timestamp: string;
+    }
+  | {
       type: "agent_started";
       traceId: string;
       agent: string;
@@ -1903,7 +1947,7 @@ type TraceEvent =
   | { type: "response_sent"; traceId: string; timestamp: string };
 ```
 
-`openrouter_retry_policy_resolved` is emitted only for an enabled Codex OpenRouter reviewer with at least one explicitly configured retry field. `agent_started`, `model_call_completed`, and model-backed `judge_completed` may include `executionIdentity`. `providerRoute` records the Kyoso route; `requestedModel` records the effective model sent to the child/API; and `reportedProvider` / `reportedModel` appear only when the backend reports them. `reportingStatus` keeps `reported`, `requested_only`, and `unknown` distinct. Calls skipped before a model request have no execution identity. The legacy top-level `provider` / `model` fields on `agent_started` mirror safe values for compatibility; the nested identity is canonical. No trace event includes `OPENROUTER_API_KEY`, base URLs, provider configuration bodies, or any other credential value.
+`openrouter_retry_policy_resolved` is emitted only for an enabled Codex OpenRouter reviewer with at least one explicitly configured retry field. `agent_retrying` records sanitized retry metadata and a discarded-byte count only; it never records partial message text. `agent_started`, `model_call_completed`, and model-backed `judge_completed` may include `executionIdentity`. `providerRoute` records the Kyoso route; `requestedModel` records the effective model sent to the child/API; and `reportedProvider` / `reportedModel` appear only when the backend reports them. `reportingStatus` keeps `reported`, `requested_only`, and `unknown` distinct. Calls skipped before a model request have no execution identity. The legacy top-level `provider` / `model` fields on `agent_started` mirror safe values for compatibility; the nested identity is canonical. No trace event includes `OPENROUTER_API_KEY`, base URLs, provider configuration bodies, or any other credential value.
 
 If selected-provider preflight fails before an ACP child starts (for example, because `OPENROUTER_API_KEY` is absent), the trace intentionally emits only a failed `agent_completed` event with its error code. It emits no paired `agent_started`; consumers must treat that absence as an explicit preflight outcome, not a lost trace event.
 
@@ -1913,6 +1957,7 @@ Audit must not include:
 
 - raw file contents by default
 - raw agent outputs by default
+- retry-discarded partial message text, even when raw agent output is enabled
 - secrets
 - full env
 - credentials

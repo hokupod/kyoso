@@ -65,6 +65,10 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
           model: agentConfig.model,
           provider,
           preferApiKey: agentConfig.auth.preferApiKey,
+          openRouter:
+            input.agent === "codex"
+              ? this.config.agents.codex.openRouter
+              : undefined,
         },
       );
     } catch (error) {

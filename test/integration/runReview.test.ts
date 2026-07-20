@@ -949,7 +949,7 @@ model = "openai/o4-mini"
     );
 
     expect(result.audit.warnings?.join("\n")).toContain(
-      "changes Codex OpenRouter routing under user-global authorization",
+      "changes Codex OpenRouter routing or transport retry policy under user-global authorization",
     );
   });
 

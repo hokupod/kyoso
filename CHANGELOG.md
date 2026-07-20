@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add experimental `agents.codex.openRouter` retry configuration for OpenRouter
+  Codex reviews. It maps idle timeout, stream retries, and request retries to
+  the fixed provider preset without changing omitted Codex runtime defaults;
+  partial-output protection remains pending, so retry is not yet generally
+  recommended.
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.3` and pin its Codex and Claude Code

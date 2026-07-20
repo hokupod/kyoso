@@ -1,5 +1,9 @@
 import { resolve } from "node:path";
-import { kyosoConfigSchema, type KyosoConfig } from "../config/schema.js";
+import {
+  CODEX_OPENROUTER_PROVIDER,
+  kyosoConfigSchema,
+  type KyosoConfig,
+} from "../config/schema.js";
 import { defaultConfig } from "../config/defaultConfig.js";
 import { loadConfig, type LoadConfigOptions } from "../config/loadConfig.js";
 import { applyConfigOverrides } from "../config/configOverrides.js";
@@ -1347,6 +1351,25 @@ async function runAgents(input: {
   const enabledAgents = (["codex", "claude"] as const).filter(
     (agent) => input.config.agents[agent].enabled,
   );
+  const openRouter = input.config.agents.codex.openRouter;
+  const hasOpenRouterRetryPolicy = Object.values(openRouter).some(
+    (value) => value !== undefined,
+  );
+  if (
+    enabledAgents.includes("codex") &&
+    input.config.agents.codex.provider === CODEX_OPENROUTER_PROVIDER &&
+    hasOpenRouterRetryPolicy
+  ) {
+    await input.trace.write({
+      type: "openrouter_retry_policy_resolved",
+      traceId: input.traceId,
+      streamIdleTimeoutMs: openRouter.streamIdleTimeoutMs,
+      streamMaxRetries: openRouter.streamMaxRetries,
+      requestMaxRetries: openRouter.requestMaxRetries,
+      source: "kyoso_config",
+      timestamp: new Date().toISOString(),
+    });
+  }
   if (enabledAgents.length === 0) return [];
 
   const reservationResult = input.budgetTracker.reserveMany(

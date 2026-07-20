@@ -306,6 +306,84 @@ allowProjectProvider = [${JSON.stringify(placeholderContext.cwd)}]
     );
   });
 
+  test("reports configured and inherited OpenRouter retry reliability", async () => {
+    const configuredContext = await doctorFixture();
+    await mkdir(join(configuredContext.home, ".config", "kyoso"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(configuredContext.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(configuredContext.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(configuredContext.cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+timeoutMs = 360000
+
+[agents.codex.openRouter]
+streamIdleTimeoutMs = 90000
+streamMaxRetries = 3
+requestMaxRetries = 2
+`,
+      "utf8",
+    );
+
+    const configured = await runDoctor({
+      cwd: configuredContext.cwd,
+      env: configuredContext.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(configured).toContain("reliability:");
+    expect(configured).toContain(
+      "stream idle timeout: 90000 ms (Kyoso config)",
+    );
+    expect(configured).toContain("stream retries: 3");
+    expect(configured).toContain("request retries: 2");
+    expect(configured).toContain(
+      "maximum idle-only stream window: approximately 360000 ms plus backoff",
+    );
+    expect(configured).toContain(
+      "warning: configured idle-only retry window can consume the entire Codex agent timeout (timeoutMs=360000).",
+    );
+
+    const inheritedContext = await doctorFixture();
+    await mkdir(join(inheritedContext.home, ".config", "kyoso"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(inheritedContext.home, ".config", "kyoso", "config.toml"),
+      `[agents.codex]
+allowProjectProvider = [${JSON.stringify(inheritedContext.cwd)}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(inheritedContext.cwd, "kyoso.toml"),
+      '[agents.codex]\nprovider = "openrouter"\nmodel = "openai/o4-mini"\n',
+      "utf8",
+    );
+
+    const inherited = await runDoctor({
+      cwd: inheritedContext.cwd,
+      env: inheritedContext.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(inherited).toContain(
+      "stream idle timeout: inherited from Codex runtime",
+    );
+    expect(inherited).toContain("stream retries: inherited from Codex runtime");
+    expect(inherited).toContain(
+      "request retries: inherited from Codex runtime",
+    );
+  });
+
   test("sanitizes a project OpenRouter model before rendering doctor output", async () => {
     const context = await doctorFixture();
     await mkdir(join(context.home, ".config", "kyoso"), { recursive: true });

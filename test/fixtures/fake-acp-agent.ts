@@ -221,7 +221,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     const baseSummary =
       manifest.content.includes("review plan") &&
       selectedFile.content.includes("export const foo = 1")
-        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; OPENROUTER_API_KEY_PRESENT=${hasEnv("OPENROUTER_API_KEY")}; MODEL_PROVIDER=${process.env.MODEL_PROVIDER ?? ""}; CODEX_CONFIG_MODEL=${codexConfig.model}; CODEX_CONFIG_OPENROUTER_PRESET=${codexConfig.hasOpenRouterPreset}`
+        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; OPENROUTER_API_KEY_PRESENT=${hasEnv("OPENROUTER_API_KEY")}; MODEL_PROVIDER=${process.env.MODEL_PROVIDER ?? ""}; CODEX_CONFIG_MODEL=${codexConfig.model}; CODEX_CONFIG_OPENROUTER_PRESET=${codexConfig.hasOpenRouterPreset}; CODEX_CONFIG_STREAM_IDLE_TIMEOUT_MS=${codexConfig.streamIdleTimeoutMs ?? ""}`
         : "fake ACP subprocess reviewed the prompt";
     const opinion = {
       summary: receivedConfigOption
@@ -322,6 +322,7 @@ function terminalStopReason(value: string) {
 function readCodexConfigMetadata(): {
   model: string;
   hasOpenRouterPreset: boolean;
+  streamIdleTimeoutMs?: number;
 } {
   const raw = process.env.CODEX_CONFIG;
   if (!raw) return { model: "", hasOpenRouterPreset: false };
@@ -329,10 +330,17 @@ function readCodexConfigMetadata(): {
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return { model: "", hasOpenRouterPreset: false };
     const providers = parsed.model_providers;
+    const openRouterPreset =
+      isRecord(providers) && isRecord(providers["kyoso-openrouter"])
+        ? providers["kyoso-openrouter"]
+        : undefined;
     return {
       model: typeof parsed.model === "string" ? parsed.model : "",
-      hasOpenRouterPreset:
-        isRecord(providers) && isRecord(providers["kyoso-openrouter"]),
+      hasOpenRouterPreset: openRouterPreset !== undefined,
+      streamIdleTimeoutMs:
+        typeof openRouterPreset?.stream_idle_timeout_ms === "number"
+          ? openRouterPreset.stream_idle_timeout_ms
+          : undefined,
     };
   } catch {
     return { model: "", hasOpenRouterPreset: false };

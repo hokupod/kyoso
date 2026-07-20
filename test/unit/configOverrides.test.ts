@@ -84,6 +84,7 @@ describe("config overrides", () => {
     const overridden = applyConfigOverrides(config, [
       "agents.codex.provider=openrouter",
       "agents.codex.model=openai/o4-mini",
+      "agents.codex.openRouter.streamMaxRetries=3",
     ]);
 
     expect(overridden.agents.codex.provider).toBe("openrouter");
@@ -95,6 +96,7 @@ describe("config overrides", () => {
 
     expect(reset.agents.codex.provider).toBe("default");
     expect(reset.agents.codex.model).toBeUndefined();
+    expect(reset.agents.codex.openRouter).toEqual({});
 
     const resetWithModel = applyConfigOverrides(overridden, [
       "agents.codex.provider=default",
@@ -103,6 +105,47 @@ describe("config overrides", () => {
 
     expect(resetWithModel.agents.codex.provider).toBe("default");
     expect(resetWithModel.agents.codex.model).toBe("gpt-5.4");
+    expect(resetWithModel.agents.codex.openRouter).toEqual({});
+
+    expect(() =>
+      applyConfigOverrides(overridden, [
+        "agents.codex.provider=default",
+        "agents.codex.openRouter.streamMaxRetries=0",
+      ]),
+    ).toThrow(
+      'agents.codex.openRouter: agents.codex.openRouter.* requires provider = "openrouter".',
+    );
+  });
+
+  test("parses unset OpenRouter retry overrides as explicitly allowed numbers", () => {
+    const openRouterConfig = applyConfigOverrides(
+      kyosoConfigSchema.parse(defaultConfig),
+      ["agents.codex.provider=openrouter", "agents.codex.model=openai/o4-mini"],
+    );
+
+    const overridden = applyConfigOverrides(openRouterConfig, [
+      "agents.codex.openRouter.streamIdleTimeoutMs=90000",
+      "agents.codex.openRouter.streamMaxRetries=0",
+    ]);
+
+    expect(overridden.agents.codex.openRouter).toEqual({
+      streamIdleTimeoutMs: 90_000,
+      streamMaxRetries: 0,
+    });
+    expect(() =>
+      applyConfigOverrides(openRouterConfig, [
+        "agents.codex.openRouter.streamMaxRetries=abc",
+      ]),
+    ).toThrow(
+      'Invalid --set value "agents.codex.openRouter.streamMaxRetries=abc"',
+    );
+    expect(() =>
+      applyConfigOverrides(kyosoConfigSchema.parse(defaultConfig), [
+        "agents.codex.openRouter.streamMaxRetries=3",
+      ]),
+    ).toThrow(
+      'Invalid --set value "agents.codex.openRouter.streamMaxRetries=3"',
+    );
   });
 
   test("does not mutate the loaded OpenRouter model when resetting the provider", () => {

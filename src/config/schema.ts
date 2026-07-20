@@ -11,6 +11,8 @@ export const CODEX_OPENROUTER_PROVIDER = "openrouter" as const;
 export const CODEX_DEFAULT_PROVIDER = "default" as const;
 export const CODEX_OPENROUTER_MODEL_REQUIRED_ISSUE =
   "codex_openrouter_model_required" as const;
+export const CODEX_OPENROUTER_POLICY_REQUIRES_PROVIDER_ISSUE =
+  "codex_openrouter_policy_requires_provider" as const;
 export type CodexProvider =
   typeof CODEX_OPENROUTER_PROVIDER | typeof CODEX_DEFAULT_PROVIDER;
 
@@ -43,6 +45,12 @@ const baseAgentSchema = z.object({
   }),
 });
 
+const codexOpenRouterSchema = z.object({
+  streamIdleTimeoutMs: z.number().int().min(1_000).optional(),
+  streamMaxRetries: z.number().int().min(0).max(100).optional(),
+  requestMaxRetries: z.number().int().min(0).max(100).optional(),
+});
+
 const codexAgentSchema = baseAgentSchema
   .extend({
     provider: z
@@ -56,8 +64,22 @@ const codexAgentSchema = baseAgentSchema
         }),
       )
       .default([]),
+    openRouter: codexOpenRouterSchema.default({}),
   })
   .superRefine((agent, context) => {
+    const hasOpenRouterPolicy = Object.values(agent.openRouter).some(
+      (value) => value !== undefined,
+    );
+    if (hasOpenRouterPolicy && agent.provider !== CODEX_OPENROUTER_PROVIDER) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["openRouter"],
+        message: 'agents.codex.openRouter.* requires provider = "openrouter".',
+        params: {
+          kyosoIssue: CODEX_OPENROUTER_POLICY_REQUIRES_PROVIDER_ISSUE,
+        },
+      });
+    }
     if (
       agent.provider !== CODEX_OPENROUTER_PROVIDER ||
       (agent.model?.trim().length ?? 0) > 0
@@ -203,7 +225,13 @@ function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
     `agents.${agent}.auth.envWhitelist`,
   ];
   if (agent === "codex") {
-    paths.push("agents.codex.provider", "agents.codex.allowProjectProvider");
+    paths.push(
+      "agents.codex.provider",
+      "agents.codex.allowProjectProvider",
+      "agents.codex.openRouter.streamIdleTimeoutMs",
+      "agents.codex.openRouter.streamMaxRetries",
+      "agents.codex.openRouter.requestMaxRetries",
+    );
   }
   return paths;
 }

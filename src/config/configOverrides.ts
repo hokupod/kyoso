@@ -13,6 +13,11 @@ type ParsedConfigOverride = {
 };
 
 const NUMBER_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+const UNSET_NUMBER_OVERRIDE_PATHS = new Set([
+  "agents.codex.openRouter.streamIdleTimeoutMs",
+  "agents.codex.openRouter.streamMaxRetries",
+  "agents.codex.openRouter.requestMaxRetries",
+]);
 
 export function applyConfigOverrides(
   config: KyosoConfig,
@@ -30,10 +35,11 @@ export function applyConfigOverrides(
       parseConfigOverrideValue(
         override.value,
         readPath(baseConfig, override.path),
+        override.path,
       ),
     );
   }
-  clearInheritedOpenRouterModelForProviderReset(
+  clearInheritedOpenRouterConfigForProviderReset(
     baseConfig,
     overridden,
     overrides,
@@ -80,13 +86,14 @@ function assertOpenRouterProviderOverrideIncludesModel(
   );
 }
 
-function clearInheritedOpenRouterModelForProviderReset(
+function clearInheritedOpenRouterConfigForProviderReset(
   baseConfig: Record<string, unknown>,
   overridden: Record<string, unknown>,
   overrides: ParsedConfigOverride[],
 ): void {
   const providerPath = ["agents", "codex", "provider"];
   const modelPath = ["agents", "codex", "model"];
+  const openRouterPath = ["agents", "codex", "openRouter"];
   const selectsDefaultProvider = overrides.some(
     (override) =>
       override.path.join(".") === providerPath.join(".") &&
@@ -95,9 +102,11 @@ function clearInheritedOpenRouterModelForProviderReset(
   const suppliesModel = overrides.some(
     (override) => override.path.join(".") === modelPath.join("."),
   );
+  const suppliesOpenRouterPolicy = overrides.some((override) =>
+    override.path.join(".").startsWith(`${openRouterPath.join(".")}.`),
+  );
   if (
     !selectsDefaultProvider ||
-    suppliesModel ||
     readPath(baseConfig, providerPath) !== CODEX_OPENROUTER_PROVIDER ||
     readPath(overridden, providerPath) !== CODEX_DEFAULT_PROVIDER
   ) {
@@ -105,7 +114,9 @@ function clearInheritedOpenRouterModelForProviderReset(
   }
 
   const codex = readPath(overridden, ["agents", "codex"]);
-  if (isRecord(codex)) delete codex.model;
+  if (!isRecord(codex)) return;
+  if (!suppliesModel) delete codex.model;
+  if (!suppliesOpenRouterPolicy) delete codex.openRouter;
 }
 
 function findAssignmentForPath(
@@ -143,13 +154,19 @@ function parseConfigOverride(assignment: string): ParsedConfigOverride {
 function parseConfigOverrideValue(
   value: string,
   currentValue: unknown,
+  path: string[],
 ): string | number | boolean {
   if (typeof currentValue === "boolean") {
     if (value === "true") return true;
     if (value === "false") return false;
     return value;
   }
-  if (typeof currentValue === "number" && NUMBER_VALUE.test(value)) {
+  if (
+    (typeof currentValue === "number" ||
+      (currentValue === undefined &&
+        UNSET_NUMBER_OVERRIDE_PATHS.has(path.join(".")))) &&
+    NUMBER_VALUE.test(value)
+  ) {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }

@@ -76,11 +76,15 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect((await resultPromise).status).toBe("completed");
   });
 
-  test("forwards the OpenRouter preset without exposing the key in output", async () => {
+  test("forwards the OpenRouter retry preset without exposing the key in output", async () => {
     const cwd = await fakeWorkspace();
     const key = "openrouter-subprocess-test-key";
     const manager = new SubprocessAcpAgentManager(
-      openRouterAcpConfig("happy", { OPENROUTER_API_KEY: key }),
+      openRouterAcpConfig(
+        "happy",
+        { OPENROUTER_API_KEY: key },
+        { streamIdleTimeoutMs: 90_000 },
+      ),
     );
 
     const result = await manager.runAgent(agentInput(cwd));
@@ -97,6 +101,9 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     );
     expect(result.normalized?.summary).toContain(
       "CODEX_CONFIG_OPENROUTER_PRESET=true",
+    );
+    expect(result.normalized?.summary).toContain(
+      "CODEX_CONFIG_STREAM_IDLE_TIMEOUT_MS=90000",
     );
     expect(JSON.stringify(result)).not.toContain(key);
     expect(result.executionIdentity).toEqual({
@@ -548,6 +555,7 @@ function fakeAcpConfig(
 function openRouterAcpConfig(
   mode: FakeAcpMode,
   env: Record<string, string> = {},
+  openRouter: KyosoConfig["agents"]["codex"]["openRouter"] = {},
 ): KyosoConfig {
   const baseConfig = fakeAcpConfig(mode, env);
   return {
@@ -558,6 +566,7 @@ function openRouterAcpConfig(
         ...baseConfig.agents.codex,
         provider: "openrouter",
         model: "openai/o4-mini",
+        openRouter,
       },
     },
   };

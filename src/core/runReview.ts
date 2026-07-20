@@ -920,6 +920,7 @@ export async function runReview(
         budgetTracker,
         trace,
         traceId,
+        signal: options.signal,
       });
       completePhase("judge");
       startPhase("finalize");

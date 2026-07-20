@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add typed core review-progress events, bounded non-blocking progress delivery,
   CLI stderr renderers (`auto`, `plain`, `jsonl`, and `off`), and graceful
   SIGINT cancellation through primary and verifier ACP subprocesses.
+- Add MCP `notifications/progress` support when a client provides a
+  `progressToken`, with per-request monotonic sequences and fixed-field messages.
+  Whether progress is displayed remains client-dependent.
+- Propagate MCP cancellation through primary and verification ACP subprocesses
+  and in-flight OpenAI or Anthropic judge calls without converting cancellation
+  into a normal result or judge fallback.
 
 ### Fixed
 

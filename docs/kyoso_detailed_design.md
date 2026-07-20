@@ -1020,13 +1020,25 @@ strictly free of progress lines. A heartbeat reports only that the process is
 alive and how long it has been since the last ACP update; it does not claim that
 the model is making progress.
 
+The MCP adapter creates a sink only when `ctx.mcpReq._meta?.progressToken` is
+present. It emits `notifications/progress` with that token, a per-request
+strictly increasing sequence starting at one, and a fixed-field message; it
+omits `total` because parallel reviewers, verification, judge calls, retries,
+and budget skips make work dynamic. MCP client display is independent of Kyoso's
+delivery: a client may receive notifications without rendering them. MCP stdout
+contains JSON-RPC frames only.
+
 CLI SIGINT creates a `KyosoCancellationError` (`REQUEST_CANCELLED`). The signal
 is checked at phase boundaries and reaches primary and verifier ACP subprocesses.
 After a session exists, Kyoso best-effort sends `session/cancel`, terminates the
 child with the existing TERM-to-KILL escalation, clears heartbeat timers, removes
 the temporary snapshot, and exits 130. Cancellation is propagated rather than
-converted into a degraded review result. Judge-signal propagation and MCP
-progress notifications remain a later integration phase.
+converted into a degraded review result. MCP `notifications/cancelled` drives the
+same request signal; the tool handler lets `KyosoCancellationError` escape so the
+SDK handles suppression of a normal response. The judge combines that external
+signal with its local timeout for both OpenAI and Anthropic calls. External
+cancellation throws `KyosoCancellationError` instead of producing a deterministic
+judge fallback; a timeout without external cancellation still uses the fallback.
 
 ---
 

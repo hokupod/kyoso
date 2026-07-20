@@ -188,6 +188,16 @@ Press Ctrl-C once to request graceful cancellation of the review and its ACP
 child agents; Kyoso exits with status 130 after cleanup. Press it a second time
 to force immediate exit.
 
+For MCP tools, Kyoso sends `notifications/progress` only when the client supplies
+a `progressToken` in request metadata. Each request receives its own monotonically
+increasing sequence and no `total`, because review work is dynamic. Kyoso supports
+MCP progress notifications when the client requests them; whether progress is
+displayed is controlled by the MCP client.
+
+An MCP `notifications/cancelled` request aborts the review, including primary and
+verification ACP subprocesses and an in-flight LLM judge. A cancelled tool call is
+not converted into a normal review result. MCP stdout remains JSON-RPC only.
+
 ## Usage Examples
 
 Review an implementation plan with selected code:

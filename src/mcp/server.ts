@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { runReview, type RunReviewOptions } from "../core/runReview.js";
-import type { KyosoReviewRequest } from "../core/types.js";
+import type { KyosoReviewRequest, ReviewTool } from "../core/types.js";
 import { KYOSO_VERSION } from "../core/constants.js";
 import { formatMcpResponse } from "./formatMcpResponse.js";
+import { createMcpProgressSink } from "./progress.js";
 import { kyosoReviewRequestSchema } from "./schemas.js";
 
 export const KYOSO_MCP_INSTRUCTIONS =
@@ -13,6 +14,15 @@ export function listKyosoMcpTools(): string[] {
   return ["plan_review", "security_review", "diff_review"];
 }
 
+const REVIEW_TOOL_DESCRIPTIONS: Record<ReviewTool, string> = {
+  plan_review:
+    "Review an implementation plan before coding. Kyoso does not modify files. Sends MCP progress notifications when the client provides a progressToken.",
+  security_review:
+    "Review a security-sensitive plan, selected files, or diff with CISA Secure by Design gates. Sends MCP progress notifications when the client provides a progressToken.",
+  diff_review:
+    "Review a provided unified diff after implementation. Kyoso does not apply patches. Sends MCP progress notifications when the client provides a progressToken.",
+};
+
 export function createMcpServer(options: RunReviewOptions = {}): McpServer {
   const reviewOptions: RunReviewOptions = { ...options, entrypoint: "mcp" };
   const server = new McpServer(
@@ -20,58 +30,33 @@ export function createMcpServer(options: RunReviewOptions = {}): McpServer {
     { instructions: KYOSO_MCP_INSTRUCTIONS },
   );
 
-  server.registerTool(
-    "plan_review",
-    {
-      description:
-        "Review an implementation plan before coding. Kyoso does not modify files.",
-      inputSchema: kyosoReviewRequestSchema,
-    },
-    async (request) =>
-      formatMcpResponse(
-        await runReview(
-          "plan_review",
-          request as KyosoReviewRequest,
-          reviewOptions,
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "security_review",
-    {
-      description:
-        "Review a security-sensitive plan, selected files, or diff with CISA Secure by Design gates.",
-      inputSchema: kyosoReviewRequestSchema,
-    },
-    async (request) =>
-      formatMcpResponse(
-        await runReview(
-          "security_review",
-          request as KyosoReviewRequest,
-          reviewOptions,
-        ),
-      ),
-  );
-
-  server.registerTool(
-    "diff_review",
-    {
-      description:
-        "Review a provided unified diff after implementation. Kyoso does not apply patches.",
-      inputSchema: kyosoReviewRequestSchema,
-    },
-    async (request) =>
-      formatMcpResponse(
-        await runReview(
-          "diff_review",
-          request as KyosoReviewRequest,
-          reviewOptions,
-        ),
-      ),
-  );
+  registerReviewTool(server, "plan_review", reviewOptions);
+  registerReviewTool(server, "security_review", reviewOptions);
+  registerReviewTool(server, "diff_review", reviewOptions);
 
   return server;
+}
+
+function registerReviewTool(
+  server: McpServer,
+  tool: ReviewTool,
+  reviewOptions: RunReviewOptions,
+): void {
+  server.registerTool(
+    tool,
+    {
+      description: REVIEW_TOOL_DESCRIPTIONS[tool],
+      inputSchema: kyosoReviewRequestSchema,
+    },
+    async (request, ctx) =>
+      formatMcpResponse(
+        await runReview(tool, request as KyosoReviewRequest, {
+          ...reviewOptions,
+          signal: ctx.mcpReq.signal,
+          onProgress: createMcpProgressSink(ctx.mcpReq),
+        }),
+      ),
+  );
 }
 
 export async function startMcpServer(

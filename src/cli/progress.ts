@@ -32,7 +32,7 @@ export function createCliProgressSink(
     const elapsedMs = Math.max(0, Date.now() - startedAtEpochMs);
     writeSafely(
       stderrWrite,
-      `[${formatElapsed(elapsedMs)}] ${plainMessage(event)}\n`,
+      `[${formatElapsed(elapsedMs)}] ${formatPlainProgressMessage(event)}\n`,
     );
   };
 }
@@ -52,7 +52,7 @@ function formatElapsed(elapsedMs: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function plainMessage(event: ReviewProgressEvent): string {
+export function formatPlainProgressMessage(event: ReviewProgressEvent): string {
   switch (event.type) {
     case "review_started":
       return `Kyoso review started (${event.tool})`;

@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KYOSO_VERSION } from "../../src/core/constants.js";
 
 describe("MCP stdio integration", () => {
-  test("handshakes, lists tools, and calls plan_review through fake agents", async () => {
+  test("handshakes, lists tools, and calls plan_review without progress notifications", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-stdio-"));
     const client = startMcp(cwd);
 
@@ -85,12 +86,223 @@ describe("MCP stdio integration", () => {
       expect(
         jsonResult.agentOpinions?.map((opinion) => opinion.status),
       ).toEqual(["completed", "completed"]);
-      expect(client.parseErrors).toEqual([]);
+      expect(client.progressNotifications).toEqual([]);
+      expectJsonRpcStdout(client);
       expect(client.stderr).toBe("");
     } finally {
       await stopProcess(client.proc);
     }
   }, 15_000);
+
+  test("sends monotonic progress only when the client provides a token", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-progress-"));
+    const client = startMcp(cwd);
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: {
+            goal: "review plan",
+            options: { maxAgentTimeoutMs: 2_000 },
+          },
+          _meta: { progressToken: "tok-1" },
+        },
+      });
+      const callResponse = await client.waitForResponse(3, 10_000);
+      const progress = client.progressNotifications.filter(
+        (notification) => notification.params.progressToken === "tok-1",
+      );
+      const callResult = callResponse.result as {
+        content?: Array<{ type?: string; text?: string }>;
+      };
+
+      expect(progress.length).toBeGreaterThan(0);
+      expect(
+        progress.map((notification) => notification.params.progress),
+      ).toEqual(
+        Array.from({ length: progress.length }, (_, index) => index + 1),
+      );
+      expect(
+        progress.every(
+          (notification) => typeof notification.params.message === "string",
+        ),
+      ).toBe(true);
+      expect(
+        progress.map((notification) => notification.params.message).join("\n"),
+      ).not.toContain("Fake ACP subprocess finding");
+      expect(callResult.content).toHaveLength(2);
+      expectJsonRpcStdout(client);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 15_000);
+
+  test("keeps progress sequences independent for concurrent tool calls", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-progress-parallel-"));
+    const client = startMcp(cwd);
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: { goal: "review first" },
+          _meta: { progressToken: "tok-a" },
+        },
+      });
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: { goal: "review second" },
+          _meta: { progressToken: "tok-b" },
+        },
+      });
+
+      await Promise.all([
+        client.waitForResponse(3, 10_000),
+        client.waitForResponse(4, 10_000),
+      ]);
+      const progressA = client.progressNotifications.filter(
+        (notification) => notification.params.progressToken === "tok-a",
+      );
+      const progressB = client.progressNotifications.filter(
+        (notification) => notification.params.progressToken === "tok-b",
+      );
+
+      expect(progressA.length).toBeGreaterThan(0);
+      expect(progressB.length).toBeGreaterThan(0);
+      expect(
+        progressA.map((notification) => notification.params.progress),
+      ).toEqual(
+        Array.from({ length: progressA.length }, (_, index) => index + 1),
+      );
+      expect(
+        progressB.map((notification) => notification.params.progress),
+      ).toEqual(
+        Array.from({ length: progressB.length }, (_, index) => index + 1),
+      );
+      expectJsonRpcStdout(client);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 15_000);
+
+  test("cancels a hanging request without a normal response and keeps the server usable", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-cancel-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-mcp-home-"));
+    const configHome = join(home, "xdg");
+    const fixture = join(process.cwd(), "test/fixtures/fake-acp-agent.ts");
+    const pidPath = join(cwd, "fake-acp.pid");
+    const modePath = join(cwd, "fake-acp-mode");
+    const wrapper = join(cwd, "fake-acp-hang-once.mjs");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      wrapper,
+      [
+        'import { existsSync, writeFileSync } from "node:fs";',
+        `const modePath = ${JSON.stringify(modePath)};`,
+        "if (existsSync(modePath)) {",
+        '  process.env.FAKE_ACP_MODE = "happy";',
+        "} else {",
+        '  writeFileSync(modePath, "hang", "utf8");',
+        '  process.env.FAKE_ACP_MODE = "hang";',
+        "}",
+        `await import(${JSON.stringify(fixture)});`,
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+command = "bun"
+args = ["run", ${JSON.stringify(wrapper)}]
+timeoutMs = 5000
+
+[agents.codex.env]
+FAKE_ACP_PID_FILE = ${JSON.stringify(pidPath)}
+FAKE_ACP_FINDING_SEVERITY = "none"
+
+[agents.claude]
+enabled = false
+`,
+      "utf8",
+    );
+    const client = startMcp(cwd, {
+      args: [],
+      env: {
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+        KYOSO_TEST_FAKE_AGENTS: "",
+      },
+    });
+
+    try {
+      await initializeMcp(client);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: {
+            goal: "cancel hanging review",
+            options: { maxAgentTimeoutMs: 5_000 },
+          },
+        },
+      });
+      await waitFor(() => existsSync(pidPath));
+      const pid = Number(await readFile(pidPath, "utf8"));
+      await Bun.sleep(50);
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 3, reason: "user" },
+      });
+
+      const cancelledResponse = await client.waitForResponseOrTimeout(3, 750);
+      expect(cancelledResponse?.result).toBeUndefined();
+      await waitFor(() => !isProcessAlive(pid));
+
+      writeJson(client.proc, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "plan_review",
+          arguments: { goal: "review after cancellation" },
+        },
+      });
+      const followUpResponse = await client.waitForResponse(4, 10_000);
+      const followUpResult = followUpResponse.result as {
+        content?: Array<{ type?: string }>;
+      };
+
+      expect(followUpResult.content).toHaveLength(2);
+      expect(
+        client
+          .responsesForId(3)
+          .every((response) => response.result === undefined),
+      ).toBe(true);
+      expect(client.progressNotifications).toEqual([]);
+      expectJsonRpcStdout(client);
+      expect(client.stderr).toBe("");
+    } finally {
+      await stopProcess(client.proc);
+    }
+  }, 20_000);
 
   test("forwards allow-unknown-config to tool calls", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-mcp-allow-unknown-"));
@@ -140,7 +352,7 @@ defautMode = "unrestricted"
       expect(jsonResult.audit?.warnings?.join("\n")).toContain(
         "network.defautMode",
       );
-      expect(client.parseErrors).toEqual([]);
+      expectJsonRpcStdout(client);
       expect(client.stderr).toBe("");
     } finally {
       await stopProcess(client.proc);
@@ -223,7 +435,7 @@ FAKE_ACP_REPORTED_MODEL = "claude-mcp-reported"
       expect(texts[0]).toContain(
         "primary/claude: route=claude_default, requested=claude-mcp-requested, reportedProvider=anthropic, reportedModel=claude-mcp-reported, reporting=reported",
       );
-      expect(client.parseErrors).toEqual([]);
+      expectJsonRpcStdout(client);
       expect(client.stderr).toBe("");
     } finally {
       await stopProcess(client.proc);
@@ -268,7 +480,7 @@ defautMode = "unrestricted"
         "Security-sensitive unknown config settings rejected",
       );
       expect(errorText).toContain("network.defautMode");
-      expect(client.parseErrors).toEqual([]);
+      expectJsonRpcStdout(client);
       expect(client.stderr).toBe("");
     } finally {
       await stopProcess(client.proc);
@@ -304,7 +516,7 @@ function startMcp(
       },
     },
   );
-  const responses: Array<Record<string, unknown>> = [];
+  const messages: Array<Record<string, unknown>> = [];
   const parseErrors: string[] = [];
   let stdoutBuffer = "";
   let stderr = "";
@@ -316,7 +528,7 @@ function startMcp(
     for (const line of lines) {
       if (line.trim().length === 0) continue;
       try {
-        responses.push(JSON.parse(line) as Record<string, unknown>);
+        messages.push(JSON.parse(line) as Record<string, unknown>);
       } catch {
         parseErrors.push(line);
       }
@@ -329,17 +541,40 @@ function startMcp(
   return {
     proc,
     parseErrors,
+    get messages() {
+      return messages;
+    },
+    get progressNotifications(): ProgressNotification[] {
+      return messages.flatMap((message) =>
+        isProgressNotification(message) ? [message] : [],
+      );
+    },
+    get stdoutRemainder() {
+      return stdoutBuffer;
+    },
     get stderr() {
       return stderr;
     },
     async waitForResponse(id: number, timeoutMs = 3_000) {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        const response = responses.find((item) => item.id === id);
+        const response = messages.find((item) => item.id === id);
         if (response) return response;
         await Bun.sleep(20);
       }
       throw new Error(`Timed out waiting for MCP response ${id}`);
+    },
+    async waitForResponseOrTimeout(id: number, timeoutMs = 3_000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const response = messages.find((item) => item.id === id);
+        if (response) return response;
+        await Bun.sleep(20);
+      }
+      return undefined;
+    },
+    responsesForId(id: number) {
+      return messages.filter((item) => item.id === id);
     },
   };
 }
@@ -383,4 +618,55 @@ async function stopProcess(
     await Bun.sleep(20);
   }
   proc.kill("SIGKILL");
+}
+
+type ProgressNotification = {
+  method: "notifications/progress";
+  params: {
+    progressToken: string | number;
+    progress: number;
+    message?: unknown;
+  };
+};
+
+function isProgressNotification(
+  message: Record<string, unknown>,
+): message is ProgressNotification {
+  const params = message.params;
+  return (
+    message.method === "notifications/progress" &&
+    isRecord(params) &&
+    (typeof params.progressToken === "string" ||
+      typeof params.progressToken === "number") &&
+    typeof params.progress === "number"
+  );
+}
+
+function expectJsonRpcStdout(client: ReturnType<typeof startMcp>): void {
+  expect(client.parseErrors).toEqual([]);
+  expect(client.stdoutRemainder.trim()).toBe("");
+  expect(client.messages.every((message) => message.jsonrpc === "2.0")).toBe(
+    true,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) return;
+    await Bun.sleep(20);
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

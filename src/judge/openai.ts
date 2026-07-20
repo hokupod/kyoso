@@ -2,6 +2,7 @@ import { JUDGE_MAX_OUTPUT_TOKENS } from "../core/constants.js";
 import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import type { JudgeProviderOutput, JudgeRunInput } from "./provider.js";
 import { buildJudgePrompt, parseJudgeOutput } from "./prompt.js";
+import { linkSignals } from "./signals.js";
 
 export const DEFAULT_OPENAI_JUDGE_MODEL = "gpt-5.4-mini";
 
@@ -16,61 +17,65 @@ export async function runOpenAiJudge(
   const apiKey = input.env.OPENAI_API_KEY ?? input.env.CODEX_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
   const requestedModel = resolveOpenAiJudgeModel(input.env);
-
-  const response = await fetchWithTimeout(
-    `${input.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json",
+  const { signal, cleanup } = linkSignals(timeoutMs, input.signal);
+  try {
+    const response = await fetch(
+      `${input.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1"}/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: requestedModel,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "user",
+              content: buildJudgePrompt(
+                input.tool,
+                input.result,
+                input.summaryText,
+                input.agentFindings,
+              ),
+            },
+          ],
+          max_completion_tokens: JUDGE_MAX_OUTPUT_TOKENS,
+          temperature: 0,
+        }),
+        signal,
       },
-      body: JSON.stringify({
-        model: requestedModel,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: buildJudgePrompt(
-              input.tool,
-              input.result,
-              input.summaryText,
-              input.agentFindings,
-            ),
-          },
-        ],
-        max_completion_tokens: JUDGE_MAX_OUTPUT_TOKENS,
-        temperature: 0,
-      }),
-    },
-    timeoutMs,
-  );
+    );
 
-  if (!response.ok)
-    throw new Error(`OpenAI judge failed with HTTP ${response.status}.`);
-  const payload = (await response.json()) as {
-    model?: unknown;
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: {
-      total_tokens?: number;
-      prompt_tokens?: number;
-      completion_tokens?: number;
-      prompt_tokens_details?: { cached_tokens?: number };
-      completion_tokens_details?: { reasoning_tokens?: number };
+    if (!response.ok)
+      throw new Error(`OpenAI judge failed with HTTP ${response.status}.`);
+    const payload = (await response.json()) as {
+      model?: unknown;
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: {
+        total_tokens?: number;
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+        completion_tokens_details?: { reasoning_tokens?: number };
+      };
     };
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content)
-    throw new Error("OpenAI judge response did not include content.");
-  const usage = normalizeUsage(payload.usage);
-  const reportedModel =
-    typeof payload.model === "string" ? payload.model : undefined;
-  return {
-    output: parseJudgeOutput(content, input.summaryText),
-    requestedModel,
-    ...(reportedModel ? { reportedModel } : {}),
-    ...(usage ? { usage } : {}),
-  };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content)
+      throw new Error("OpenAI judge response did not include content.");
+    const usage = normalizeUsage(payload.usage);
+    const reportedModel =
+      typeof payload.model === "string" ? payload.model : undefined;
+    return {
+      output: parseJudgeOutput(content, input.summaryText),
+      requestedModel,
+      ...(reportedModel ? { reportedModel } : {}),
+      ...(usage ? { usage } : {}),
+    };
+  } finally {
+    cleanup();
+  }
 }
 
 function normalizeUsage(
@@ -92,19 +97,4 @@ function normalizeUsage(
     cachedReadTokens: usage.prompt_tokens_details?.cached_tokens,
     thoughtTokens: usage.completion_tokens_details?.reasoning_tokens,
   });
-}
-
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  timeout.unref?.();
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
 }

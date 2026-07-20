@@ -259,6 +259,56 @@ describe("runReview", () => {
     await expect(result).rejects.toBeInstanceOf(KyosoCancellationError);
   });
 
+  test("does not convert a running judge cancellation into fallback success", async () => {
+    const controller = new AbortController();
+    const baseConfig = singleAgentConfig("codex");
+    const config: KyosoConfig = {
+      ...baseConfig,
+      judge: {
+        ...baseConfig.judge,
+        mode: "deterministic_plus_llm",
+        provider: "openai",
+        timeoutMs: 5_000,
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let judgeStarted = false;
+    globalThis.fetch = ((_input, init) => {
+      judgeStarted = true;
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = runReview(
+        "plan_review",
+        { goal: "cancel during judge" },
+        {
+          cwd: await tempCwd(),
+          config,
+          agentManager: new FakeAgentManager(),
+          env: { OPENAI_API_KEY: "test-key" },
+          signal: controller.signal,
+        },
+      );
+
+      await waitFor(() => judgeStarted);
+      controller.abort(new KyosoCancellationError("cancel during judge"));
+
+      await expect(result).rejects.toBeInstanceOf(KyosoCancellationError);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("cancels a hanging ACP child and cleans up its snapshot", async () => {
     const cwd = await tempCwd();
     const pidPath = join(cwd, "cancelled-acp.pid");

@@ -152,7 +152,7 @@ Manual setup examples are kept in `examples/codex-config.toml` and `examples/cla
 
 ## CLI
 
-The package-runner execution paths always select the package and executable separately: `npx -y --package=@kyo-so/cli kyoso` and `bunx --package @kyo-so/cli kyoso`. Add a complete SemVer pin after the package name when a workflow needs one, for example `@kyo-so/cli@0.14.0`. The examples below abbreviate an already installed executable as `kyoso`. Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), while the installed CLI command is the shorter `kyoso`.
+The package-runner execution paths always select the package and executable separately: `npx -y --package=@kyo-so/cli kyoso` and `bunx --package @kyo-so/cli kyoso`. Add a complete SemVer pin after the package name when a workflow needs one, for example `@kyo-so/cli@0.15.0`. The examples below abbreviate an already installed executable as `kyoso`. Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), while the installed CLI command is the shorter `kyoso`.
 
 The Bun fallback is verified on Bun `1.3.14`. On an older Bun, use the npx form or an installed `kyoso`; do not rely on Bun inferring a binary from a multi-bin package.
 

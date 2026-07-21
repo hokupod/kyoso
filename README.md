@@ -417,7 +417,7 @@ The real Codex ACP/OpenRouter smoke is release-gated and never runs in tests. On
 KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp
 ```
 
-It accepts no CLI arguments, uses the pinned Codex ACP adapter, and creates fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories so it cannot use the calling repository or cached Codex login. It returns only a fixed success or failure message without writing the key or model to config, temporary artifacts, or output.
+It accepts no CLI arguments, uses the pinned Codex ACP adapter, and creates fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories so it cannot use the calling repository or cached Codex login. It returns only a fixed success or failure message without writing the key or model to config, temporary artifacts, or output. This credentialed smoke checks only interoperability; retry correctness is covered by the release-only `KYOSO_CODEX_ACP_MOCK_SSE=1` local mock SSE integration gate.
 
 ### Agent auth
 

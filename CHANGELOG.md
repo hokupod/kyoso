@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Propagate MCP cancellation through primary and verification ACP subprocesses
   and in-flight OpenAI or Anthropic judge calls without converting cancellation
   into a normal result or judge fallback.
+- Add a release-gated mock Responses SSE integration suite for the pinned Codex
+  ACP adapter, covering stream retries and exhaustion without credentials or an
+  externally configurable provider base URL.
 
 ### Fixed
 
@@ -31,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and output-limit enforcement.
 - Bound retry-progress trace writes per primary agent and preserve retry
   metrics when an output cap stops a session.
+- Treat a terminal Codex ACP system error as a failed agent result even when
+  the adapter returns an ACP `end_turn` response.
 
 ### Changed
 

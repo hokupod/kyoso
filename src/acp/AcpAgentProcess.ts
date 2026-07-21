@@ -46,6 +46,9 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
   constructor(
     private readonly config: KyosoConfig,
     private readonly parentEnv: NodeJS.ProcessEnv = process.env,
+    private readonly internalOptions: {
+      openRouterBaseUrlForTest?: string;
+    } = {},
   ) {
     super();
   }
@@ -79,6 +82,10 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
           openRouter:
             input.agent === "codex"
               ? this.config.agents.codex.openRouter
+              : undefined,
+          openRouterBaseUrlForTest:
+            input.agent === "codex"
+              ? this.internalOptions.openRouterBaseUrlForTest
               : undefined,
         },
       );
@@ -356,6 +363,39 @@ async function runSubprocessAgent(
           });
           return;
         }
+        if (error instanceof CodexTerminalSystemError) {
+          stdout = error.rawText;
+          const failureText = [stderr, formatAgentErrorDetail(error)]
+            .filter((part) => part.trim().length > 0)
+            .join("\n");
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: "failed",
+            rawText: stdout,
+            messageBytes: error.messageBytes,
+            thoughtBytes: error.thoughtBytes,
+            outputBytes: error.outputBytes,
+            outputWarningTriggered: error.outputWarningTriggered,
+            observedStreamRetries: error.metrics.observedStreamRetries,
+            ...(error.metrics.discardedRetryMessageBytes === 0
+              ? {}
+              : {
+                  discardedRetryMessageBytes:
+                    error.metrics.discardedRetryMessageBytes,
+                }),
+            ...(error.metrics.firstOutputAt === undefined
+              ? {}
+              : { firstOutputAt: error.metrics.firstOutputAt }),
+            ...(error.metrics.lastAcpUpdateAt === undefined
+              ? {}
+              : { lastAcpUpdateAt: error.metrics.lastAcpUpdateAt }),
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: buildAgentFailure(failureText, "Agent process failed."),
+          });
+          return;
+        }
         if (error instanceof AcpNdJsonLineLimitError) {
           abortController.abort(error);
           resolveOnce({
@@ -536,6 +576,7 @@ async function runAcpClientWorkflow(
         let thoughtBytes = 0;
         let outputBytes = 0;
         let outputWarningTriggered = false;
+        let codexReportedSystemError = false;
         const sessionStartedAtEpochMs = Date.now();
         let lastActivityAtEpochMs = 0;
         const emitProgress = (event: AgentProgressEvent): void => {
@@ -583,10 +624,39 @@ async function runAcpClientWorkflow(
           const promptResponse = session.prompt(input.prompt, {
             cancellationSignal: abortController.signal,
           });
-          void promptResponse.catch(() => undefined);
+          // ACP can report a failed turn through prompt() after emitting a
+          // terminal update. Preserve that rejection rather than accepting
+          // the update as a successful end_turn.
+          const promptCompletion = promptResponse.catch((error) => {
+            if (input.signal?.aborted) {
+              throw cancellationFromSignal(input.signal);
+            }
+            if (abortController.signal.aborted) {
+              const reason = abortController.signal.reason;
+              if (reason !== undefined) throw reason;
+            }
+            throw error;
+          });
+          const promptFailure = promptCompletion.then(
+            () => new Promise<never>(() => undefined),
+          );
           for (;;) {
-            const message = await session.nextUpdate();
+            const message = await Promise.race([
+              session.nextUpdate(),
+              promptFailure,
+            ]);
             if (message.kind === "stop") {
+              await promptCompletion;
+              if (codexReportedSystemError) {
+                throw new CodexTerminalSystemError(
+                  accumulator.finalRawText(),
+                  messageBytes,
+                  thoughtBytes,
+                  outputBytes,
+                  outputWarningTriggered,
+                  accumulator.metrics(),
+                );
+              }
               const usage = normalizeUsage(message.response.usage);
               return {
                 rawText: accumulator.finalRawText(),
@@ -609,6 +679,7 @@ async function runAcpClientWorkflow(
             accumulator.noteUpdate();
             const retry = parseCodexRetryUpdate(update);
             if (retry) {
+              codexReportedSystemError = false;
               const boundary = accumulator.markRetryBoundary();
               emitProgress({
                 type: "agent_retrying",
@@ -624,6 +695,11 @@ async function runAcpClientWorkflow(
                 discardedMessageBytes: boundary.discardedMessageBytes,
                 timestamp: new Date().toISOString(),
               });
+              continue;
+            }
+            const codexThreadStatus = readCodexThreadStatus(update);
+            if (codexThreadStatus !== undefined) {
+              codexReportedSystemError = codexThreadStatus === "systemError";
               continue;
             }
             if (
@@ -736,6 +812,23 @@ class AgentOutputLimitError extends Error {
   }
 }
 
+class CodexTerminalSystemError extends Error {
+  constructor(
+    readonly rawText: string,
+    readonly messageBytes: number,
+    readonly thoughtBytes: number,
+    readonly outputBytes: number,
+    readonly outputWarningTriggered: boolean,
+    readonly metrics: AgentOutputMetrics,
+  ) {
+    super(
+      sanitizeTextForDisplay(rawText) ||
+        "Codex ACP reported a terminal system error.",
+    );
+    this.name = "CodexTerminalSystemError";
+  }
+}
+
 function findOutputLimitError(
   error: unknown,
   abortController: AbortController,
@@ -796,6 +889,15 @@ function readChunkMeta(update: unknown): {
       : {}),
     phase,
   };
+}
+
+function readCodexThreadStatus(update: unknown): string | undefined {
+  const record = isRecord(update) ? update : {};
+  if (record.sessionUpdate !== "session_info_update") return undefined;
+  const metadata = isRecord(record._meta) ? record._meta : {};
+  const codex = isRecord(metadata.codex) ? metadata.codex : {};
+  const threadStatus = isRecord(codex.threadStatus) ? codex.threadStatus : {};
+  return typeof threadStatus.type === "string" ? threadStatus.type : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

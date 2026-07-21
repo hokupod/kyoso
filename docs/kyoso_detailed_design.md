@@ -1208,6 +1208,8 @@ Apart from rejected top-level `profile` and `profiles` fields, Kyoso preserves u
 
 The credentialed interoperability check is release-gated rather than part of CI. After explicit network and billing approval, export `OPENROUTER_API_KEY`, choose an approved model, and run `KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp`. The command accepts no CLI arguments, uses the normal pinned Codex ACP adapter with fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories, does not persist the key or model, and exposes only a fixed success or failure result.
 
+Retry correctness is covered separately by the release-only `KYOSO_CODEX_ACP_MOCK_SSE=1` mock Responses SSE test. Its topology is `SubprocessAcpAgentManager` (a constructor-only test value) → pinned `codex-acp` → Codex app-server → loopback mock `/v1/responses`. The fixture exercises complete streams, disconnects, idle behavior, retryable failures, HTTP 401 canaries, and retry exhaustion without credentials or an external provider. The test-only base URL has no schema, TOML, CLI, or environment-variable route. The credentialed smoke remains a happy-path interoperability check, not a retry-correctness gate.
+
 ### 13.3 Recursion guard
 
 Kyoso must prevent backend agents from recursively invoking Kyoso.

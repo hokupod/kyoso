@@ -170,6 +170,23 @@ kyoso setup codex --write --skill-only
 kyoso setup claude-code --write --skill-only
 ```
 
+### Progress and cancellation
+
+review 结果始终使用 stdout：默认是 Markdown，`--json` 时是 JSON。进度与 error 使用 stderr，因此 structured output 保持 pipe-safe。
+
+```bash
+kyoso plan --goal "Review this plan" --plan plan.md --json --progress jsonl \
+  >result.json 2>progress.jsonl
+```
+
+`--progress auto|plain|jsonl|off` 默认是 `auto`：仅当 stderr 是 TTY 时显示 plain 的按行进度。`plain` 强制 human-readable 的 stderr 输出，`jsonl` 在 stderr 每行输出一个 typed event，`off` 关闭进度。进度中绝不包含 prompt、选定 file 的内容、diff，以及 model 的 message / thought 文本。
+
+按一次 Ctrl-C 会请求 review 及其 ACP child agents 的 graceful cancellation，Kyoso 在 cleanup 后以 status 130 退出。再按一次会强制立即退出。
+
+对于 MCP tools，仅当 client 在 request metadata 中提供 `progressToken` 时，Kyoso 才发送 `notifications/progress`。每个 request 拥有独立的单调递增 sequence，且由于 review 的工作量是动态的，不发送 `total`。Kyoso 在 client 请求时支持 MCP progress notification；进度是否显示由 MCP client 控制。
+
+MCP 的 `notifications/cancelled` 会中断 review，包括 primary 与 verification 的 ACP subprocess 以及执行中的 LLM judge。被 cancel 的 tool call 不会被转换成正常的 review result。MCP 的 stdout 仍仅用于 JSON-RPC。
+
 ## Usage Examples
 
 使用选定代码 review implementation plan：
@@ -293,7 +310,7 @@ Kyoso 按以下顺序 load config：
 
 未知 key 会被拒绝。Boolean / numeric config keys 会转换为 schema 类型，string keys 保持字符串，然后重新验证完整 config。
 
-Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、经过 user global authorization 的 Codex `provider` 或继承 OpenRouter 时的 model 覆盖、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network/CISA settings。
+Project `kyoso.toml` 是 declarative config，不需要 trust approval。它可以设置 agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、经过 user global authorization 的 Codex `provider`、继承 OpenRouter 时的 model 覆盖或 retry-policy 覆盖、workspace byte limits 和 additive `workspace.deny`、verification settings、advisory judge settings，以及 tightening-only security/network/CISA settings。
 
 `entrypoints.*`、`tools.*` 和 `reviewPolicy.*` 是 user-global policy。entrypoint 或 tool 被禁用时，Kyoso 会在启动 agents 前返回 structured policy block。`firstClassClient = "codex"`、`workspace.readOnly = true`、`network.mediatedWeb.enabled = false` 和 `audit.includeFileContents = false` 是 fixed / reserved values；不支持的值会被拒绝，而不是成为 no-op。
 
@@ -312,7 +329,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codex 还支持 `agents.codex.provider`：`"openrouter"` 选择 external provider，而 `"default"` 会将继承的 OpenRouter 选择重置为正常 Codex behavior；Claude 没有 provider 设置。从 project 选择 provider 需要只能在 global config 中设置的 `agents.codex.allowProjectProvider` allowlist；完整规则请参阅 [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in)。`command` / `args` / `env` 也只能在 global config 中设置（参见 [Files and precedence](#files-and-precedence)）。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codex 还支持 `agents.codex.provider`：`"openrouter"` 选择 external provider，而 `"default"` 会将继承的 OpenRouter 选择重置为正常 Codex behavior；Claude 没有 provider 设置。`agents.codex.openRouter.streamIdleTimeoutMs`、`streamMaxRetries` 与 `requestMaxRetries` 仅配置所选的 OpenRouter transport。从 project 选择 provider 或更改该 retry policy 需要只能在 global config 中设置的 `agents.codex.allowProjectProvider` allowlist；完整规则请参阅 [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in)。`command` / `args` / `env` 也只能在 global config 中设置（参见 [Files and precedence](#files-and-precedence)）。
 
 省略 `agents.<name>.model` 或 `agents.<name>.effort` 时，会使用各 agent 自身的 default。Codex 使用 local Codex config，例如 `~/.codex/config.toml`（若已设置`CODEX_HOME`，则为`$CODEX_HOME/config.toml`）；Claude 使用 adapter default。
 
@@ -352,13 +369,20 @@ allowProjectProvider = ["/absolute/path/to/project"]
 [agents.codex]
 provider = "openrouter"
 model = "openai/o4-mini"
+
+[agents.codex.openRouter]
+streamIdleTimeoutMs = 90000
+streamMaxRetries = 3
+requestMaxRetries = 2
 ```
 
 当 `provider = "openrouter"` 时，`model` 必须存在且不能是空白。它是 OpenRouter model ID；Kyoso 不会 validate model catalog 或该 model 是否支持 tool calling，请向 provider 确认 tool support。
 
-`allowProjectProvider` 适用于 project `provider`，以及继承 OpenRouter 时 project 对 `model` 的覆盖；list 必须完全匹配包含已解析 project config file 的 canonical directory 的 absolute path，而不是 invocation cwd 或 lexical path。不匹配子目录或 glob。project config file（包括受信任的 `kyoso.config.ts`）与 allowlist entry 都会通过 symlink 解析到该 directory；解析到同一 directory 的 entry 会匹配，解析到其他位置或无法解析的 path 会 fail closed。user-global `provider = "openrouter"` 不需要 allowlist entry。直接选择 CLI 时，必须在同一 invocation 中同时使用 `--set agents.codex.provider=openrouter` 和 `--set agents.codex.model=<model>`；project model 不能为该 CLI provider override 补足 model。`allowProjectProvider` 不是 `--set` path，legacy boolean 值会被拒绝。
+`agents.codex.openRouter` 是 experimental 的。`streamIdleTimeoutMs` 是不小于 `1000` 的整数；`streamMaxRetries` 与 `requestMaxRetries` 是 `0` 到 `100` 的整数，`0` 表示禁用该 retry class。这些 field 要求 `provider = "openrouter"`；省略的 field 不会改变对应的 Codex runtime defaults。retry 是重新生成未完成的 Codex turn 而不是按 byte 恢复；retry 之前的 partial output 会被丢弃，绝不会进入最终结果。
 
-当 user-global config 选择 OpenRouter 时，project 可以用 `provider = "default"` 显式 opt-out。这个 reset 不需要 model 或 authorization；除非同一 layer 明确提供普通 Codex model，它还会清除继承的 OpenRouter model，并且不会为该 project forward OpenRouter key。
+`allowProjectProvider` 适用于 project `provider`、继承 OpenRouter 时 project 对 `model` 的覆盖，以及继承 OpenRouter 时 project 对 `agents.codex.openRouter.*` 的覆盖；list 必须完全匹配包含已解析 project config file 的 canonical directory 的 absolute path，而不是 invocation cwd 或 lexical path。不匹配子目录或 glob。project config file（包括受信任的 `kyoso.config.ts`）与 allowlist entry 都会通过 symlink 解析到该 directory；解析到同一 directory 的 entry 会匹配，解析到其他位置或无法解析的 path 会 fail closed。user-global `provider = "openrouter"` 不需要 allowlist entry。直接选择 CLI 时，必须在同一 invocation 中同时使用 `--set agents.codex.provider=openrouter` 和 `--set agents.codex.model=<model>`；project model 不能为该 CLI provider override 补足 model。`allowProjectProvider` 不是 `--set` path，legacy boolean 值会被拒绝。
+
+当 user-global config 选择 OpenRouter 时，project 可以用 `provider = "default"` 显式 opt-out。这个 reset 不需要 model 或 authorization；除非同一 layer 明确提供普通 Codex model，它还会清除继承的 OpenRouter model，清除继承的 OpenRouter retry policy，并且不会为该 project forward OpenRouter key。同一 reset layer 中的 retry policy 仍然 invalid，因为它要求 `provider = "openrouter"`。
 
 在启动 Kyoso 的 Codex 或 Claude client process 的 environment 中设置 key。直接设置 environment variable 是 primary path；1Password 等 secret manager 是 optional，不是 Kyoso dependency。
 
@@ -372,7 +396,7 @@ Marketplace Plugin 会向其 MCP process 暴露 `OPENROUTER_API_KEY` 变量名�
 
 新的 manual MCP registration 默认不包含 `OPENROUTER_API_KEY`。仅在有意选择 provider 后使用 `--with-openrouter` 添加它；已有 registration 永不重写。`kyoso setup ... --with-openrouter` 的输出和手动 setup 示例仍是用户管理的客户端注册模板。Claude Code registration 中的 `${OPENROUTER_API_KEY}` 必须由 client 展开；Kyoso 只会忽略完全由 `${NAME}`、`$NAME` 或 `%NAME%`（允许前后空白）构成的未展开 credential placeholder，并且只输出含变量名的 sanitized warning。含有其他文字的值会被保留。对于以 `_KEY`、`_TOKEN`、`_SECRET` 或 `_PASSWORD` 结尾的 custom credential-like name，也适用同一规则；非 credential template 会被保留。
 
-推荐使用这种经过 user authorization 的 project-scoped opt-in。global `provider = "openrouter"` 会被 project 继承，直到 project 设置 `provider = "default"`；仅省略 `provider` 不会将其 unset。固定的 OpenRouter Responses API preset 为 beta；不开放 custom endpoint、provider routing、fallback 或 judge integration。为将 key 绑定到该 preset，OpenRouter mode 会拒绝含 top-level `profile` 或 `profiles` 的 `CODEX_CONFIG`，并会在启动 child 前拒绝非 object 的 `model_providers` value。对于 object，它会将 `model_providers` 替换为仅含固定 `kyoso-openrouter` entry 的对象，并发出只包含已丢弃 entry 数量的 sanitized warning；不会显示 provider ID 或 config value。除这些被拒绝的 field 外，它会保留 `model`、`model_provider` 和 `model_providers` 之外无关的 `CODEX_CONFIG` field，因此 foreign provider configuration 无法选择使用该 key 的 endpoint。Claude 仍使用已配置的 provider，judge 不会使用 `OPENROUTER_API_KEY`。
+推荐使用这种经过 user authorization 的 project-scoped opt-in。global `provider = "openrouter"` 会被 project 继承，直到 project 设置 `provider = "default"`；仅省略 `provider` 不会将其 unset。固定的 OpenRouter Responses API preset 为 beta；不开放 custom endpoint、provider routing、fallback 或 judge integration。配置后，`streamIdleTimeoutMs`、`streamMaxRetries` 与 `requestMaxRetries` 只映射到 `stream_idle_timeout_ms`、`stream_max_retries` 与 `request_max_retries`；省略的 field 不会出现在 `CODEX_CONFIG` 中。为将 key 绑定到该 preset，OpenRouter mode 会拒绝含 top-level `profile` 或 `profiles` 的 `CODEX_CONFIG`，并会在启动 child 前拒绝非 object 的 `model_providers` value。对于 object，它会将 `model_providers` 替换为仅含固定 `kyoso-openrouter` entry 的对象，并发出只包含已丢弃 entry 数量的 sanitized warning；不会显示 provider ID 或 config value。除这些被拒绝的 field 外，它会保留 `model`、`model_provider` 和 `model_providers` 之外无关的 `CODEX_CONFIG` field，因此 foreign provider configuration 无法选择使用该 key 的 endpoint。Claude 仍使用已配置的 provider，judge 不会使用 `OPENROUTER_API_KEY`。
 
 经过 user-global authorization 后，project `kyoso.toml` 可以选择 external provider，或覆盖继承的 OpenRouter model，并将 review context 路由给它。对于 untrusted repository，请使用 `--ignore-config`，并只显式传入所需的 CLI options。
 
@@ -382,7 +406,7 @@ Marketplace Plugin 会向其 MCP process 暴露 `OPENROUTER_API_KEY` 变量名�
 KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp
 ```
 
-该 command 不接受 CLI arguments，使用固定版本的 Codex ACP adapter，并创建全新的空 temporary workspace、`HOME` 和 `CODEX_HOME`，不会使用调用方 repository 或 cached Codex login。它只返回固定的成功或失败消息，不会将 key 或 model 写入 config、temporary artifact 或 output。
+该 command 不接受 CLI arguments，使用固定版本的 Codex ACP adapter，并创建全新的空 temporary workspace、`HOME` 和 `CODEX_HOME`，不会使用调用方 repository 或 cached Codex login。它只返回固定的成功或失败消息，不会将 key 或 model 写入 config、temporary artifact 或 output。这个 credentialed smoke 只检查 interoperability；retry 的 correctness 由 release 专用的 `KYOSO_CODEX_ACP_MOCK_SSE=1` local mock SSE integration gate 覆盖。
 
 ### Agent auth
 

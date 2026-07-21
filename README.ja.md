@@ -170,6 +170,23 @@ kyoso setup codex --write --skill-only
 kyoso setup claude-code --write --skill-only
 ```
 
+### Progress and cancellation
+
+review の結果は常に stdout を使用します。既定では Markdown、`--json` では JSON です。進捗と error は stderr を使用するため、structured output は pipe-safe のままです。
+
+```bash
+kyoso plan --goal "Review this plan" --plan plan.md --json --progress jsonl \
+  >result.json 2>progress.jsonl
+```
+
+`--progress auto|plain|jsonl|off` の既定は `auto` で、stderr が TTY の場合だけ plain の行単位進捗を表示します。`plain` は human-readable な stderr 出力を強制し、`jsonl` は stderr 1行につき typed event を1つ出力し、`off` は進捗を抑止します。進捗には prompt、選択した file の内容、diff、model の message / thought テキストを含めません。
+
+Ctrl-C を1回押すと、review とその ACP child agents の graceful cancellation を要求し、Kyoso は cleanup 後に status 130 で終了します。2回目で即時終了します。
+
+MCP tools では、client が request metadata に `progressToken` を渡した場合だけ `notifications/progress` を送信します。sequence は request ごとに単調増加し、review の作業量は動的なため `total` は送りません。Kyoso は client が要求した場合に MCP progress notification を送信しますが、進捗を表示するかどうかは MCP client 側が制御します。
+
+MCP の `notifications/cancelled` は、primary と verification の ACP subprocess、実行中の LLM judge を含めて review を中断します。cancel された tool call は通常の review result へ変換されません。MCP の stdout は JSON-RPC 専用のままです。
+
 ## Usage Examples
 
 選択したコードと一緒に implementation plan をレビューします。
@@ -293,7 +310,7 @@ Kyoso は次の順に config を load します。
 
 未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
 
-Project `kyoso.toml` は declarative で、trust approval は不要です。agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、user global authorization後のCodex専用`provider`または継承したOpenRouterのmodel上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network/CISA settings を設定できます。
+Project `kyoso.toml` は declarative で、trust approval は不要です。agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、user global authorization後のCodex専用`provider`、継承したOpenRouterのmodel上書きまたはretry-policy上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network/CISA settings を設定できます。
 
 `entrypoints.*`、`tools.*`、`reviewPolicy.*` は user-global policy です。entrypoint または tool が disabled の場合、agents の起動前に structured policy block を返します。`firstClassClient = "codex"`、`workspace.readOnly = true`、`network.mediatedWeb.enabled = false`、`audit.includeFileContents = false` は fixed / reserved value であり、未対応値は no-op にせず拒否します。
 
@@ -312,7 +329,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。projectから`provider`を選択するには、global config専用の`agents.codex.allowProjectProvider` allowlistが必要です。詳細な規則は [Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。`agents.codex.openRouter.streamIdleTimeoutMs`、`streamMaxRetries`、`requestMaxRetries`は、選択したOpenRouter transportだけを設定します。projectから`provider`を選択、またはそのretry policyを変更するには、global config専用の`agents.codex.allowProjectProvider` allowlistが必要です。詳細な規則は [Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
 
 `agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）などの local Codex config を使用し、Claude は adapter default を使用します。
 
@@ -352,13 +369,20 @@ allowProjectProvider = ["/absolute/path/to/project"]
 [agents.codex]
 provider = "openrouter"
 model = "openai/o4-mini"
+
+[agents.codex.openRouter]
+streamIdleTimeoutMs = 90000
+streamMaxRetries = 3
+requestMaxRetries = 2
 ```
 
 `provider = "openrouter"` の場合、`model`は空白でない値が必須です。これはOpenRouterのmodel IDです。Kyosoはcatalogやtool calling対応を検証しないため、利用するmodelのtool supportはproviderで確認してください。
 
-`allowProjectProvider`はprojectの`provider`と、OpenRouterを継承中のproject `model`上書きに必要で、listには解決後のproject config fileを含むcanonical directoryのabsolute pathを完全一致で指定します。invocationのcwdやlexical pathではありません。descendantやglobには一致しません。trusted `kyoso.config.ts`を含むproject config fileとallowlist entryの両方をsymlink経由も含めて同じdirectoryのreal pathへ解決して比較するため、そのdirectoryへ解決されるentryは一致し、別の場所へ解決されるentryまたは解決できないpathはfail closedです。user globalの`provider = "openrouter"`にはallowlist entryは不要です。CLIで選択する場合は、同一 invocation に`--set agents.codex.provider=openrouter`と`--set agents.codex.model=<model>`の両方が必要であり、project modelで前者を補完することはできません。`allowProjectProvider`は`--set` pathではなく、legacy boolean値は拒否されます。
+`agents.codex.openRouter` は experimental です。`streamIdleTimeoutMs` は `1000` 以上の整数、`streamMaxRetries` と `requestMaxRetries` は `0` から `100` の整数で、`0` はそのretry classを無効化します。これらのfieldには `provider = "openrouter"` が必須で、省略したfieldは対応するCodex runtime defaultsを変更しません。retryはCodex turnのbyte単位のresumeではなく未完了turnの再生成であり、retry前のpartial outputは破棄され最終結果には決して含まれません。
 
-user global configがOpenRouterを選択している場合、projectは`provider = "default"`で明示的にopt-outできます。このresetにはmodelもauthorizationも不要で、同じlayerで通常のCodex modelを明示しない限り継承したOpenRouter modelも消去し、そのprojectではOpenRouter keyをforwardしません。
+`allowProjectProvider`はprojectの`provider`、OpenRouterを継承中のproject `model`上書き、OpenRouterを継承中のproject `agents.codex.openRouter.*`上書きに必要で、listには解決後のproject config fileを含むcanonical directoryのabsolute pathを完全一致で指定します。invocationのcwdやlexical pathではありません。descendantやglobには一致しません。trusted `kyoso.config.ts`を含むproject config fileとallowlist entryの両方をsymlink経由も含めて同じdirectoryのreal pathへ解決して比較するため、そのdirectoryへ解決されるentryは一致し、別の場所へ解決されるentryまたは解決できないpathはfail closedです。user globalの`provider = "openrouter"`にはallowlist entryは不要です。CLIで選択する場合は、同一 invocation に`--set agents.codex.provider=openrouter`と`--set agents.codex.model=<model>`の両方が必要であり、project modelで前者を補完することはできません。`allowProjectProvider`は`--set` pathではなく、legacy boolean値は拒否されます。
+
+user global configがOpenRouterを選択している場合、projectは`provider = "default"`で明示的にopt-outできます。このresetにはmodelもauthorizationも不要で、同じlayerで通常のCodex modelを明示しない限り継承したOpenRouter modelも消去し、継承したOpenRouter retry policyも消去し、そのprojectではOpenRouter keyをforwardしません。同じreset layerにあるretry policyは`provider = "openrouter"`を要求するため引き続きinvalidです。
 
 Kyosoを起動するCodexまたはClaude client processのenvironmentにkeyを設定します。直接のenvironment variableをprimary pathとし、1Passwordなどのsecret managerはoptionalでKyosoの依存ではありません。
 
@@ -372,7 +396,7 @@ Marketplace PluginはMCP processへ`OPENROUTER_API_KEY`の変数名を公開し�
 
 新規manual MCP registrationは既定で`OPENROUTER_API_KEY`を含めません。providerを意図して選択した後だけ`--with-openrouter`で追加し、既存registrationは書換えません。`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Claude Code registrationの`${OPENROUTER_API_KEY}`はclientが展開する必要があり、Kyosoは`${NAME}`、`$NAME`、`%NAME%`（前後の空白は許容）だけから成る未展開credential placeholderだけを無視し、変数名だけを含むsanitized warningを出します。ほかの文字列を含む値は維持します。custom credential-like nameの末尾が`_KEY`、`_TOKEN`、`_SECRET`、`_PASSWORD`である場合にも同じ規則を適用し、credentialではないtemplateは維持されます。
 
-このuser-authorized project-scoped opt-inを推奨します。global `provider = "openrouter"`は、projectが`provider = "default"`を設定するまで継承されます。`provider`の省略だけでは解除されません。固定のOpenRouter Responses API presetはbetaです。custom endpoint、provider routing、fallback、judge integrationは公開しません。keyをこのpresetに束縛するため、OpenRouter modeではtop-levelの`profile`または`profiles`を含む`CODEX_CONFIG`と、objectではない`model_providers` valueをchild起動前に拒否します。objectの場合は`model_providers`を固定の`kyoso-openrouter` entryだけに置換し、破棄したentry数だけを含むsanitized warningを出します。provider IDやconfig valueは出力しません。拒否するfield以外では、`model`、`model_provider`、`model_providers`以外のunrelatedな`CODEX_CONFIG` fieldを維持するため、foreign provider configurationがkey付きのendpointを選択することはできません。Claudeは設定済みproviderのままで、judgeは`OPENROUTER_API_KEY`を使用しません。
+このuser-authorized project-scoped opt-inを推奨します。global `provider = "openrouter"`は、projectが`provider = "default"`を設定するまで継承されます。`provider`の省略だけでは解除されません。固定のOpenRouter Responses API presetはbetaです。custom endpoint、provider routing、fallback、judge integrationは公開しません。設定した場合、`streamIdleTimeoutMs`、`streamMaxRetries`、`requestMaxRetries`は`stream_idle_timeout_ms`、`stream_max_retries`、`request_max_retries`だけへmappingされ、省略したfieldは`CODEX_CONFIG`に現れません。keyをこのpresetに束縛するため、OpenRouter modeではtop-levelの`profile`または`profiles`を含む`CODEX_CONFIG`と、objectではない`model_providers` valueをchild起動前に拒否します。objectの場合は`model_providers`を固定の`kyoso-openrouter` entryだけに置換し、破棄したentry数だけを含むsanitized warningを出します。provider IDやconfig valueは出力しません。拒否するfield以外では、`model`、`model_provider`、`model_providers`以外のunrelatedな`CODEX_CONFIG` fieldを維持するため、foreign provider configurationがkey付きのendpointを選択することはできません。Claudeは設定済みproviderのままで、judgeは`OPENROUTER_API_KEY`を使用しません。
 
 user global authorization後、projectの`kyoso.toml`はexternal providerを選択、または継承したOpenRouter modelを上書きし、review contextをそこへ送ることがあります。untrusted repositoryでは`--ignore-config`を使用し、必要なCLI optionsだけを明示してください。
 
@@ -382,7 +406,7 @@ user global authorization後、projectの`kyoso.toml`はexternal providerを選�
 KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp
 ```
 
-このcommandはCLI argumentsを受け付けず、pinしたCodex ACP adapterを使います。呼び出し元のrepositoryやcached Codex loginを利用しないよう、空のtemporary workspace、`HOME`、`CODEX_HOME`を新規作成し、key/modelをconfig・temporary artifact・outputへ書かずに固定の成功または失敗メッセージだけを返します。
+このcommandはCLI argumentsを受け付けず、pinしたCodex ACP adapterを使います。呼び出し元のrepositoryやcached Codex loginを利用しないよう、空のtemporary workspace、`HOME`、`CODEX_HOME`を新規作成し、key/modelをconfig・temporary artifact・outputへ書かずに固定の成功または失敗メッセージだけを返します。このcredentialed smokeはinteroperabilityだけを確認します。retryのcorrectnessはrelease専用の`KYOSO_CODEX_ACP_MOCK_SSE=1` local mock SSE integration gateがカバーします。
 
 ### Agent auth
 

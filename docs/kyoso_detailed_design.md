@@ -375,11 +375,17 @@ Options:
 --constraint <text>          # repeatable
 --json
 --markdown
+--progress auto|plain|jsonl|off
 --network model_only|unrestricted
 --set <key>=<value>         # repeatable
 ```
 
 `--set` is available on `plan`, `security`, and `diff`.
+
+`--progress` controls review-only progress output. `auto` is plain output only
+when stderr is a TTY; `plain` forces `[mm:ss]` lines, `jsonl` writes one typed
+event per stderr line, and `off` disables progress. Final Markdown or JSON is
+always stdout, while progress and errors are stderr.
 
 ### 6.4 `kyoso security`
 
@@ -471,7 +477,7 @@ Audit
 
 Manual MCP diagnosis is non-executing by default: `doctor` classifies a present Bun runner as unverified instead of spawning it. It must not call a legacy or custom registration ready. Only `kyoso setup <client> --write --runner bunx` can perform the bounded `bunx --version` probe; its dry-run counterpart reports that verification as pending and does not spawn it. An exact legacy Bun registration with an omitted runner is preserved without probing. Otherwise doctor shows the classification and a manual repair path.
 
-When `agents.codex.provider = "openrouter"`, the Codex section also reports the selected provider and model. It reports `auth: detected OPENROUTER_API_KEY from agents.codex.env` for a non-empty explicit child value, otherwise `auth: detected OPENROUTER_API_KEY` for a non-empty Kyoso process value. An unexpanded `${OPENROUTER_API_KEY}` receives a dedicated warning; any other missing value emits a warning that names the MCP registration forwarding requirement, client restart, and `kyoso doctor` as the verification command. It never prints a credential value.
+When `agents.codex.provider = "openrouter"`, the Codex section also reports the selected provider, model, and reliability policy. It labels unset idle timeout, stream retries, and request retries as inherited from the Codex runtime rather than asserting version-dependent defaults. When both idle timeout and stream retries are configured, it shows their approximate idle-only window plus backoff and warns when that window can consume the configured Codex agent timeout. It reports `auth: detected OPENROUTER_API_KEY from agents.codex.env` for a non-empty explicit child value, otherwise `auth: detected OPENROUTER_API_KEY` for a non-empty Kyoso process value. An unexpanded `${OPENROUTER_API_KEY}` receives a dedicated warning; any other missing value emits a warning that names the MCP registration forwarding requirement, client restart, and `kyoso doctor` as the verification command. It never prints a credential value.
 
 ### 6.8 `kyoso init`
 
@@ -850,6 +856,7 @@ TOML config is declarative and does not require trust approval. The user global 
 
 - `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
 - `agents.codex.provider`: `"openrouter"` selects the external provider and requires a non-empty Codex `model` plus user-global authorization when set by project TOML; a project `model` override also requires that authorization while OpenRouter is inherited; `"default"` is a project-safe reset for an inherited OpenRouter selection
+- `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, `requestMaxRetries`: OpenRouter-only retry policy; each requires the selected provider and the same project authorization
 - `workspace.maxContextBytes`, `workspace.maxDiffBytes`, additive `workspace.deny`
 - `verification.enabled`, `maxFindings`, `timeoutMs`
 - `judge.mode`, `judge.provider`, `judge.timeoutMs`
@@ -860,14 +867,15 @@ Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.a
 
 Fixed or reserved schema values are explicit: `firstClassClient = "codex"` is metadata only, `workspace.readOnly = true` describes the enforced read-only review contract, `network.mediatedWeb.enabled = false` reserves the future mode, and `audit.includeFileContents = false` prevents file-content persistence through Audit config. `verification.allowDemotion` is accepted for compatibility but is annotate-only and has no runtime demotion effect.
 
-The user-global layer may set the Codex provider without an allowlist entry, but a project selecting `provider = "openrouter"`, or overriding `model` while it inherits OpenRouter, first requires the exact absolute canonical directory containing its resolved config file in user-global `[agents.codex] allowProjectProvider = ["/absolute/path/to/project"]`; this is not the invocation cwd or a lexical path. Matching is exact (not descendants or globs) after resolving both the project config file, including trusted `kyoso.config.ts`, and allowlist directory to real paths. A config file and allowlist entry resolving through symlinks to the same directory match; an entry resolving elsewhere or an unresolvable path fails closed, and legacy booleans fail closed. Kyoso captures the canonical config target before reading it and authorizes that captured directory. This is a single-user local CLI boundary: a concurrent process that can replace files inside an authorized canonical directory is out of scope; full file-identity binding would require native dirfd/openat-style support. A project that omits `provider` does not unset an inherited `"openrouter"` value; set `provider = "default"` in that project to return to normal Codex behavior without a model or authorization. Prefer this user-authorized project-local opt-in so unrelated projects retain their existing Codex provider and login behavior. `agents.claude.provider` is not a schema or override path.
+The user-global layer may set the Codex provider without an allowlist entry, but a project selecting `provider = "openrouter"`, overriding `model` while it inherits OpenRouter, or changing `agents.codex.openRouter.*` while it inherits OpenRouter, first requires the exact absolute canonical directory containing its resolved config file in user-global `[agents.codex] allowProjectProvider = ["/absolute/path/to/project"]`; this is not the invocation cwd or a lexical path. Matching is exact (not descendants or globs) after resolving both the project config file, including trusted `kyoso.config.ts`, and allowlist directory to real paths. A config file and allowlist entry resolving through symlinks to the same directory match; an entry resolving elsewhere or an unresolvable path fails closed, and legacy booleans fail closed. Kyoso captures the canonical config target before reading it and authorizes that captured directory. This is a single-user local CLI boundary: a concurrent process that can replace files inside an authorized canonical directory is out of scope; full file-identity binding would require native dirfd/openat-style support. A project that omits `provider` does not unset an inherited `"openrouter"` value; set `provider = "default"` in that project to return to normal Codex behavior without a model or authorization. The reset clears inherited OpenRouter model and retry-policy fields; retry fields supplied in the same reset layer remain invalid because they require `provider = "openrouter"`. Prefer this user-authorized project-local opt-in so unrelated projects retain their existing Codex provider and login behavior. `agents.claude.provider` is not a schema or override path.
 
-Selecting `agents.codex.provider`, or overriding an inherited OpenRouter model, from an authorized project `kyoso.toml` routes review context to an external provider. `doctor` and audit warnings identify this project-scoped routing change; use `--ignore-config` for untrusted repositories and pass only the needed CLI options explicitly.
+Selecting `agents.codex.provider`, overriding an inherited OpenRouter model, or changing its retry policy from an authorized project `kyoso.toml` routes review context to an external provider. `doctor` and audit warnings identify this project-scoped routing or transport-policy change; use `--ignore-config` for untrusted repositories and pass only the needed CLI options explicitly.
 
 Review CLI overrides use repeatable `--set <key>=<value>` arguments and are limited to:
 
 - `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
 - `agents.codex.provider`
+- `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, `requestMaxRetries`
 - `verification.enabled`, `maxFindings`, `timeoutMs`
 - `judge.mode`, `provider`, `timeoutMs`
 
@@ -903,6 +911,11 @@ provider = "openrouter"
 model = "openai/o4-mini"
 effort = "medium"
 
+[agents.codex.openRouter]
+streamIdleTimeoutMs = 90000
+streamMaxRetries = 3
+requestMaxRetries = 2
+
 [agents.claude]
 model = "claude-sonnet-5"
 effort = "high"
@@ -927,20 +940,21 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 Every public config family must have an observable runtime consumer or be explicitly fixed/reserved.
 
-| Config family                              | Runtime consumer                            | Contract                                                                     |
-| ------------------------------------------ | ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `entrypoints.*`, `tools.*`                 | `runReview` preflight                       | Disabled policy returns a structured block before any agent starts.          |
-| `reviewPolicy.*`                           | lens resolution and coverage                | Adds required lenses; optionally requires independent multi-agent review.    |
-| `agents.*`                                 | ACP primary/verifier orchestration          | Selects enabled processes, roles, models, auth env, and timeouts.            |
-| `workspace.*`                              | context builder and temporary snapshot      | Enforces size, deny-list, root, and read-only snapshot behavior.             |
-| `secrets.*`                                | request secret scan                         | Redacts and blocks or records an explicit caller-authorized override.        |
-| `network.*`                                | request cap and child-agent environment     | Enforces `model_only`/`unrestricted`; mediated web remains reserved.         |
-| `securityReview.cisaSecureByDesign.*`      | deterministic CISA computation and decision | Honors enabled, gate, and per-dimension switches.                            |
-| `judge.*`                                  | bounded advisory judge                      | Never changes deterministic finding admission or decision directly.          |
-| `verification.*`                           | cross-agent verification                    | Annotates material single-source findings; never demotes severity.           |
-| `reviewBudget.*`                           | review budget tracker                       | Caps calls, deadline, streamed output, findings, and optional phases.        |
-| `audit.*`                                  | trusted-state trace writer                  | Persists sanitized events; file-content persistence is fixed off.            |
-| `firstClassClient`, fixed literal settings | `doctor` / schema validation                | Metadata or reserved values are reported as such and reject unsupported use. |
+| Config family                              | Runtime consumer                            | Contract                                                                                   |
+| ------------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `entrypoints.*`, `tools.*`                 | `runReview` preflight                       | Disabled policy returns a structured block before any agent starts.                        |
+| `reviewPolicy.*`                           | lens resolution and coverage                | Adds required lenses; optionally requires independent multi-agent review.                  |
+| `agents.*`                                 | ACP primary/verifier orchestration          | Selects enabled processes, roles, models, auth env, and timeouts.                          |
+| `agents.codex.openRouter.*`                | OpenRouter provider preset and trace        | Maps configured camelCase retry values to snake_case; omission preserves runtime defaults. |
+| `workspace.*`                              | context builder and temporary snapshot      | Enforces size, deny-list, root, and read-only snapshot behavior.                           |
+| `secrets.*`                                | request secret scan                         | Redacts and blocks or records an explicit caller-authorized override.                      |
+| `network.*`                                | request cap and child-agent environment     | Enforces `model_only`/`unrestricted`; mediated web remains reserved.                       |
+| `securityReview.cisaSecureByDesign.*`      | deterministic CISA computation and decision | Honors enabled, gate, and per-dimension switches.                                          |
+| `judge.*`                                  | bounded advisory judge                      | Never changes deterministic finding admission or decision directly.                        |
+| `verification.*`                           | cross-agent verification                    | Annotates material single-source findings; never demotes severity.                         |
+| `reviewBudget.*`                           | review budget tracker                       | Caps calls, deadline, streamed output, findings, and optional phases.                      |
+| `audit.*`                                  | trusted-state trace writer                  | Persists sanitized events; file-content persistence is fixed off.                          |
+| `firstClassClient`, fixed literal settings | `doctor` / schema validation                | Metadata or reserved values are reported as such and reject unsupported use.               |
 
 ---
 
@@ -962,7 +976,7 @@ All three MCP tools use the same pipeline.
 11. Resolve required lenses and render the trusted review contract outside untrusted repository context
 12. Generate role-specific prompts and reserve every primary reviewer before starting either subprocess
 13. Spawn Codex ACP and Claude ACP subprocesses
-14. Send prompts over ACP, enforcing an 8 MiB NDJSON transport-line limit before SDK parsing, counting streamed UTF-8 bytes from agent message and thought text chunks, and cancelling output above the configured cap
+14. Send prompts over ACP, enforcing an 8 MiB NDJSON transport-line limit before SDK parsing, counting streamed UTF-8 bytes from agent message and thought text chunks, discarding an unfinished message epoch when Codex reports a stream retry, and cancelling output above the configured cap
 15. Deny write/tool/permission requests that exceed MVP policy
 16. Collect and normalize agent responses; cap findings deterministically
 17. Aggregate candidates, calculate coverage, and run deterministic finding admission
@@ -985,6 +999,46 @@ All three MCP tools use the same pipeline.
 - If judge LLM fails: use deterministic fallback.
 - If a model-call reservation, deadline, output limit, verification coverage, or disputed verification makes the review incomplete: return a normal `block` result with `completion.retryable = false`; this block describes incomplete review coverage rather than a proven code defect.
 - If audit write fails: continue but include warning in result audit metadata.
+
+### 11.2 Progress and cancellation
+
+`runReview` exposes a typed `ReviewProgressEvent` sink rather than presentation
+strings. Events cover review start/end, phase start/completion/skip, primary
+agent lifecycle, throttled message/thought byte activity, ACP waiting state,
+and observed stream retries. They must not contain prompts, selected-file
+contents, diffs, model message/thought text, credentials, child stderr, raw
+error bodies, or snapshot paths.
+
+Progress delivery uses a bounded queue (128 events by default), serial delivery,
+coalescing for adjacent activity/waiting events from one agent, and a two-second
+per-sink timeout. Sink failures disable only that sink, record a sanitized
+`PROGRESS_DELIVERY_FAILED` warning and trace event, and never change review
+execution or its result.
+
+The CLI adapts these events to stderr. JSON/Markdown result stdout remains
+strictly free of progress lines. A heartbeat reports only that the process is
+alive and how long it has been since the last ACP update; it does not claim that
+the model is making progress.
+
+The MCP adapter creates a sink only when `ctx.mcpReq._meta?.progressToken` is
+present. It emits `notifications/progress` with that token, a per-request
+strictly increasing sequence starting at one, and a fixed-field message; it
+omits `total` because parallel reviewers, verification, judge calls, retries,
+and budget skips make work dynamic. MCP client display is independent of Kyoso's
+delivery: a client may receive notifications without rendering them. MCP stdout
+contains JSON-RPC frames only.
+
+CLI SIGINT creates a `KyosoCancellationError` (`REQUEST_CANCELLED`). The signal
+is checked at phase boundaries and reaches primary and verifier ACP subprocesses.
+After a session exists, Kyoso best-effort sends `session/cancel`, terminates the
+child with the existing TERM-to-KILL escalation, clears heartbeat timers, removes
+the temporary snapshot, and exits 130. Cancellation is propagated rather than
+converted into a degraded review result. MCP `notifications/cancelled` drives the
+same request signal; the tool handler lets `KyosoCancellationError` escape so the
+SDK handles suppression of a normal response. The judge combines that external
+signal with its local timeout for both OpenAI and Anthropic calls. External
+cancellation throws `KyosoCancellationError` instead of producing a deterministic
+judge fallback; a timeout without external cancellation still uses the fallback.
 
 ---
 
@@ -1099,7 +1153,7 @@ Do not forward:
 
 #### OpenRouter opt-in exception
 
-`OPENROUTER_API_KEY` is not part of the normal Codex parent-environment allowlist. Project `agents.codex.provider = "openrouter"`, or a project model override while OpenRouter is inherited, first requires its exact absolute config directory in user-global `agents.codex.allowProjectProvider`, including trusted legacy `kyoso.config.ts`; a user-global provider or direct CLI provider/model override is already explicit and needs no allowlist entry. Only when the provider is selected does Kyoso resolve a non-empty key from explicit `agents.codex.env.OPENROUTER_API_KEY` first and then from the Kyoso parent process. Only a whole unexpanded credential placeholder — `${NAME}`, `$NAME`, or `%NAME%`, with optional surrounding whitespace — is treated as absent and produces a sanitized key-name warning; values with other text are preserved. This covers known credential keys and custom names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`, while non-credential templates remain unchanged. If neither value is non-empty, Kyoso does not spawn Codex and returns a structured failed agent result, so a healthy reviewer can continue in degraded mode; when the provider is omitted or `provider = "default"`, it forwards neither an explicit nor a parent OpenRouter key and warns when a non-empty explicit key was withheld. The same sanitized withholding warning applies to a non-empty explicit key in any other child configuration, including `agents.claude.env`, because only the selected Codex OpenRouter child can receive it. `provider = "default"` is a reset sentinel: when it replaces an inherited OpenRouter provider without a model in the same layer, it also clears the inherited OpenRouter model.
+`OPENROUTER_API_KEY` is not part of the normal Codex parent-environment allowlist. Project `agents.codex.provider = "openrouter"`, a project model override while OpenRouter is inherited, or a project `agents.codex.openRouter.*` override while OpenRouter is inherited first requires its exact absolute config directory in user-global `agents.codex.allowProjectProvider`, including trusted legacy `kyoso.config.ts`; a user-global provider or direct CLI provider/model override is already explicit and needs no allowlist entry. Only when the provider is selected does Kyoso resolve a non-empty key from explicit `agents.codex.env.OPENROUTER_API_KEY` first and then from the Kyoso parent process. Only a whole unexpanded credential placeholder — `${NAME}`, `$NAME`, or `%NAME%`, with optional surrounding whitespace — is treated as absent and produces a sanitized key-name warning; values with other text are preserved. This covers known credential keys and custom names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`, while non-credential templates remain unchanged. If neither value is non-empty, Kyoso does not spawn Codex and returns a structured failed agent result, so a healthy reviewer can continue in degraded mode; when the provider is omitted or `provider = "default"`, it forwards neither an explicit nor a parent OpenRouter key and warns when a non-empty explicit key was withheld. The same sanitized withholding warning applies to a non-empty explicit key in any other child configuration, including `agents.claude.env`, because only the selected Codex OpenRouter child can receive it. `provider = "default"` is a reset sentinel: when it replaces an inherited OpenRouter provider, it clears inherited retry policy and clears the inherited model unless the reset layer explicitly supplies a normal model.
 
 The selected provider forces `MODEL_PROVIDER=kyoso-openrouter` and replaces `model_providers` in object-shaped `CODEX_CONFIG` with only this fixed preset:
 
@@ -1119,9 +1173,42 @@ The selected provider forces `MODEL_PROVIDER=kyoso-openrouter` and replaces `mod
 }
 ```
 
+When present, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` are integers mapped to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries` in that preset. `streamIdleTimeoutMs` is at least `1000`; both retry counts are in `0..100`, and `0` remains explicit. Omitted values are absent from `CODEX_CONFIG`, so the installed Codex runtime controls its own defaults. A stream retry regenerates the unfinished response within the same Codex turn; it is not byte-offset resume.
+
+#### Retry-aware output accumulation
+
+Codex retry is recognized only from a defensive parse of
+`session_info_update._meta.codex.error.willRetry === true`. The optional
+display message is sanitized before it reaches progress or trace output;
+`Reconnecting... N/M` supplies best-effort `attempt` and `maxRetries`
+metadata but is not the retry decision.
+
+At a retry boundary Kyoso abandons every un-abandoned message segment in the
+current epoch and records only its discarded UTF-8 byte count. It does not
+persist the discarded text. With no observed retry, final raw text remains the
+byte-for-byte receive-order concatenation of all message chunks. With a retry,
+Kyoso selects the latest remaining `final_answer` segment; if none exists, it
+concatenates remaining `unknown` segments from the final epoch; commentary is
+not a final candidate. Thought text is never retained.
+
+`messageBytes`, `thoughtBytes`, `outputBytes`, and the output hard limit
+continue to count every received wire chunk, including discarded retry text.
+The audit-only metrics are `observedStreamRetries`,
+`discardedRetryMessageBytes`, `firstOutputAt`, and `lastAcpUpdateAt`.
+`observedStreamRetries` is an ACP stream observation, not a total request
+retry count: transport-level `request_max_retries` can complete inside Codex
+without producing an ACP update.
+
+Kyoso records at most 100 `agent_retrying` trace events per primary agent to
+bound trace work. It continues output selection and retains the full
+`observedStreamRetries` value in the completed-model audit record; omitted
+progress events add a stable audit warning.
+
 Apart from rejected top-level `profile` and `profiles` fields, Kyoso preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, but overwrites those fields with the selected model and fixed provider preset. It rejects `profile`, `profiles`, and a non-object `model_providers` value before child launch rather than allowing an existing profile or malformed provider map to select another endpoint with `OPENROUTER_API_KEY`. For an object map, it discards every foreign `model_providers` entry instead of retaining or validating it, so no foreign provider can use the key. When it does, Kyoso emits a sanitized runtime warning with the discarded-entry count only; it never shows provider IDs or configuration values. Project configuration cannot replace the endpoint, auth variable, or wire protocol. OpenRouter mode removes `OPENAI_API_KEY`, `CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` from the Codex child while retaining `CODEX_HOME` for local adapter state; the adapter can still read its local login cache through that directory, so this is defense in depth rather than credential isolation. Audit records provider and model metadata only; it never records the key value.
 
 The credentialed interoperability check is release-gated rather than part of CI. After explicit network and billing approval, export `OPENROUTER_API_KEY`, choose an approved model, and run `KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp`. The command accepts no CLI arguments, uses the normal pinned Codex ACP adapter with fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories, does not persist the key or model, and exposes only a fixed success or failure result.
+
+Retry correctness is covered separately by the release-only `KYOSO_CODEX_ACP_MOCK_SSE=1` mock Responses SSE test. Its topology is `SubprocessAcpAgentManager` (a constructor-only test value) → pinned `codex-acp` → Codex app-server → loopback mock `/v1/responses`. The fixture exercises complete streams, disconnects, idle behavior, retryable failures, HTTP 401 canaries, and retry exhaustion without credentials or an external provider. The test-only base URL has no schema, TOML, CLI, or environment-variable route. The credentialed smoke remains a happy-path interoperability check, not a retry-correctness gate.
 
 ### 13.3 Recursion guard
 
@@ -1678,7 +1765,7 @@ Default allowed env:
 - `CODEX_ACCESS_TOKEN`
 - `CODEX_HOME`
 
-For `agents.codex.provider = "openrouter"`, `OPENROUTER_API_KEY` is a conditional child-process credential, not a general pass-through credential. Kyoso prefers a non-empty explicit `agents.codex.env.OPENROUTER_API_KEY`, then a non-empty key visible to the Kyoso process, and otherwise returns a structured `OPENROUTER_KEY_MISSING` failure without starting Codex. When the provider is omitted or set to `"default"`, it forwards neither source. This uses the fixed Responses API preset from §13.2 and never changes Claude or judge authentication. `provider = "default"` stops OpenRouter key forwarding and, unless the reset layer explicitly sets a normal model, clears an inherited OpenRouter model before child launch.
+For `agents.codex.provider = "openrouter"`, `OPENROUTER_API_KEY` is a conditional child-process credential, not a general pass-through credential. Kyoso prefers a non-empty explicit `agents.codex.env.OPENROUTER_API_KEY`, then a non-empty key visible to the Kyoso process, and otherwise returns a structured `OPENROUTER_KEY_MISSING` failure without starting Codex. When the provider is omitted or set to `"default"`, it forwards neither source. This uses the fixed Responses API preset from §13.2 and never changes Claude or judge authentication. `provider = "default"` stops OpenRouter key forwarding, clears inherited retry policy, and, unless the reset layer explicitly sets a normal model, clears an inherited OpenRouter model before child launch.
 
 Do not read or copy `~/.codex/auth.json` directly. Let Codex / codex-acp handle login cache and auth.
 
@@ -1798,6 +1885,10 @@ type TraceEvent =
       thoughtBytes?: number;
       outputBytes?: number;
       outputWarningTriggered?: boolean;
+      observedStreamRetries?: number;
+      discardedRetryMessageBytes?: number;
+      firstOutputAt?: string;
+      lastAcpUpdateAt?: string;
       salvaged?: boolean;
       reportedFindings?: number;
       findingsTargetExceeded?: boolean;
@@ -1839,6 +1930,26 @@ type TraceEvent =
       traceId: string;
       path: string;
       fileCount: number;
+      timestamp: string;
+    }
+  | {
+      type: "openrouter_retry_policy_resolved";
+      traceId: string;
+      streamIdleTimeoutMs?: number;
+      streamMaxRetries?: number;
+      requestMaxRetries?: number;
+      source: "kyoso_config";
+      timestamp: string;
+    }
+  | {
+      type: "agent_retrying";
+      traceId: string;
+      agent: string;
+      observedRetry: number;
+      attempt?: number;
+      maxRetries?: number;
+      reason: string;
+      discardedMessageBytes: number;
       timestamp: string;
     }
   | {
@@ -1884,7 +1995,7 @@ type TraceEvent =
   | { type: "response_sent"; traceId: string; timestamp: string };
 ```
 
-`agent_started`, `model_call_completed`, and model-backed `judge_completed` may include `executionIdentity`. `providerRoute` records the Kyoso route; `requestedModel` records the effective model sent to the child/API; and `reportedProvider` / `reportedModel` appear only when the backend reports them. `reportingStatus` keeps `reported`, `requested_only`, and `unknown` distinct. Calls skipped before a model request have no execution identity. The legacy top-level `provider` / `model` fields on `agent_started` mirror safe values for compatibility; the nested identity is canonical. No trace event includes `OPENROUTER_API_KEY`, base URLs, provider configuration bodies, or any other credential value.
+`openrouter_retry_policy_resolved` is emitted only for an enabled Codex OpenRouter reviewer with at least one explicitly configured retry field. `agent_retrying` records sanitized retry metadata and a discarded-byte count only; it never records partial message text. `agent_started`, `model_call_completed`, and model-backed `judge_completed` may include `executionIdentity`. `providerRoute` records the Kyoso route; `requestedModel` records the effective model sent to the child/API; and `reportedProvider` / `reportedModel` appear only when the backend reports them. `reportingStatus` keeps `reported`, `requested_only`, and `unknown` distinct. Calls skipped before a model request have no execution identity. The legacy top-level `provider` / `model` fields on `agent_started` mirror safe values for compatibility; the nested identity is canonical. No trace event includes `OPENROUTER_API_KEY`, base URLs, provider configuration bodies, or any other credential value.
 
 If selected-provider preflight fails before an ACP child starts (for example, because `OPENROUTER_API_KEY` is absent), the trace intentionally emits only a failed `agent_completed` event with its error code. It emits no paired `agent_started`; consumers must treat that absence as an explicit preflight outcome, not a lost trace event.
 
@@ -1894,6 +2005,7 @@ Audit must not include:
 
 - raw file contents by default
 - raw agent outputs by default
+- retry-discarded partial message text, even when raw agent output is enabled
 - secrets
 - full env
 - credentials

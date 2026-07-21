@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `agents.codex.openRouter` retry configuration for OpenRouter Codex
+  reviews. It maps idle timeout, stream retries, and request retries to the
+  fixed provider preset without changing omitted Codex runtime defaults.
+- Record observed ACP stream retries, discarded retry-message bytes, and ACP
+  output timestamps in model-call audit records and JSONL trace events.
+- Add typed core review-progress events, bounded non-blocking progress delivery,
+  CLI stderr renderers (`auto`, `plain`, `jsonl`, and `off`), and graceful
+  SIGINT cancellation through primary and verifier ACP subprocesses.
+- Add MCP `notifications/progress` support when a client provides a
+  `progressToken`, with per-request monotonic sequences and fixed-field messages.
+  Whether progress is displayed remains client-dependent.
+- Propagate MCP cancellation through primary and verification ACP subprocesses
+  and in-flight OpenAI or Anthropic judge calls without converting cancellation
+  into a normal result or judge fallback.
+- Add a release-gated mock Responses SSE integration suite for the pinned Codex
+  ACP adapter, covering stream retries and exhaustion without credentials or an
+  externally configurable provider base URL.
+
+### Fixed
+
+- Prevent incomplete Codex message chunks from leaking into final agent output
+  after a structured stream retry, while retaining full wire-byte accounting
+  and output-limit enforcement.
+- Bound retry-progress trace writes per primary agent and preserve retry
+  metrics when an output cap stops a session.
+- Treat a terminal Codex ACP system error as a failed agent result even when
+  the adapter returns an ACP `end_turn` response.
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.3` and pin its Codex and Claude Code

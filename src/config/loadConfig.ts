@@ -325,7 +325,7 @@ async function loadProjectConfig(input: {
   const extension = extname(requestedPath);
   if (extension === ".toml") {
     const projectTomlConfig = await loadTomlConfigFile(canonicalPath);
-    const projectChangesOpenRouterRoute = projectConfigChangesOpenRouterRoute(
+    const projectChangesOpenRouterPolicy = projectConfigChangesOpenRouterPolicy(
       projectTomlConfig,
       input.baseConfig,
     );
@@ -354,7 +354,7 @@ async function loadProjectConfig(input: {
       configPath: requestedPath,
       configTrustStatus: "not_found",
       source: { path: requestedPath, layer: "project_toml" },
-      warnings: projectChangesOpenRouterRoute
+      warnings: projectChangesOpenRouterPolicy
         ? [openRouterProjectConfigWarning(requestedPath)]
         : [],
     };
@@ -389,15 +389,22 @@ function projectConfigSuppliesCodexModel(config: unknown): boolean {
   );
 }
 
-function projectConfigChangesOpenRouterRoute(
+function projectConfigSuppliesOpenRouterPolicy(config: unknown): boolean {
+  return flattenLeaves(config).some((leaf) =>
+    leaf.path.join(".").startsWith("agents.codex.openRouter."),
+  );
+}
+
+function projectConfigChangesOpenRouterPolicy(
   projectConfig: unknown,
   baseConfig: unknown,
 ): boolean {
   return (
     projectConfigSelectsOpenRouter(projectConfig) ||
     (configSelectsOpenRouter(baseConfig) &&
-      projectConfigSuppliesCodexModel(projectConfig) &&
-      !projectConfigSelectsDefaultProvider(projectConfig))
+      !projectConfigSelectsDefaultProvider(projectConfig) &&
+      (projectConfigSuppliesCodexModel(projectConfig) ||
+        projectConfigSuppliesOpenRouterPolicy(projectConfig)))
   );
 }
 
@@ -416,7 +423,6 @@ export function applyProjectCodexProviderReset(
 ): unknown {
   if (
     !projectConfigSelectsDefaultProvider(projectConfig) ||
-    projectConfigSuppliesCodexModel(projectConfig) ||
     !configSelectsOpenRouter(baseConfig) ||
     !isRecord(mergedConfig) ||
     !isRecord(mergedConfig.agents) ||
@@ -425,22 +431,28 @@ export function applyProjectCodexProviderReset(
     return mergedConfig;
   }
 
-  const codexWithoutInheritedModel = Object.fromEntries(
+  const shouldClearInheritedModel =
+    !projectConfigSuppliesCodexModel(projectConfig);
+  const shouldClearInheritedOpenRouterPolicy =
+    !projectConfigSuppliesOpenRouterPolicy(projectConfig);
+  const codexWithoutInheritedOpenRouterConfig = Object.fromEntries(
     Object.entries(mergedConfig.agents.codex).filter(
-      ([key]) => key !== "model",
+      ([key]) =>
+        (!shouldClearInheritedModel || key !== "model") &&
+        (!shouldClearInheritedOpenRouterPolicy || key !== "openRouter"),
     ),
   );
   return {
     ...mergedConfig,
     agents: {
       ...mergedConfig.agents,
-      codex: codexWithoutInheritedModel,
+      codex: codexWithoutInheritedOpenRouterConfig,
     },
   };
 }
 
 function openRouterProjectConfigWarning(configPath: string): string {
-  return `Project config ${sanitizeWarningText(configPath)} changes Codex OpenRouter routing under user-global authorization; it can route Codex review content through OpenRouter.`;
+  return `Project config ${sanitizeWarningText(configPath)} changes Codex OpenRouter routing or transport retry policy under user-global authorization; it can route Codex review content through OpenRouter.`;
 }
 
 async function assertProjectOpenRouterAuthorization(input: {
@@ -452,7 +464,7 @@ async function assertProjectOpenRouterAuthorization(input: {
   globalConfigPath: string;
 }): Promise<void> {
   if (
-    !projectConfigChangesOpenRouterRoute(input.projectConfig, input.baseConfig)
+    !projectConfigChangesOpenRouterPolicy(input.projectConfig, input.baseConfig)
   ) {
     return;
   }
@@ -550,7 +562,7 @@ async function loadProjectTsConfig(input: {
   if (trustDecision.execute) {
     const userConfig = await loadUserConfig(canonicalPath, source);
     validateExplicitReviewBudgetThresholds(userConfig, input.baseConfig);
-    const projectChangesOpenRouterRoute = projectConfigChangesOpenRouterRoute(
+    const projectChangesOpenRouterPolicy = projectConfigChangesOpenRouterPolicy(
       userConfig,
       input.baseConfig,
     );
@@ -566,7 +578,7 @@ async function loadProjectTsConfig(input: {
       await trustConfig(trustStorePath, canonicalPath, configHash);
     }
     const projectMergedConfig = deepMerge(input.baseConfig, userConfig);
-    if (projectChangesOpenRouterRoute) {
+    if (projectChangesOpenRouterPolicy) {
       warnings.push(openRouterProjectConfigWarning(requestedPath));
     }
     return {

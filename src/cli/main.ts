@@ -8,8 +8,10 @@ import {
   runOpenRouterCodexAcpSmoke,
 } from "./openRouterAcpSmoke.js";
 import { runSetup } from "./setup.js";
+import { createCliProgressSink, resolveCliProgressMode } from "./progress.js";
 import { startMcpServer } from "../mcp/server.js";
 import { runReview } from "../core/runReview.js";
+import { KyosoCancellationError } from "../core/errors.js";
 import type {
   KyosoReviewRequest,
   NetworkMode,
@@ -90,21 +92,55 @@ async function main(): Promise<void> {
   ) {
     const tool = commandToTool(parsed.command);
     const request = await buildReviewRequest(tool, parsed.flags);
-    const result = await runReview(tool, request, {
-      cwd,
-      configPath,
-      ignoreConfig,
-      trustConfig,
-      allowUnknownConfig,
-      configOverrides: configOverrideFlags(parsed.flags),
-      entrypoint: "cli",
-      promptForTrust: canPromptForConfigTrust(),
-    });
-    console.log(
-      booleanFlag(parsed.flags, "json")
-        ? JSON.stringify(result, null, 2)
-        : result.summaryMarkdown,
+    const progressMode = resolveCliProgressMode(
+      stringFlag(parsed.flags, "progress"),
+      process.stderr.isTTY === true,
     );
+    const progressSink = createCliProgressSink(progressMode, (line) => {
+      process.stderr.write(line);
+    });
+    const controller = new AbortController();
+    let interruptCount = 0;
+    const onSigint = (): void => {
+      interruptCount += 1;
+      if (interruptCount > 1) {
+        process.exit(130);
+      }
+      if (progressMode !== "jsonl") {
+        process.stderr.write(
+          "Cancelling... (press Ctrl-C again to force quit)\n",
+        );
+      }
+      controller.abort(new KyosoCancellationError("Interrupted by SIGINT."));
+    };
+    process.on("SIGINT", onSigint);
+    try {
+      const result = await runReview(tool, request, {
+        cwd,
+        configPath,
+        ignoreConfig,
+        trustConfig,
+        allowUnknownConfig,
+        configOverrides: configOverrideFlags(parsed.flags),
+        entrypoint: "cli",
+        promptForTrust: canPromptForConfigTrust(),
+        onProgress: progressSink,
+        signal: controller.signal,
+      });
+      console.log(
+        booleanFlag(parsed.flags, "json")
+          ? JSON.stringify(result, null, 2)
+          : result.summaryMarkdown,
+      );
+    } catch (error) {
+      if (!isCancellationError(error)) throw error;
+      if (progressMode !== "jsonl") {
+        process.stderr.write("Review cancelled.\n");
+      }
+      process.exitCode = 130;
+    } finally {
+      process.off("SIGINT", onSigint);
+    }
     return;
   }
 
@@ -230,14 +266,28 @@ Usage:
   kyoso setup [codex|claude-code] [--write] [--with-openrouter] [--runner npx|bunx] [--command <command>] [--global] [--force]
   kyoso setup codex|claude-code --skill-only [--write] [--global] [--force]
   kyoso openrouter-acp-smoke
-  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
-  kyoso security --goal <text> [--diff <path>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
-  kyoso diff --base main --head HEAD [--focus <lens>]... [--set <key>=<value>]... [--json] [--trust-config] [--allow-unknown-config]
+  kyoso plan --goal <text> [--plan <path-or-text>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--progress auto|plain|jsonl|off] [--trust-config] [--allow-unknown-config]
+  kyoso security --goal <text> [--diff <path>] [--file <path>] [--focus <lens>]... [--set <key>=<value>]... [--json] [--progress auto|plain|jsonl|off] [--allow-secret-redaction] [--trust-config] [--allow-unknown-config]
+  kyoso diff --base main --head HEAD [--focus <lens>]... [--set <key>=<value>]... [--json] [--progress auto|plain|jsonl|off] [--trust-config] [--allow-unknown-config]
   kyoso doctor [--trust-config] [--allow-unknown-config]
   kyoso init [--force]
 `;
 
 main().catch((error) => {
+  if (isCancellationError(error)) {
+    console.error("Review cancelled.");
+    process.exit(130);
+  }
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
+
+function isCancellationError(error: unknown): boolean {
+  return (
+    error instanceof KyosoCancellationError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "REQUEST_CANCELLED")
+  );
+}

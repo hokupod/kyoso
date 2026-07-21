@@ -14,6 +14,13 @@ defaultMode = "model_only"
 # provider = "openrouter"
 # model = "openai/o4-mini"
 #
+# Experimental OpenRouter transport retry policy. Omit every field to preserve
+# the installed Codex runtime defaults; 0 explicitly disables a retry class.
+# [agents.codex.openRouter]
+# streamIdleTimeoutMs = 90000
+# streamMaxRetries = 3
+# requestMaxRetries = 2
+#
 # To reset an inherited user-global OpenRouter selection for this project:
 # provider = "default"
 #

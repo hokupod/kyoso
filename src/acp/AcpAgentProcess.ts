@@ -12,11 +12,13 @@ import {
 import type { KyosoConfig } from "../config/schema.js";
 import type {
   AgentName,
+  AgentProgressEvent,
   AgentRunInput,
   AgentRunResult,
   ModelExecutionIdentity,
   ModelTokenUsage,
 } from "../core/types.js";
+import { KyosoCancellationError, throwIfAborted } from "../core/errors.js";
 import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 import { normalizeModelTokenUsage } from "../core/tokenUsage.js";
 import { sanitizeTextForDisplay } from "../security/sanitizeText.js";
@@ -29,12 +31,24 @@ import {
   AcpNdJsonLineLimitError,
   limitAcpNdJsonLineBytes,
 } from "./ndJsonLineLimit.js";
+import {
+  AgentOutputAccumulator,
+  type AgentOutputMetrics,
+  type MessagePhase,
+} from "./AgentOutputAccumulator.js";
+import { parseCodexRetryUpdate } from "./codexRetryUpdate.js";
 import { normalizeAgentOutput, parseAgentOutputStrict } from "./normalize.js";
+
+const DEFAULT_PROGRESS_HEARTBEAT_MS = 15_000;
+const ACTIVITY_PROGRESS_THROTTLE_MS = 3_000;
 
 export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
   constructor(
     private readonly config: KyosoConfig,
     private readonly parentEnv: NodeJS.ProcessEnv = process.env,
+    private readonly internalOptions: {
+      openRouterBaseUrlForTest?: string;
+    } = {},
   ) {
     super();
   }
@@ -65,6 +79,14 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
           model: agentConfig.model,
           provider,
           preferApiKey: agentConfig.auth.preferApiKey,
+          openRouter:
+            input.agent === "codex"
+              ? this.config.agents.codex.openRouter
+              : undefined,
+          openRouterBaseUrlForTest:
+            input.agent === "codex"
+              ? this.internalOptions.openRouterBaseUrlForTest
+              : undefined,
         },
       );
     } catch (error) {
@@ -87,6 +109,7 @@ export class SubprocessAcpAgentManager extends BaseAcpAgentManager {
         launchContext.executionIdentity,
       );
     } catch (error) {
+      if (error instanceof KyosoCancellationError) throw error;
       return {
         agent: input.agent,
         role: input.role,
@@ -111,6 +134,7 @@ async function runSubprocessAgent(
   env: NodeJS.ProcessEnv,
   launchExecutionIdentity: ModelExecutionIdentity,
 ): Promise<AgentRunResult> {
+  throwIfAborted(input.signal);
   const startedAt = new Date().toISOString();
   const effectiveTimeoutMs = resolveEffectiveTimeoutMs(input);
   if (effectiveTimeoutMs <= 0) {
@@ -127,12 +151,20 @@ async function runSubprocessAgent(
     };
   }
 
-  return new Promise((resolveResult) => {
+  return new Promise((resolveResult, rejectResult) => {
+    const abortController = new AbortController();
+    let cancelSession: (() => void) | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const child = spawn(agentConfig.command, agentConfig.args, {
       cwd: input.workspaceDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    let termination: Promise<void> | undefined;
+    const terminate = (): Promise<void> => {
+      termination ??= terminateChild(child);
+      return termination;
+    };
 
     let stdout = "";
     let stderr = "";
@@ -149,12 +181,15 @@ async function runSubprocessAgent(
         .catch(() => undefined);
     });
 
-    const abortController = new AbortController();
-
+    let onAbort: (() => void) | undefined;
+    const cleanup = (): void => {
+      if (timeout) clearTimeout(timeout);
+      if (onAbort) input.signal?.removeEventListener("abort", onAbort);
+    };
     const resolveOnce = (result: AgentRunResult) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      cleanup();
       const finalResult =
         spawned && result.executionIdentity === undefined
           ? { ...result, executionIdentity: launchExecutionIdentity }
@@ -164,9 +199,29 @@ async function runSubprocessAgent(
       );
     };
 
-    const timeout = setTimeout(() => {
+    const rejectOnce = (error: KyosoCancellationError): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectResult(error);
+    };
+
+    onAbort = () => {
+      const cancellation = cancellationFromSignal(input.signal);
+      if (timeout) clearTimeout(timeout);
+      abortController.abort(cancellation);
+      cancelSession?.();
+      void terminate().then(() => rejectOnce(cancellation));
+    };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    if (input.signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    timeout = setTimeout(() => {
       abortController.abort(new Error("Kyoso agent timeout"));
-      terminateChild(child);
+      void terminate();
       const deadlineReached =
         input.deadlineAtEpochMs !== undefined &&
         Date.now() >= input.deadlineAtEpochMs;
@@ -210,6 +265,9 @@ async function runSubprocessAgent(
       abortController,
       resolveEffortConfigOption(agent, agentConfig.effort),
       launchExecutionIdentity,
+      (cancel) => {
+        cancelSession = cancel;
+      },
     )
       .then(
         ({
@@ -220,6 +278,10 @@ async function runSubprocessAgent(
           thoughtBytes,
           outputBytes,
           outputWarningTriggered,
+          observedStreamRetries,
+          discardedRetryMessageBytes,
+          firstOutputAt,
+          lastAcpUpdateAt,
           stopReason,
           executionIdentity,
         }) => {
@@ -237,6 +299,12 @@ async function runSubprocessAgent(
             thoughtBytes,
             outputBytes,
             outputWarningTriggered,
+            observedStreamRetries,
+            ...(discardedRetryMessageBytes === 0
+              ? {}
+              : { discardedRetryMessageBytes }),
+            ...(firstOutputAt === undefined ? {} : { firstOutputAt }),
+            ...(lastAcpUpdateAt === undefined ? {} : { lastAcpUpdateAt }),
             stopReason,
             executionIdentity,
             ...(usage ? { usage } : {}),
@@ -253,6 +321,10 @@ async function runSubprocessAgent(
         },
       )
       .catch((error) => {
+        if (error instanceof KyosoCancellationError) {
+          void terminate().then(() => rejectOnce(error));
+          return;
+        }
         const outputLimitError = findOutputLimitError(error, abortController);
         if (outputLimitError) {
           stdout = outputLimitError.rawText;
@@ -267,6 +339,20 @@ async function runSubprocessAgent(
             thoughtBytes: outputLimitError.thoughtBytes,
             outputBytes: outputLimitError.outputBytes,
             outputWarningTriggered: outputLimitError.outputWarningTriggered,
+            observedStreamRetries:
+              outputLimitError.metrics.observedStreamRetries,
+            ...(outputLimitError.metrics.discardedRetryMessageBytes === 0
+              ? {}
+              : {
+                  discardedRetryMessageBytes:
+                    outputLimitError.metrics.discardedRetryMessageBytes,
+                }),
+            ...(outputLimitError.metrics.firstOutputAt === undefined
+              ? {}
+              : { firstOutputAt: outputLimitError.metrics.firstOutputAt }),
+            ...(outputLimitError.metrics.lastAcpUpdateAt === undefined
+              ? {}
+              : { lastAcpUpdateAt: outputLimitError.metrics.lastAcpUpdateAt }),
             stopReason: "cancelled",
             startedAt,
             completedAt: new Date().toISOString(),
@@ -274,6 +360,39 @@ async function runSubprocessAgent(
               code: "AGENT_OUTPUT_LIMIT",
               message: `Agent output exceeded the ${outputLimitError.maxOutputBytes}-byte hard limit (message: ${outputLimitError.messageBytes}, thought: ${outputLimitError.thoughtBytes}, total: ${outputLimitError.outputBytes}) and was cancelled. Adjust user-global reviewBudget.maxAgentOutputBytes to change this ceiling.`,
             },
+          });
+          return;
+        }
+        if (error instanceof CodexTerminalSystemError) {
+          stdout = error.rawText;
+          const failureText = [stderr, formatAgentErrorDetail(error)]
+            .filter((part) => part.trim().length > 0)
+            .join("\n");
+          resolveOnce({
+            agent,
+            role: input.role,
+            status: "failed",
+            rawText: stdout,
+            messageBytes: error.messageBytes,
+            thoughtBytes: error.thoughtBytes,
+            outputBytes: error.outputBytes,
+            outputWarningTriggered: error.outputWarningTriggered,
+            observedStreamRetries: error.metrics.observedStreamRetries,
+            ...(error.metrics.discardedRetryMessageBytes === 0
+              ? {}
+              : {
+                  discardedRetryMessageBytes:
+                    error.metrics.discardedRetryMessageBytes,
+                }),
+            ...(error.metrics.firstOutputAt === undefined
+              ? {}
+              : { firstOutputAt: error.metrics.firstOutputAt }),
+            ...(error.metrics.lastAcpUpdateAt === undefined
+              ? {}
+              : { lastAcpUpdateAt: error.metrics.lastAcpUpdateAt }),
+            startedAt,
+            completedAt: new Date().toISOString(),
+            error: buildAgentFailure(failureText, "Agent process failed."),
           });
           return;
         }
@@ -309,7 +428,7 @@ async function runSubprocessAgent(
         });
       })
       .finally(() => {
-        terminateChild(child);
+        void terminate();
       });
 
     child.on("close", (code) => {
@@ -334,6 +453,7 @@ async function runAcpClientWorkflow(
   abortController: AbortController,
   configOption: { configId: string; value: string } | undefined,
   launchExecutionIdentity: ModelExecutionIdentity,
+  onSessionReady: (cancel: () => void) => void,
 ): Promise<{
   rawText: string;
   warnings: string[];
@@ -342,6 +462,10 @@ async function runAcpClientWorkflow(
   thoughtBytes: number;
   outputBytes: number;
   outputWarningTriggered: boolean;
+  observedStreamRetries: number;
+  discardedRetryMessageBytes: number;
+  firstOutputAt?: string;
+  lastAcpUpdateAt?: string;
   stopReason: string;
   executionIdentity: ModelExecutionIdentity;
 }> {
@@ -412,6 +536,15 @@ async function runAcpClientWorkflow(
         },
       })
       .withSession(async (session) => {
+        const cancelSession = (): void => {
+          void ctx
+            .notify(methods.agent.session.cancel, {
+              sessionId: session.sessionId,
+            })
+            .catch(() => undefined);
+        };
+        onSessionReady(cancelSession);
+        throwIfAborted(input.signal);
         const warnings: string[] = [];
         if (configOption) {
           // Backend agents throw the same error both when a model doesn't
@@ -438,85 +571,213 @@ async function runAcpClientWorkflow(
               console.error(`kyoso: ${warning}`);
             });
         }
-        const promptResponse = session.prompt(input.prompt, {
-          cancellationSignal: abortController.signal,
-        });
-        void promptResponse.catch(() => undefined);
-        let rawText = "";
+        const accumulator = new AgentOutputAccumulator();
         let messageBytes = 0;
         let thoughtBytes = 0;
         let outputBytes = 0;
         let outputWarningTriggered = false;
-        for (;;) {
-          const message = await session.nextUpdate();
-          if (message.kind === "stop") {
-            const usage = normalizeUsage(message.response.usage);
-            return {
-              rawText,
-              warnings,
-              ...(usage ? { usage } : {}),
-              messageBytes,
-              thoughtBytes,
-              outputBytes,
-              outputWarningTriggered,
-              stopReason: message.stopReason,
-              executionIdentity: withReportedExecutionIdentity(
-                launchExecutionIdentity,
-                message.response._meta,
-              ),
-            };
+        let codexReportedSystemError = false;
+        const sessionStartedAtEpochMs = Date.now();
+        let lastActivityAtEpochMs = 0;
+        const emitProgress = (event: AgentProgressEvent): void => {
+          try {
+            const progress = input.onProgress?.(event);
+            void Promise.resolve(progress).catch(() => undefined);
+          } catch {
+            // Progress notification failures must not stop the review.
           }
+        };
+        const heartbeatMs = input.heartbeatMs ?? DEFAULT_PROGRESS_HEARTBEAT_MS;
+        const heartbeat =
+          input.onProgress && heartbeatMs > 0
+            ? setInterval(() => {
+                const now = Date.now();
+                const lastAcpUpdateAt = accumulator.metrics().lastAcpUpdateAt;
+                const lastUpdateEpochMs = lastAcpUpdateAt
+                  ? Date.parse(lastAcpUpdateAt)
+                  : sessionStartedAtEpochMs;
+                emitProgress({
+                  type: "agent_waiting",
+                  agent: input.agent,
+                  elapsedMs: Math.max(0, now - sessionStartedAtEpochMs),
+                  sinceLastAcpUpdateMs: Math.max(
+                    0,
+                    now -
+                      (Number.isFinite(lastUpdateEpochMs)
+                        ? lastUpdateEpochMs
+                        : sessionStartedAtEpochMs),
+                  ),
+                  ...(input.streamIdleTimeoutMs === undefined
+                    ? {}
+                    : { streamIdleTimeoutMs: input.streamIdleTimeoutMs }),
+                  timestamp: new Date(now).toISOString(),
+                });
+              }, heartbeatMs)
+            : undefined;
+        heartbeat?.unref?.();
+        const stopHeartbeat = (): void => {
+          if (heartbeat) clearInterval(heartbeat);
+        };
+        input.signal?.addEventListener("abort", stopHeartbeat, { once: true });
 
-          const update = message.update;
-          if (
-            (update.sessionUpdate !== "agent_message_chunk" &&
-              update.sessionUpdate !== "agent_thought_chunk") ||
-            update.content.type !== "text"
-          ) {
-            continue;
-          }
-          const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
-          const isMessage = update.sessionUpdate === "agent_message_chunk";
-          const nextMessageBytes = messageBytes + (isMessage ? chunkBytes : 0);
-          const nextThoughtBytes = thoughtBytes + (isMessage ? 0 : chunkBytes);
-          const nextOutputBytes = nextMessageBytes + nextThoughtBytes;
-          const nextOutputWarningTriggered: boolean =
-            outputWarningTriggered ||
-            (input.warnOutputBytes !== undefined &&
-              nextOutputBytes >= input.warnOutputBytes);
-          if (
-            input.maxOutputBytes !== undefined &&
-            nextOutputBytes > input.maxOutputBytes
-          ) {
-            const retainedRawText = isMessage
-              ? `${rawText}${utf8Prefix(
-                  update.content.text,
-                  input.maxOutputBytes - outputBytes,
-                )}`
-              : rawText;
-            await ctx
-              .notify(methods.agent.session.cancel, {
-                sessionId: session.sessionId,
-              })
-              .catch(() => undefined);
-            const error = new AgentOutputLimitError(
-              retainedRawText,
-              nextMessageBytes,
-              nextThoughtBytes,
-              nextOutputBytes,
-              input.maxOutputBytes,
-              nextOutputWarningTriggered,
-            );
-            abortController.abort(error);
+        try {
+          const promptResponse = session.prompt(input.prompt, {
+            cancellationSignal: abortController.signal,
+          });
+          // ACP can report a failed turn through prompt() after emitting a
+          // terminal update. Preserve that rejection rather than accepting
+          // the update as a successful end_turn.
+          const promptCompletion = promptResponse.catch((error) => {
+            if (input.signal?.aborted) {
+              throw cancellationFromSignal(input.signal);
+            }
+            if (abortController.signal.aborted) {
+              const reason = abortController.signal.reason;
+              if (reason !== undefined) throw reason;
+            }
             throw error;
+          });
+          const promptFailure = promptCompletion.then(
+            () => new Promise<never>(() => undefined),
+          );
+          for (;;) {
+            const message = await Promise.race([
+              session.nextUpdate(),
+              promptFailure,
+            ]);
+            if (message.kind === "stop") {
+              await promptCompletion;
+              if (codexReportedSystemError) {
+                throw new CodexTerminalSystemError(
+                  accumulator.finalRawText(),
+                  messageBytes,
+                  thoughtBytes,
+                  outputBytes,
+                  outputWarningTriggered,
+                  accumulator.metrics(),
+                );
+              }
+              const usage = normalizeUsage(message.response.usage);
+              return {
+                rawText: accumulator.finalRawText(),
+                warnings,
+                ...(usage ? { usage } : {}),
+                messageBytes,
+                thoughtBytes,
+                outputBytes,
+                outputWarningTriggered,
+                ...accumulator.metrics(),
+                stopReason: message.stopReason,
+                executionIdentity: withReportedExecutionIdentity(
+                  launchExecutionIdentity,
+                  message.response._meta,
+                ),
+              };
+            }
+
+            const update = message.update;
+            accumulator.noteUpdate();
+            const retry = parseCodexRetryUpdate(update);
+            if (retry) {
+              codexReportedSystemError = false;
+              const boundary = accumulator.markRetryBoundary();
+              emitProgress({
+                type: "agent_retrying",
+                agent: input.agent,
+                observedRetry: accumulator.metrics().observedStreamRetries,
+                ...(retry.attempt === undefined
+                  ? {}
+                  : { attempt: retry.attempt }),
+                ...(retry.maxRetries === undefined
+                  ? {}
+                  : { maxRetries: retry.maxRetries }),
+                reason: retry.message,
+                discardedMessageBytes: boundary.discardedMessageBytes,
+                timestamp: new Date().toISOString(),
+              });
+              continue;
+            }
+            const codexThreadStatus = readCodexThreadStatus(update);
+            if (codexThreadStatus !== undefined) {
+              codexReportedSystemError = codexThreadStatus === "systemError";
+              continue;
+            }
+            if (
+              (update.sessionUpdate !== "agent_message_chunk" &&
+                update.sessionUpdate !== "agent_thought_chunk") ||
+              update.content.type !== "text"
+            ) {
+              continue;
+            }
+            const chunkBytes = Buffer.byteLength(update.content.text, "utf8");
+            const isMessage = update.sessionUpdate === "agent_message_chunk";
+            const nextMessageBytes =
+              messageBytes + (isMessage ? chunkBytes : 0);
+            const nextThoughtBytes =
+              thoughtBytes + (isMessage ? 0 : chunkBytes);
+            const nextOutputBytes = nextMessageBytes + nextThoughtBytes;
+            const nextOutputWarningTriggered: boolean =
+              outputWarningTriggered ||
+              (input.warnOutputBytes !== undefined &&
+                nextOutputBytes >= input.warnOutputBytes);
+            if (
+              input.maxOutputBytes !== undefined &&
+              nextOutputBytes > input.maxOutputBytes
+            ) {
+              if (isMessage) {
+                accumulator.addMessageChunk(
+                  utf8Prefix(
+                    update.content.text,
+                    input.maxOutputBytes - outputBytes,
+                  ),
+                  readChunkMeta(update),
+                );
+              }
+              const retainedRawText = accumulator.finalRawText();
+              await ctx
+                .notify(methods.agent.session.cancel, {
+                  sessionId: session.sessionId,
+                })
+                .catch(() => undefined);
+              const error = new AgentOutputLimitError(
+                retainedRawText,
+                nextMessageBytes,
+                nextThoughtBytes,
+                nextOutputBytes,
+                input.maxOutputBytes,
+                nextOutputWarningTriggered,
+                accumulator.metrics(),
+              );
+              abortController.abort(error);
+              throw error;
+            }
+            if (isMessage) {
+              accumulator.addMessageChunk(
+                update.content.text,
+                readChunkMeta(update),
+              );
+            } else {
+              accumulator.addThoughtChunk(update.content.text);
+            }
+            messageBytes = nextMessageBytes;
+            thoughtBytes = nextThoughtBytes;
+            outputBytes = nextOutputBytes;
+            outputWarningTriggered = nextOutputWarningTriggered;
+            const now = Date.now();
+            if (now - lastActivityAtEpochMs >= ACTIVITY_PROGRESS_THROTTLE_MS) {
+              lastActivityAtEpochMs = now;
+              emitProgress({
+                type: "agent_activity",
+                agent: input.agent,
+                activity: isMessage ? "message" : "thought",
+                totalOutputBytes: outputBytes,
+                timestamp: new Date(now).toISOString(),
+              });
+            }
           }
-          if (isMessage) {
-            rawText += update.content.text;
-          }
-          messageBytes = nextMessageBytes;
-          thoughtBytes = nextThoughtBytes;
-          outputBytes = nextOutputBytes;
-          outputWarningTriggered = nextOutputWarningTriggered;
+        } finally {
+          stopHeartbeat();
+          input.signal?.removeEventListener("abort", stopHeartbeat);
         }
       });
   });
@@ -544,9 +805,27 @@ class AgentOutputLimitError extends Error {
     readonly outputBytes: number,
     readonly maxOutputBytes: number,
     readonly outputWarningTriggered: boolean,
+    readonly metrics: AgentOutputMetrics,
   ) {
     super(`Agent output exceeded ${maxOutputBytes} bytes.`);
     this.name = "AgentOutputLimitError";
+  }
+}
+
+class CodexTerminalSystemError extends Error {
+  constructor(
+    readonly rawText: string,
+    readonly messageBytes: number,
+    readonly thoughtBytes: number,
+    readonly outputBytes: number,
+    readonly outputWarningTriggered: boolean,
+    readonly metrics: AgentOutputMetrics,
+  ) {
+    super(
+      sanitizeTextForDisplay(rawText) ||
+        "Codex ACP reported a terminal system error.",
+    );
+    this.name = "CodexTerminalSystemError";
   }
 }
 
@@ -557,6 +836,15 @@ function findOutputLimitError(
   if (error instanceof AgentOutputLimitError) return error;
   const reason = abortController.signal.reason;
   return reason instanceof AgentOutputLimitError ? reason : undefined;
+}
+
+function cancellationFromSignal(
+  signal: AbortSignal | undefined,
+): KyosoCancellationError {
+  if (signal?.reason instanceof KyosoCancellationError) return signal.reason;
+  return new KyosoCancellationError(
+    typeof signal?.reason === "string" ? signal.reason : undefined,
+  );
 }
 
 function resolveEffectiveTimeoutMs(input: AgentRunInput): number {
@@ -582,6 +870,34 @@ function withReportedExecutionIdentity(
     reportedProvider: record.provider,
     reportedModel: record.model,
   });
+}
+
+function readChunkMeta(update: unknown): {
+  messageId?: string;
+  phase: MessagePhase;
+} {
+  const record = isRecord(update) ? update : {};
+  const metadata = isRecord(record._meta) ? record._meta : {};
+  const codex = isRecord(metadata.codex) ? metadata.codex : {};
+  const phase =
+    codex.phase === "commentary" || codex.phase === "final_answer"
+      ? codex.phase
+      : "unknown";
+  return {
+    ...(typeof record.messageId === "string"
+      ? { messageId: record.messageId }
+      : {}),
+    phase,
+  };
+}
+
+function readCodexThreadStatus(update: unknown): string | undefined {
+  const record = isRecord(update) ? update : {};
+  if (record.sessionUpdate !== "session_info_update") return undefined;
+  const metadata = isRecord(record._meta) ? record._meta : {};
+  const codex = isRecord(metadata.codex) ? metadata.codex : {};
+  const threadStatus = isRecord(codex.threadStatus) ? codex.threadStatus : {};
+  return typeof threadStatus.type === "string" ? threadStatus.type : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -664,14 +980,39 @@ function assertWithinWorkspace(workspaceRoot: string, absolute: string): void {
   }
 }
 
-function terminateChild(child: ReturnType<typeof spawn>): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  const killTimer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null)
+function terminateChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let escalationTimer: ReturnType<typeof setTimeout> | undefined;
+    let onClose: (() => void) | undefined;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      if (escalationTimer) clearTimeout(escalationTimer);
+      if (onClose) child.off("close", onClose);
+      resolve();
+    };
+
+    onClose = () => settle();
+    child.once("close", onClose);
+    child.kill("SIGTERM");
+    killTimer = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        settle();
+        return;
+      }
       child.kill("SIGKILL");
-  }, 2_000);
-  killTimer.unref();
+      escalationTimer = setTimeout(settle, 500);
+      escalationTimer.unref();
+    }, 2_000);
+    killTimer.unref();
+  });
 }
 
 function isMissingPathError(error: unknown): boolean {

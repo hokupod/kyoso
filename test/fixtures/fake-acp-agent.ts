@@ -17,6 +17,10 @@ if (process.env.FAKE_ACP_PID_FILE) {
   writeFileSync(process.env.FAKE_ACP_PID_FILE, String(process.pid));
 }
 
+if (mode === "hang_ignore_sigterm") {
+  process.on("SIGTERM", () => undefined);
+}
+
 if (mode === "crash") {
   console.error("auth failed: fake ACP crash");
   process.exit(1);
@@ -61,7 +65,32 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     return { configOptions: [] };
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
-    if (mode === "hang") {
+    const notifyMessageChunk = async (
+      text: string,
+      messageId: string,
+      phase?: "commentary" | "final_answer",
+    ): Promise<void> => {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId,
+          content: { type: "text", text },
+          ...(phase === undefined ? {} : { _meta: { codex: { phase } } }),
+        } as never,
+      });
+    };
+    const notifyRetry = async (message: string): Promise<void> => {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { codex: { error: { willRetry: true, message } } },
+        } as never,
+      });
+    };
+
+    if (mode === "hang" || mode === "hang_ignore_sigterm") {
       await new Promise(() => {});
     }
 
@@ -221,7 +250,7 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     const baseSummary =
       manifest.content.includes("review plan") &&
       selectedFile.content.includes("export const foo = 1")
-        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; OPENROUTER_API_KEY_PRESENT=${hasEnv("OPENROUTER_API_KEY")}; MODEL_PROVIDER=${process.env.MODEL_PROVIDER ?? ""}; CODEX_CONFIG_MODEL=${codexConfig.model}; CODEX_CONFIG_OPENROUTER_PRESET=${codexConfig.hasOpenRouterPreset}`
+        ? `fake ACP subprocess read snapshot context and selected file; ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL ?? ""}; OPENROUTER_API_KEY_PRESENT=${hasEnv("OPENROUTER_API_KEY")}; MODEL_PROVIDER=${process.env.MODEL_PROVIDER ?? ""}; CODEX_CONFIG_MODEL=${codexConfig.model}; CODEX_CONFIG_OPENROUTER_PRESET=${codexConfig.hasOpenRouterPreset}; CODEX_CONFIG_STREAM_IDLE_TIMEOUT_MS=${codexConfig.streamIdleTimeoutMs ?? ""}`
         : "fake ACP subprocess reviewed the prompt";
     const opinion = {
       summary: receivedConfigOption
@@ -244,6 +273,44 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       residualRisks: ["fake ACP subprocess residual risk"],
       openQuestions: [],
     };
+    if (mode === "retry_partial_then_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-b",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_twice_then_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk('{"summary":"pas', "msg-b");
+      await notifyRetry("Reconnecting... 2/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-c",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_then_unknown_final") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(JSON.stringify(opinion), "msg-b");
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
+    if (mode === "retry_then_overflow") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      await notifyMessageChunk(
+        JSON.stringify(opinion),
+        "msg-b",
+        "final_answer",
+      );
+      return { stopReason: "end_turn", usage: fakeUsage() };
+    }
     await ctx.client.notify(methods.client.session.update, {
       sessionId: ctx.params.sessionId,
       update: {
@@ -322,6 +389,7 @@ function terminalStopReason(value: string) {
 function readCodexConfigMetadata(): {
   model: string;
   hasOpenRouterPreset: boolean;
+  streamIdleTimeoutMs?: number;
 } {
   const raw = process.env.CODEX_CONFIG;
   if (!raw) return { model: "", hasOpenRouterPreset: false };
@@ -329,10 +397,17 @@ function readCodexConfigMetadata(): {
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return { model: "", hasOpenRouterPreset: false };
     const providers = parsed.model_providers;
+    const openRouterPreset =
+      isRecord(providers) && isRecord(providers["kyoso-openrouter"])
+        ? providers["kyoso-openrouter"]
+        : undefined;
     return {
       model: typeof parsed.model === "string" ? parsed.model : "",
-      hasOpenRouterPreset:
-        isRecord(providers) && isRecord(providers["kyoso-openrouter"]),
+      hasOpenRouterPreset: openRouterPreset !== undefined,
+      streamIdleTimeoutMs:
+        typeof openRouterPreset?.stream_idle_timeout_ms === "number"
+          ? openRouterPreset.stream_idle_timeout_ms
+          : undefined,
     };
   } catch {
     return { model: "", hasOpenRouterPreset: false };

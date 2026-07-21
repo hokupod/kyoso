@@ -9,6 +9,7 @@ import type {
   NormalizedAgentOpinion,
   ReviewTool,
 } from "../core/types.js";
+import { KyosoCancellationError } from "../core/errors.js";
 import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 import { resolveAnthropicJudgeModel, runAnthropicJudge } from "./anthropic.js";
 import { runDeterministicJudge } from "./deterministicFallback.js";
@@ -57,6 +58,7 @@ export type JudgeRunInput = {
   requestedProvider?: JudgeProvider;
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export function resolveJudgeProvider(
@@ -133,6 +135,11 @@ export async function runJudge(input: JudgeRunInput): Promise<JudgeRunResult> {
       ...(output.usage ? { usage: output.usage } : {}),
     };
   } catch (error) {
+    if (input.signal?.aborted) {
+      throw new KyosoCancellationError(
+        "Kyoso review was cancelled during judge execution.",
+      );
+    }
     return {
       provider,
       status: "failed_fallback",

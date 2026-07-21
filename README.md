@@ -168,6 +168,36 @@ kyoso setup codex --write --skill-only
 kyoso setup claude-code --write --skill-only
 ```
 
+### Progress and cancellation
+
+Review results always use stdout: Markdown by default and JSON with `--json`.
+Progress and errors use stderr, so structured output remains pipe-safe.
+
+```bash
+kyoso plan --goal "Review this plan" --plan plan.md --json --progress jsonl \
+  >result.json 2>progress.jsonl
+```
+
+`--progress auto|plain|jsonl|off` defaults to `auto`: it shows plain,
+line-oriented progress only when stderr is a TTY. Use `plain` to force
+human-readable stderr output, `jsonl` for one typed event per stderr line, or
+`off` to suppress progress. Progress never includes prompts, selected-file
+contents, diffs, or model message/thought text.
+
+Press Ctrl-C once to request graceful cancellation of the review and its ACP
+child agents; Kyoso exits with status 130 after cleanup. Press it a second time
+to force immediate exit.
+
+For MCP tools, Kyoso sends `notifications/progress` only when the client supplies
+a `progressToken` in request metadata. Each request receives its own monotonically
+increasing sequence and no `total`, because review work is dynamic. Kyoso supports
+MCP progress notifications when the client requests them; whether progress is
+displayed is controlled by the MCP client.
+
+An MCP `notifications/cancelled` request aborts the review, including primary and
+verification ACP subprocesses and an in-flight LLM judge. A cancelled tool call is
+not converted into a normal review result. MCP stdout remains JSON-RPC only.
+
 ## Usage Examples
 
 Review an implementation plan with selected code:
@@ -291,7 +321,7 @@ Kyoso loads config in this order:
 
 Unknown keys are rejected. Boolean and numeric config keys are converted to their schema types; string keys remain strings. The complete config is then validated.
 
-Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, the Codex-only `provider` or a model override while OpenRouter is inherited after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network/CISA settings.
+Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, the Codex-only `provider`, OpenRouter model, or retry-policy override after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network/CISA settings.
 
 `entrypoints.*`, `tools.*`, and `reviewPolicy.*` are user-global policy. A disabled entrypoint or tool returns a structured policy block before agents start. `firstClassClient = "codex"`, `workspace.readOnly = true`, `network.mediatedWeb.enabled = false`, and `audit.includeFileContents = false` are fixed or reserved values; unsupported values are rejected instead of acting as no-ops.
 
@@ -310,7 +340,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`. Codex also supports `agents.codex.provider`: `"openrouter"` selects the external provider, while `"default"` resets an inherited OpenRouter selection to normal Codex behavior; Claude has no provider setting. Selecting the provider from a project requires the global-config-only `agents.codex.allowProjectProvider` allowlist; see [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in) for the full rules. The `command`, `args`, and `env` keys are also global-config-only (see [Files and precedence](#files-and-precedence)).
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`. Codex also supports `agents.codex.provider`: `"openrouter"` selects the external provider, while `"default"` resets an inherited OpenRouter selection to normal Codex behavior; Claude has no provider setting. `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` configure the selected OpenRouter transport only. Selecting the provider or changing that retry policy from a project requires the global-config-only `agents.codex.allowProjectProvider` allowlist; see [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in) for the full rules. The `command`, `args`, and `env` keys are also global-config-only (see [Files and precedence](#files-and-precedence)).
 
 Omit `agents.<name>.model` or `agents.<name>.effort` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml` (or `$CODEX_HOME/config.toml` when `CODEX_HOME` is set); Claude uses the adapter default.
 
@@ -350,13 +380,20 @@ Then opt in only in the project that needs OpenRouter:
 [agents.codex]
 provider = "openrouter"
 model = "openai/o4-mini"
+
+[agents.codex.openRouter]
+streamIdleTimeoutMs = 90000
+streamMaxRetries = 3
+requestMaxRetries = 2
 ```
 
 `model` is required and must not be blank when `provider = "openrouter"`. It is an OpenRouter model ID; Kyoso does not validate the catalog or whether that model supports tool calling, so confirm tool support with the provider.
 
-`allowProjectProvider` applies to a project `provider` and to a project `model` override while OpenRouter is inherited; its list must contain the absolute canonical directory containing the resolved project configuration file, not the invocation cwd or a lexical path, with no descendant or glob matching. A project configuration file (including trusted `kyoso.config.ts`) and an allowlist entry that resolve through symlinks to that directory match; entries resolving elsewhere, or unresolvable paths, fail closed. A user-global `provider = "openrouter"` needs no allowlist entry. An explicit CLI pair of `--set agents.codex.provider=openrouter` and `--set agents.codex.model=<model>` in the same invocation is also allowed without it; a project model cannot supply the CLI override's model. `allowProjectProvider` is not a `--set` path and legacy boolean values are rejected.
+`agents.codex.openRouter` is experimental. `streamIdleTimeoutMs` is an integer of at least `1000`; `streamMaxRetries` and `requestMaxRetries` are integers from `0` through `100`, where `0` disables that retry class. These fields require `provider = "openrouter"`; omitting them leaves the corresponding Codex runtime defaults unchanged. Retry can regenerate an unfinished Codex turn rather than resume its bytes, so do not broadly enable it until partial-output protection ships in the next release.
 
-When a user-global config selects OpenRouter, a project can explicitly opt out with `provider = "default"`. This reset needs neither a model nor authorization, clears the inherited OpenRouter model unless the same layer explicitly supplies a normal Codex model, and prevents OpenRouter key forwarding for that project.
+`allowProjectProvider` applies to a project `provider`, a project `model` override while OpenRouter is inherited, and a project `agents.codex.openRouter.*` override while OpenRouter is inherited; its list must contain the absolute canonical directory containing the resolved project configuration file, not the invocation cwd or a lexical path, with no descendant or glob matching. A project configuration file (including trusted `kyoso.config.ts`) and an allowlist entry that resolve through symlinks to that directory match; entries resolving elsewhere, or unresolvable paths, fail closed. A user-global `provider = "openrouter"` needs no allowlist entry. An explicit CLI pair of `--set agents.codex.provider=openrouter` and `--set agents.codex.model=<model>` in the same invocation is also allowed without it; a project model cannot supply the CLI override's model. `allowProjectProvider` is not a `--set` path and legacy boolean values are rejected.
+
+When a user-global config selects OpenRouter, a project can explicitly opt out with `provider = "default"`. This reset needs neither a model nor authorization, clears the inherited OpenRouter model unless the same layer explicitly supplies a normal Codex model, clears inherited OpenRouter retry policy, and prevents OpenRouter key forwarding for that project. A retry policy in the same reset layer remains invalid because it requires `provider = "openrouter"`.
 
 Set the key in the process environment that starts the Codex or Claude client running Kyoso. A direct environment variable is the primary path; a secret manager such as 1Password is optional and is not a Kyoso dependency:
 
@@ -370,7 +407,7 @@ The Marketplace Plugin exposes the `OPENROUTER_API_KEY` variable name to its MCP
 
 New manual MCP registrations omit `OPENROUTER_API_KEY` by default. Add it only with `--with-openrouter` after intentionally selecting the provider; existing registrations are never rewritten. The `kyoso setup ... --with-openrouter` output and the manual setup examples remain user-managed client-registration templates. In a Claude Code registration, `${OPENROUTER_API_KEY}` must be expanded by the client; Kyoso ignores only a whole unexpanded credential placeholder — `${NAME}`, `$NAME`, or `%NAME%`, with optional surrounding whitespace — and emits a sanitized warning containing only the variable name. Values with any other text are preserved. The same rule applies to custom credential-like names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`; non-credential templates are preserved.
 
-Prefer this user-authorized project-scoped opt-in. A global `provider = "openrouter"` is inherited by projects until a project sets `provider = "default"`; merely omitting `provider` does not unset it. The fixed OpenRouter Responses API preset is beta; custom endpoints, provider routing, fallbacks, and judge integration are not exposed. To keep the key bound to that preset, OpenRouter mode rejects a `CODEX_CONFIG` with a top-level `profile` or `profiles` field and rejects a non-object `model_providers` value before launching the child. For an object value, it replaces `model_providers` with only the fixed `kyoso-openrouter` entry and emits a sanitized warning with the discarded-entry count only; provider IDs and configuration values never appear. Apart from those rejected fields, it preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, so no foreign provider configuration can select an endpoint with the key. Claude remains on its configured provider, and the judge does not use `OPENROUTER_API_KEY`.
+Prefer this user-authorized project-scoped opt-in. A global `provider = "openrouter"` is inherited by projects until a project sets `provider = "default"`; merely omitting `provider` does not unset it. The fixed OpenRouter Responses API preset is beta; custom endpoints, provider routing, fallbacks, and judge integration are not exposed. When configured, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` map only to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries`; omitted fields are absent from `CODEX_CONFIG`. To keep the key bound to that preset, OpenRouter mode rejects a `CODEX_CONFIG` with a top-level `profile` or `profiles` field and rejects a non-object `model_providers` value before launching the child. For an object value, it replaces `model_providers` with only the fixed `kyoso-openrouter` entry and emits a sanitized warning with the discarded-entry count only; provider IDs and configuration values never appear. Apart from those rejected fields, it preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, so no foreign provider configuration can select an endpoint with the key. Claude remains on its configured provider, and the judge does not use `OPENROUTER_API_KEY`.
 
 After user-global authorization, a project `kyoso.toml` can select the external provider or override its inherited OpenRouter model and route review context to it. For an untrusted repository, use `--ignore-config` and pass only the needed CLI options explicitly.
 
@@ -380,7 +417,7 @@ The real Codex ACP/OpenRouter smoke is release-gated and never runs in tests. On
 KYOSO_OPENROUTER_ACP_SMOKE=release KYOSO_OPENROUTER_MODEL=<model> safe-chain bun run smoke:openrouter:codex-acp
 ```
 
-It accepts no CLI arguments, uses the pinned Codex ACP adapter, and creates fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories so it cannot use the calling repository or cached Codex login. It returns only a fixed success or failure message without writing the key or model to config, temporary artifacts, or output.
+It accepts no CLI arguments, uses the pinned Codex ACP adapter, and creates fresh empty temporary workspace, `HOME`, and `CODEX_HOME` directories so it cannot use the calling repository or cached Codex login. It returns only a fixed success or failure message without writing the key or model to config, temporary artifacts, or output. This credentialed smoke checks only interoperability; retry correctness is covered by the release-only `KYOSO_CODEX_ACP_MOCK_SSE=1` local mock SSE integration gate.
 
 ### Agent auth
 

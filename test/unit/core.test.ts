@@ -573,6 +573,52 @@ allowProjectProvider = [${JSON.stringify(cwd)}]
     );
   });
 
+  test("requires an exact global allowlist before a project changes inherited OpenRouter retry policy", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-retry-policy-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(join(cwd, "other"))}]
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex.openRouter]
+streamMaxRetries = 3
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("not in the user-global allowlist");
+
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+allowProjectProvider = [${JSON.stringify(cwd)}]
+`,
+      "utf8",
+    );
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex.openRouter.streamMaxRetries).toBe(3);
+    expect(loaded.warnings.join("\n")).toContain(
+      "routing or transport retry policy",
+    );
+  });
+
   test("requires an explicit CLI model when a project model precedes an OpenRouter provider override", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-cli-override-"));
     await writeFile(
@@ -736,6 +782,9 @@ model = "openai/o4-mini"
       `[agents.codex]
 provider = "openrouter"
 model = "openai/o4-mini"
+
+[agents.codex.openRouter]
+streamMaxRetries = 3
 `,
       "utf8",
     );
@@ -754,6 +803,7 @@ provider = "default"
 
     expect(loaded.config.agents.codex.provider).toBe("default");
     expect(loaded.config.agents.codex.model).toBeUndefined();
+    expect(loaded.config.agents.codex.openRouter).toEqual({});
     expect(loaded.warnings.join("\n")).not.toContain(
       "can route Codex review content through OpenRouter",
     );
@@ -773,15 +823,42 @@ model = "gpt-5.4"
 
     expect(loadedWithProjectModel.config.agents.codex.provider).toBe("default");
     expect(loadedWithProjectModel.config.agents.codex.model).toBe("gpt-5.4");
+    expect(loadedWithProjectModel.config.agents.codex.openRouter).toEqual({});
+
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex]
+provider = "default"
+
+[agents.codex.openRouter]
+streamMaxRetries = 0
+`,
+      "utf8",
+    );
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("codex_openrouter_policy_requires_provider");
   });
 
   test("does not mutate merged config when a project resets OpenRouter", () => {
     const baseConfig = {
-      agents: { codex: { provider: "openrouter", model: "openai/o4-mini" } },
+      agents: {
+        codex: {
+          provider: "openrouter",
+          model: "openai/o4-mini",
+          openRouter: { streamMaxRetries: 3 },
+        },
+      },
     };
     const projectConfig = { agents: { codex: { provider: "default" } } };
     const mergedConfig = {
-      agents: { codex: { provider: "default", model: "openai/o4-mini" } },
+      agents: {
+        codex: {
+          provider: "default",
+          model: "openai/o4-mini",
+          openRouter: { streamMaxRetries: 3 },
+        },
+      },
     };
     Object.freeze(mergedConfig.agents.codex);
     Object.freeze(mergedConfig.agents);
@@ -794,6 +871,9 @@ model = "gpt-5.4"
     );
 
     expect(mergedConfig.agents.codex.model).toBe("openai/o4-mini");
+    expect(mergedConfig.agents.codex.openRouter).toEqual({
+      streamMaxRetries: 3,
+    });
     expect(reset).toEqual({ agents: { codex: { provider: "default" } } });
   });
 
@@ -1163,7 +1243,7 @@ allowProjectProvider = [${JSON.stringify(configDirectory)}]
     const loaded = await loadConfig({ cwd, configPath, env: { HOME: home } });
 
     expect(loaded.warnings).toContain(
-      `Project config ${configPath} changes Codex OpenRouter routing under user-global authorization; it can route Codex review content through OpenRouter.`,
+      `Project config ${configPath} changes Codex OpenRouter routing or transport retry policy under user-global authorization; it can route Codex review content through OpenRouter.`,
     );
   });
 

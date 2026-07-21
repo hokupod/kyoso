@@ -2,6 +2,7 @@ import { stderr } from "node:process";
 import {
   CODEX_OPENROUTER_PROVIDER,
   type CodexProvider,
+  type KyosoConfig,
 } from "../config/schema.js";
 import { createModelExecutionIdentity } from "../core/modelExecutionIdentity.js";
 import type { ModelExecutionIdentity } from "../core/types.js";
@@ -45,13 +46,29 @@ export const OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY";
 export const KYOSO_OPENROUTER_PROVIDER_ID = "kyoso-openrouter";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_PROVIDER_PRESET = {
-  name: "OpenRouter",
-  base_url: OPENROUTER_BASE_URL,
-  env_key: OPENROUTER_API_KEY_ENV,
-  wire_api: "responses",
-  requires_openai_auth: false,
-} as const;
+type CodexOpenRouterOptions = KyosoConfig["agents"]["codex"]["openRouter"];
+
+function buildOpenRouterProviderPreset(
+  options: CodexOpenRouterOptions,
+  baseUrl = OPENROUTER_BASE_URL,
+) {
+  return {
+    name: "OpenRouter",
+    base_url: baseUrl,
+    env_key: OPENROUTER_API_KEY_ENV,
+    wire_api: "responses",
+    requires_openai_auth: false,
+    ...(options.streamIdleTimeoutMs === undefined
+      ? {}
+      : { stream_idle_timeout_ms: options.streamIdleTimeoutMs }),
+    ...(options.streamMaxRetries === undefined
+      ? {}
+      : { stream_max_retries: options.streamMaxRetries }),
+    ...(options.requestMaxRetries === undefined
+      ? {}
+      : { request_max_retries: options.requestMaxRetries }),
+  };
+}
 
 export class ChildEnvPreflightError extends Error {
   constructor(
@@ -67,6 +84,9 @@ type ChildEnvOptions = {
   agent?: "codex" | "claude";
   model?: string;
   provider?: CodexProvider;
+  openRouter?: CodexOpenRouterOptions;
+  /** @internal test-only */
+  openRouterBaseUrlForTest?: string;
   preferApiKey?: boolean;
   onCredentialPlaceholderDiscarded?: (key: string) => void;
   onOpenRouterCredentialWithheld?: (key: string) => void;
@@ -171,6 +191,8 @@ function buildChildEnvironment(
       env,
       parentEnv,
       options.model,
+      options.openRouter,
+      options.openRouterBaseUrlForTest,
       onCredentialPlaceholderDiscarded,
       options.onOpenRouterProvidersDiscarded ??
         warnOpenRouterProvidersDiscarded,
@@ -253,6 +275,8 @@ function applyOpenRouterConfig(
   env: NodeJS.ProcessEnv,
   parentEnv: NodeJS.ProcessEnv,
   model: string | undefined,
+  openRouter: CodexOpenRouterOptions = {},
+  baseUrl = OPENROUTER_BASE_URL,
   onCredentialPlaceholderDiscarded: (key: string) => void,
   onOpenRouterProvidersDiscarded: (count: number) => void,
 ): void {
@@ -305,7 +329,10 @@ function applyOpenRouterConfig(
     model: configuredModel,
     model_provider: KYOSO_OPENROUTER_PROVIDER_ID,
     model_providers: {
-      [KYOSO_OPENROUTER_PROVIDER_ID]: OPENROUTER_PROVIDER_PRESET,
+      [KYOSO_OPENROUTER_PROVIDER_ID]: buildOpenRouterProviderPreset(
+        openRouter,
+        baseUrl,
+      ),
     },
   });
 }

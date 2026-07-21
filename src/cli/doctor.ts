@@ -202,6 +202,38 @@ export async function runDoctor(options: {
       lines.push(
         `    model: ${sanitizeTextForDisplay(loaded.config.agents.codex.model ?? "")}`,
       );
+      const openRouter = loaded.config.agents.codex.openRouter;
+      lines.push("    reliability:");
+      lines.push(
+        openRouter.streamIdleTimeoutMs === undefined
+          ? "      stream idle timeout: inherited from Codex runtime"
+          : `      stream idle timeout: ${openRouter.streamIdleTimeoutMs} ms (Kyoso config)`,
+      );
+      lines.push(
+        openRouter.streamMaxRetries === undefined
+          ? "      stream retries: inherited from Codex runtime"
+          : `      stream retries: ${openRouter.streamMaxRetries}`,
+      );
+      lines.push(
+        openRouter.requestMaxRetries === undefined
+          ? "      request retries: inherited from Codex runtime"
+          : `      request retries: ${openRouter.requestMaxRetries}`,
+      );
+      if (
+        openRouter.streamIdleTimeoutMs !== undefined &&
+        openRouter.streamMaxRetries !== undefined
+      ) {
+        const idleOnlyWindow =
+          openRouter.streamIdleTimeoutMs * (openRouter.streamMaxRetries + 1);
+        lines.push(
+          `      maximum idle-only stream window: approximately ${idleOnlyWindow} ms plus backoff`,
+        );
+        if (idleOnlyWindow >= config.timeoutMs) {
+          lines.push(
+            `      warning: configured idle-only retry window can consume the entire Codex agent timeout (timeoutMs=${config.timeoutMs}).`,
+          );
+        }
+      }
       const configuredKey =
         loaded.config.agents.codex.env[OPENROUTER_API_KEY_ENV];
       if (

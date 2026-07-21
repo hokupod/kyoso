@@ -265,7 +265,9 @@ function listTarEntries(tarballPath) {
 function readTarEntry(tarballPath, entry) {
   const result = spawnSync("tar", ["-xOf", tarballPath, entry], {
     encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024,
+    // The bundled CLI passed 10 MiB in 2026-07; keep ample headroom so the
+    // shebang/manifest checks never fail on artifact size alone.
+    maxBuffer: 64 * 1024 * 1024,
   });
   if (result.status !== 0) {
     throw new Error(result.stderr || `failed to read ${entry}`);

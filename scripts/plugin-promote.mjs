@@ -132,9 +132,9 @@ export async function runPluginPromotion(
 }
 
 export function assertPromotionAdvances(current, options) {
-  if (compareSemver(options.cliVersion, current.packageVersion) <= 0) {
+  if (compareSemver(options.cliVersion, current.packageVersion) < 0) {
     throw new Error(
-      `Plugin promotion CLI version (${options.cliVersion}) must advance the current MCP pin (${current.packageVersion})`,
+      `Plugin promotion CLI version (${options.cliVersion}) must not precede the current MCP pin (${current.packageVersion})`,
     );
   }
   if (compareSemver(options.pluginVersion, current.pluginVersion) <= 0) {

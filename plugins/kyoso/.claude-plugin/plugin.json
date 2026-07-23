@@ -1,6 +1,6 @@
 {
   "name": "kyoso",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Multi-agent review gates powered by Codex and Claude.",
   "author": {
     "name": "hokupod",
@@ -16,7 +16,9 @@
       "command": "npx",
       "args": ["-y", "--package=@kyo-so/cli@0.15.0", "kyoso", "mcp"],
       "env": {
-        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}"
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY:-}",
+        "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN:-}",
+        "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY:-}"
       }
     }
   }

@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore Claude Code authentication for Marketplace Plugin launches by
+  explicitly forwarding optional `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENROUTER_API_KEY` placeholders into the MCP
+  subprocess.
+
 ### Changed
 
-- Promote the Marketplace Plugin to `0.7.4` and pin its Codex and Claude Code
-  MCP definitions and Skill fallbacks to `@kyo-so/cli@0.15.0`.
+- Promote the Marketplace Plugin to `0.7.5` while retaining
+  `@kyo-so/cli@0.15.0` in its Codex and Claude Code MCP definitions and Skill
+  fallbacks.
+- Allow Plugin-only promotion to retain the current CLI pin while rejecting a
+  pin rollback and preserving exact published-CLI runtime verification.
 
 ## [0.15.0] - 2026-07-21
 

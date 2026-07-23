@@ -68,7 +68,9 @@ const allowedMcpEnvVars = [
   "CLAUDE_CODE_OAUTH_TOKEN",
 ];
 const claudeMcpEnv = {
-  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}",
+  CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}",
+  OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}",
 };
 const secretPatterns = [
   /sk-[A-Za-z0-9_-]{20,}/,
@@ -702,14 +704,14 @@ function validateClaudeMcpEnv(env, failures) {
   }
   if (!isExactStringRecord(env, claudeMcpEnv)) {
     failures.push(
-      "Claude plugin MCP env must match the OpenRouter placeholder exactly",
+      "Claude plugin MCP env must match the optional credential placeholders exactly",
     );
   }
   for (const [key, value] of Object.entries(env)) {
     if (!allowedMcpEnvVars.includes(key)) {
       failures.push(`Claude plugin MCP env has unsupported variable: ${key}`);
     }
-    const expectedValue = "$" + "{" + key + "}";
+    const expectedValue = "$" + "{" + key + ":-}";
     if (value !== expectedValue) {
       failures.push(
         `Claude plugin MCP env ${key} must forward ${formatValue(expectedValue)}`,

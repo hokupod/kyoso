@@ -7,8 +7,12 @@ import { join } from "node:path";
 // @ts-expect-error The promotion command is intentionally shipped as a standalone Node.js script.
 import * as pluginPromote from "../../scripts/plugin-promote.mjs";
 
-const { restoreCommittedUpdates, runPluginPromotion, writeUpdatesAtomically } =
-  pluginPromote;
+const {
+  assertPromotionAdvances,
+  restoreCommittedUpdates,
+  runPluginPromotion,
+  writeUpdatesAtomically,
+} = pluginPromote;
 // @ts-expect-error The published verifier is intentionally shipped as a standalone Node.js script.
 import { verifyPublishedCliTarget } from "../../scripts/verify-published-cli.mjs";
 
@@ -176,6 +180,51 @@ describe("Plugin promotion runtime gate", () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  });
+
+  test("allows a plugin-only promotion behind the published runtime gate", async () => {
+    const pluginOnlyOptions = {
+      cliVersion: current.packageVersion,
+      pluginVersion: options.pluginVersion,
+      write: false,
+    };
+    const root = await promotionRoot(pluginOnlyOptions.cliVersion);
+    const events: string[] = [];
+    try {
+      await expect(
+        runPluginPromotion(pluginOnlyOptions, {
+          root,
+          verifyDistribution: distributionVerifier(events),
+          verifyPublished: publishedVerifier(events),
+          createPromotionUpdates: () => {
+            events.push("create");
+            return [];
+          },
+          log: (message: string) => events.push(`log:${message}`),
+        }),
+      ).resolves.toMatchObject({ action: "dry-run" });
+
+      expect(events.slice(0, 5)).toEqual([
+        "distribution",
+        "metadata",
+        "npx",
+        "bunx",
+        "create",
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects a Plugin promotion that rolls back the CLI pin", () => {
+    expect(() =>
+      assertPromotionAdvances(current, {
+        cliVersion: "0.13.0",
+        pluginVersion: options.pluginVersion,
+      }),
+    ).toThrow(
+      "Plugin promotion CLI version (0.13.0) must not precede the current MCP pin (0.13.1)",
+    );
   });
 
   test("restores every committed byte and mode after post-write verification fails", async () => {
@@ -449,11 +498,11 @@ function distributionVerifier(events: string[]) {
   };
 }
 
-async function promotionRoot() {
+async function promotionRoot(packageVersion = options.cliVersion) {
   const root = await mkdtemp(join(tmpdir(), "kyoso-plugin-promote-"));
   await writeFile(
     join(root, "package.json"),
-    `${JSON.stringify({ version: options.cliVersion })}\n`,
+    `${JSON.stringify({ version: packageVersion })}\n`,
     "utf8",
   );
   return root;

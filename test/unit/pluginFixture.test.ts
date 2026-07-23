@@ -69,7 +69,9 @@ describe("Codex Plugin fixture", () => {
       },
     });
     expect(claudeManifest.mcpServers.kyoso.env).toEqual({
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}",
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}",
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}",
     });
     expect(claudeManifest.mcpServers.kyoso.args).toEqual([
       "-y",
@@ -901,6 +903,15 @@ describe("Codex Plugin fixture", () => {
               ],
             },
             {
+              name: "missing Claude OAuth passthrough",
+              mutate(manifest) {
+                delete manifest.mcpServers.kyoso.env.CLAUDE_CODE_OAUTH_TOKEN;
+              },
+              expected: [
+                "Claude plugin MCP env must match the optional credential placeholders exactly",
+              ],
+            },
+            {
               name: "literal Claude MCP credential",
               mutate(manifest) {
                 manifest.mcpServers.kyoso.env.OPENROUTER_API_KEY = "literal";
@@ -1198,7 +1209,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
-  test("requires Plugin promotion to advance both versions", () => {
+  test("requires the Plugin version to advance without rolling back the CLI pin", () => {
     const result = spawnSync(
       "node",
       [
@@ -1209,8 +1220,9 @@ describe("Codex Plugin fixture", () => {
 
           const current = { packageVersion: "0.8.0", pluginVersion: "0.1.0" };
           assertPromotionAdvances(current, { cliVersion: "0.9.0", pluginVersion: "0.2.0" });
+          assertPromotionAdvances(current, { cliVersion: "0.8.0", pluginVersion: "0.2.0" });
           for (const [options, message] of [
-            [{ cliVersion: "0.8.0", pluginVersion: "0.2.0" }, "CLI version"],
+            [{ cliVersion: "0.7.0", pluginVersion: "0.2.0" }, "CLI version"],
             [{ cliVersion: "0.9.0", pluginVersion: "0.1.0" }, "Plugin version"],
             [{ cliVersion: "0.9.0", pluginVersion: "0.0.1" }, "Plugin version"],
           ]) {

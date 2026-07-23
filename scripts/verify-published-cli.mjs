@@ -43,6 +43,7 @@ export async function verifyPublishedCliTarget(
     args: ["-y", `--package=${packageSpecifier}`, ...mcpArgs],
     expectedVersion: packageVersion,
     published: true,
+    requireSafeChainInCi: false,
   });
   await runSmoke({
     runner: "bunx",
@@ -50,6 +51,7 @@ export async function verifyPublishedCliTarget(
     args: ["--package", packageSpecifier, ...mcpArgs],
     expectedVersion: packageVersion,
     published: true,
+    requireSafeChainInCi: false,
   });
   return requested;
 }

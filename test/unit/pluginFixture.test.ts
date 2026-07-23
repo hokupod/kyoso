@@ -575,7 +575,22 @@ describe("Codex Plugin fixture", () => {
                   '        run: echo "npx safe-chain-verify"',
                 );
               },
-              expected: "must run npx safe-chain-verify before published CLI smoke exactly once",
+              expected: "must run npx safe-chain verification exactly once",
+            },
+            {
+              name: "published smoke after safe-chain setup",
+              mutate({ workflow }) {
+                const published =
+                  "      - name: Verify published CLI runtime\\n        run: bun run plugin:verify:published-cli\\n\\n";
+                workflow.value = workflow.value.replace(published, "");
+                workflow.value = workflow.value.replace(
+                  "      - name: Setup safe-chain shims\\n        run: safe-chain setup-ci",
+                  "      - name: Setup safe-chain shims\\n        run: safe-chain setup-ci\\n\\n" +
+                    published.trimEnd(),
+                );
+              },
+              expected:
+                "must run published CLI smoke before safe-chain setup",
             },
             {
               name: "job-level inert run mapping",

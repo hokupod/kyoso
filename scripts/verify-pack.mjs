@@ -417,6 +417,7 @@ async function verifyLocalPackageRunnerSmokes(
     command: "npx",
     args: ["-y", `--package=${localSpec}`, ...mcpArgs],
     expectedVersion: packedManifest.version,
+    requireSafeChainInCi: true,
     extraEnv: { npm_config_offline: "true" },
   });
 
@@ -425,6 +426,7 @@ async function verifyLocalPackageRunnerSmokes(
     command: "bunx",
     args: ["--no-install", "--package", packedManifest.name, ...mcpArgs],
     expectedVersion: packedManifest.version,
+    requireSafeChainInCi: true,
     prepare: ({ root, workspace, env, timeoutMs }) => {
       const consumer = join(workspace, "bun-consumer");
       mkdirSync(consumer, { recursive: true });

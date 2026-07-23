@@ -41,6 +41,11 @@ jobs:
         with:
           bun-version: "1.3.14"
 
+      # Verify the exact first-party artifact before Safe-chain shims can alter
+      # package metadata or write wrapper notices into the MCP stdout stream.
+      - name: Verify published CLI runtime
+        run: bun run plugin:verify:published-cli
+
       - name: Install safe-chain
         run: npm install -g @aikidosec/safe-chain@1.5.12
 
@@ -53,9 +58,8 @@ jobs:
       - name: Verify bunx safe-chain shim
         run: bunx safe-chain-verify
 
-      # The pin must be old enough to clear the safe-chain minimum package
-      # age filter (very recent releases resolve as ETARGET behind the shims)
-      # and should match a version verified locally with plugin validate.
+      # The Claude Code pin must be old enough to clear the safe-chain minimum
+      # package age filter and should match a version verified locally.
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code@2.1.191
 
@@ -80,9 +84,6 @@ jobs:
 
       - name: Verify published CLI pin
         run: bun run plugin:verify:registry
-
-      - name: Verify published CLI runtime
-        run: bun run plugin:verify:published-cli
 
       # The verifier installs each Codex version recorded in the compatibility
       # file via an exact npx package spec before replaying its probe.

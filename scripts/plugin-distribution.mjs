@@ -931,22 +931,28 @@ function validatePromotionWorkflow(paths, failures) {
     failures.push("Plugin promotion workflow job must not configure defaults");
   }
   const { steps } = promotionJob;
+  const safeChainSetup = findPromotionWorkflowCommand(
+    steps,
+    "safe-chain setup-ci",
+    "safe-chain setup after published CLI smoke",
+    failures,
+  );
   const npxSafeChainVerification = findPromotionWorkflowCommand(
     steps,
     "npx safe-chain-verify",
-    "npx safe-chain-verify before published CLI smoke",
+    "npx safe-chain verification",
     failures,
   );
   const bunxSafeChainVerification = findPromotionWorkflowCommand(
     steps,
     "bunx safe-chain-verify",
-    "bunx safe-chain-verify before published CLI smoke",
+    "bunx safe-chain verification",
     failures,
   );
   const registryVerification = findPromotionWorkflowCommand(
     steps,
     "bun run plugin:verify:registry",
-    "registry verification before published CLI smoke",
+    "registry verification before recorded Codex Plugin probes",
     failures,
   );
   const publishedSmoke = findPromotionWorkflowCommand(
@@ -963,16 +969,33 @@ function validatePromotionWorkflow(paths, failures) {
   );
 
   if (publishedSmoke === undefined) return;
+  if (safeChainSetup !== undefined && publishedSmoke > safeChainSetup) {
+    failures.push(
+      "Plugin promotion workflow must run published CLI smoke before safe-chain setup",
+    );
+  }
   for (const [command, index] of [
-    ["npx safe-chain-verify", npxSafeChainVerification],
-    ["bunx safe-chain-verify", bunxSafeChainVerification],
-    ["registry verification", registryVerification],
+    ["npx safe-chain verification", npxSafeChainVerification],
+    ["bunx safe-chain verification", bunxSafeChainVerification],
   ]) {
-    if (index !== undefined && index > publishedSmoke) {
+    if (
+      safeChainSetup !== undefined &&
+      index !== undefined &&
+      index < safeChainSetup
+    ) {
       failures.push(
-        `Plugin promotion workflow must run ${command} before published CLI smoke`,
+        `Plugin promotion workflow must run safe-chain setup before ${command}`,
       );
     }
+  }
+  if (
+    registryVerification !== undefined &&
+    runtimeReplay !== undefined &&
+    registryVerification > runtimeReplay
+  ) {
+    failures.push(
+      "Plugin promotion workflow must run registry verification before recorded Codex Plugin probes",
+    );
   }
   if (runtimeReplay !== undefined && publishedSmoke > runtimeReplay) {
     failures.push(

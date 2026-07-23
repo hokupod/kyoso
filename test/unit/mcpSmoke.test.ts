@@ -473,6 +473,7 @@ describe("MCP smoke harness", () => {
         args: ["--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
         expectedVersion: version,
         sourceEnv: env,
+        requireSafeChainInCi: true,
       });
       expect(result).toMatchObject({ serverInfo: { name: "kyoso", version } });
 

@@ -318,6 +318,7 @@ export async function runMcpPackageRunnerSmoke(options) {
       cwd: prepared.cwd ?? workspace,
     };
     if (
+      options.requireSafeChainInCi === true &&
       sourceEnv.CI === "true" &&
       (options.runner === "npx" || options.runner === "bunx")
     ) {

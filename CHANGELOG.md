@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly forwarding optional `ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENROUTER_API_KEY` placeholders into the MCP
   subprocess.
+- Run the exact published first-party CLI smoke before Safe-chain CI shims are
+  installed, preventing wrapper metadata notices from contaminating MCP NDJSON.
 
 ### Changed
 

@@ -46,6 +46,7 @@ describe("published CLI verification", () => {
         ],
         expectedVersion: "0.13.1",
         published: true,
+        requireSafeChainInCi: false,
       }),
       expect.objectContaining({
         runner: "bunx",
@@ -61,6 +62,7 @@ describe("published CLI verification", () => {
         ],
         expectedVersion: "0.13.1",
         published: true,
+        requireSafeChainInCi: false,
       }),
     ]);
   });

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-07-24
+
 ### Fixed
 
 - Restore Claude Code authentication for Marketplace Plugin launches by
@@ -23,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallbacks.
 - Allow Plugin-only promotion to retain the current CLI pin while rejecting a
   pin rollback and preserving exact published-CLI runtime verification.
+- Update the default ACP adapters to
+  `@agentclientprotocol/codex-acp@1.1.5` and
+  `@agentclientprotocol/claude-agent-acp@0.60.0`.
+- Update CI and development dependencies to `actions/setup-node@v7`,
+  `@aikidosec/safe-chain@1.5.13`, and `prettier@3.9.6`.
 
 ## [0.15.0] - 2026-07-21
 

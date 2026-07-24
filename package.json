@@ -61,7 +61,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
-    "@modelcontextprotocol/server": "2.0.0-beta.4",
+    "@modelcontextprotocol/server": "2.0.0-beta.5",
     "smol-toml": "1.7.0",
     "typescript": "6.0.3",
     "zod": "4.4.3"

@@ -7,10 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-07-26
+
+### Fixed
+
+- Keep Codex ACP doctor and smoke assertions synchronized with the default
+  configuration while preserving the exact SemVer pin invariant, so dependency
+  updates no longer fail on duplicated version literals.
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.6` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.15.1`.
+- Update the default ACP adapters to
+  `@agentclientprotocol/codex-acp@1.1.7` and
+  `@agentclientprotocol/claude-agent-acp@0.61.0`.
+- Update protocol dependencies to `@agentclientprotocol/sdk@1.3.0` and
+  `@modelcontextprotocol/server@2.0.0-beta.5`.
 
 ## [0.15.1] - 2026-07-24
 

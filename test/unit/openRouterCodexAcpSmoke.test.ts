@@ -66,13 +66,16 @@ describe("OpenRouter Codex ACP smoke", () => {
     const config = createOpenRouterCodexAcpSmokeConfig(
       smokeEnv[OPENROUTER_ACP_SMOKE_MODEL_ENV] ?? "",
     );
+    const codexAcpPackage = config.agents.codex.args.find((arg) =>
+      arg.startsWith("@agentclientprotocol/codex-acp@"),
+    );
 
     expect(config.agents.codex.provider).toBe("openrouter");
     expect(config.agents.codex.model).toBe("openai/gpt-4.1-mini");
     expect(config.agents.codex.command).toBe(normalConfig.agents.codex.command);
     expect(config.agents.codex.args).toEqual(normalConfig.agents.codex.args);
-    expect(config.agents.codex.args).toContain(
-      "@agentclientprotocol/codex-acp@1.1.5",
+    expect(codexAcpPackage).toMatch(
+      /^@agentclientprotocol\/codex-acp@\d+\.\d+\.\d+$/,
     );
     expect(JSON.stringify(config)).not.toContain(testKey);
   });

@@ -25,6 +25,8 @@ import {
 } from "../../src/cli/knownSkillDigests.js";
 import { runSetup } from "../../src/cli/setup.js";
 import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
+import { defaultConfig } from "../../src/config/defaultConfig.js";
+import { kyosoConfigSchema } from "../../src/config/schema.js";
 
 const repositoryRoot = process.cwd();
 const pluginUnsupported: CodexPluginInspection = {
@@ -466,6 +468,11 @@ model = "openai/o4-mini\\u001b[31m\\nforged"
   });
 
   test("marks fallback agent diagnostics as safe defaults and suppresses command migration hints", async () => {
+    const safeDefaultConfig = kyosoConfigSchema.parse(defaultConfig);
+    const expectedCodexCommand = [
+      safeDefaultConfig.agents.codex.command,
+      ...safeDefaultConfig.agents.codex.args,
+    ].join(" ");
     const context = await doctorFixture();
     const globalConfigDir = join(context.home, ".config", "kyoso");
     await mkdir(globalConfigDir, { recursive: true });
@@ -486,9 +493,7 @@ model = "openai/o4-mini\\u001b[31m\\nforged"
       "note: user-global config is not reflected; all agent diagnostics below use safe defaults.",
     );
     expect(output).toContain("Codex: warning command not found");
-    expect(output).toContain(
-      "command: npx -y @agentclientprotocol/codex-acp@1.1.5",
-    );
+    expect(output).toContain(`command: ${expectedCodexCommand}`);
     expect(output).not.toContain(
       'hint: set agents.<name>.command = "bunx" in config.toml',
     );

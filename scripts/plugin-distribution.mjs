@@ -43,6 +43,18 @@ const promotionWorkflowPullRequestPaths = [
   "scripts/verify-plugin*.mjs",
   "scripts/verify-published-cli.mjs",
 ];
+const promotionWorkflowPushBranches = ["main"];
+const promotionWorkflowPushPaths = [
+  ".claude-plugin/marketplace.json",
+  "docs/compatibility/codex-plugin-runtime.json",
+  "plugins/kyoso/.claude-plugin/plugin.json",
+  "plugins/kyoso/.codex-plugin/mcp.json",
+  "plugins/kyoso/.codex-plugin/plugin.json",
+  "plugins/kyoso/skills/kyoso-review/SKILL.md",
+  "src/cli/pluginRuntimeContract.ts",
+];
+const promotionCloseJobCondition =
+  ">- ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}";
 const skillFallbackRunners = ["npx", "bunx"];
 const promotionJobExecutionModifierKeys = ["if", "continue-on-error"];
 const promotionStepExecutionModifierKeys = [
@@ -877,6 +889,7 @@ function validateRuntimeScripts(packageMetadata, failures) {
     "plugin:verify:registry": "node scripts/verify-plugin-registry.mjs",
     "plugin:verify:published-cli": "node scripts/verify-published-cli.mjs",
     "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
+    "plugin:promotion:reconcile": "node scripts/plugin-promotion-issues.mjs",
   };
   if (!isObject(packageMetadata) || !isObject(packageMetadata.scripts)) {
     failures.push("package.json scripts must define Plugin runtime commands");
@@ -906,6 +919,34 @@ function validatePromotionWorkflow(paths, failures) {
   if (!pullRequestPaths || !hasExactPromotionWorkflowPaths(pullRequestPaths)) {
     failures.push(
       "Plugin promotion workflow pull_request.paths must contain canonical paths exactly once",
+    );
+  }
+
+  const pushEvent = readPromotionWorkflowEvent(workflow, "push");
+  const pushBranches = readPromotionWorkflowEventList(pushEvent, "branches");
+  if (
+    !pushBranches ||
+    !hasExactWorkflowList(pushBranches, promotionWorkflowPushBranches)
+  ) {
+    failures.push(
+      "Plugin promotion workflow push.branches must contain main exactly once",
+    );
+  }
+  const pushPaths = readPromotionWorkflowEventList(pushEvent, "paths");
+  if (
+    !pushPaths ||
+    !hasExactWorkflowList(pushPaths, promotionWorkflowPushPaths)
+  ) {
+    failures.push(
+      "Plugin promotion workflow push.paths must contain promotion artifacts exactly once",
+    );
+  }
+  if (
+    !pushEvent ||
+    !hasExactWorkflowEventKeys(pushEvent, ["branches", "paths"])
+  ) {
+    failures.push(
+      "Plugin promotion workflow push must define only branches and paths",
     );
   }
 
@@ -967,6 +1008,7 @@ function validatePromotionWorkflow(paths, failures) {
     "recorded Codex Plugin probes",
     failures,
   );
+  validatePromotionCloseJob(workflow, failures);
 
   if (publishedSmoke === undefined) return;
   if (safeChainSetup !== undefined && publishedSmoke > safeChainSetup) {
@@ -1005,27 +1047,77 @@ function validatePromotionWorkflow(paths, failures) {
 }
 
 function readPromotionWorkflowPaths(workflow) {
-  const match = workflow.match(
-    /^  pull_request:\s*\n    paths:\s*\n((?:      - [^\n]+\n)+)/m,
+  return readPromotionWorkflowEventList(
+    readPromotionWorkflowEvent(workflow, "pull_request"),
+    "paths",
   );
-  if (!match?.[1]) return undefined;
+}
+
+function readPromotionWorkflowEvent(workflow, eventName) {
+  const lines = workflow.split("\n");
+  const header = `  ${eventName}:`;
+  const starts = lines.reduce(
+    (indices, line, index) => (line === header ? [...indices, index] : indices),
+    [],
+  );
+  if (starts.length !== 1) return undefined;
+  const start = starts[0];
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (
+      line.trim().length > 0 &&
+      line.length - line.trimStart().length < 4 &&
+      line.trimEnd().endsWith(":")
+    ) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end);
+}
+
+function readPromotionWorkflowEventList(eventLines, listName) {
+  if (!eventLines) return undefined;
+  const header = `    ${listName}:`;
+  const starts = eventLines.reduce(
+    (indices, line, index) => (line === header ? [...indices, index] : indices),
+    [],
+  );
+  if (starts.length !== 1) return undefined;
+  const start = starts[0];
   const paths = [];
-  for (const line of match[1].trimEnd().split("\n")) {
+  for (let index = start + 1; index < eventLines.length; index += 1) {
+    const line = eventLines[index];
+    if (line.trim().length === 0) continue;
+    if (!line.startsWith("      - ")) break;
     const path = line.match(/^      - (?:(['"])([^#\n]+)\1|([^#\n]+))$/);
     const value = path?.[2] ?? path?.[3];
     if (!value) return undefined;
     paths.push(value.trim());
   }
-  return paths;
+  return paths.length > 0 ? paths : undefined;
 }
 
 function hasExactPromotionWorkflowPaths(paths) {
-  const actualPaths = new Set(paths);
+  return hasExactWorkflowList(paths, promotionWorkflowPullRequestPaths);
+}
+
+function hasExactWorkflowList(values, expectedValues) {
+  const actualValues = new Set(values);
   return (
-    actualPaths.size === paths.length &&
-    paths.length === promotionWorkflowPullRequestPaths.length &&
-    promotionWorkflowPullRequestPaths.every((path) => actualPaths.has(path))
+    actualValues.size === values.length &&
+    values.length === expectedValues.length &&
+    expectedValues.every((value) => actualValues.has(value))
   );
+}
+
+function hasExactWorkflowEventKeys(eventLines, expectedKeys) {
+  const keys = eventLines.flatMap((line) => {
+    const match = line.match(/^    ([A-Za-z0-9_-]+):\s*$/);
+    return match?.[1] ? [match[1]] : [];
+  });
+  return hasExactWorkflowList(keys, expectedKeys);
 }
 
 function hasWorkflowDefaults(workflow) {
@@ -1048,9 +1140,12 @@ function hasWorkflowListMappingKey(line, indentation, keys) {
   ).test(line);
 }
 
-function readPromotionWorkflowJob(workflow) {
+function readPromotionWorkflowJob(
+  workflow,
+  jobName = "verify-plugin-promotion",
+) {
   const lines = workflow.split("\n");
-  const jobStart = lines.indexOf("  verify-plugin-promotion:");
+  const jobStart = lines.indexOf(`  ${jobName}:`);
   if (jobStart === -1) return undefined;
 
   let jobEnd = lines.length;
@@ -1090,6 +1185,9 @@ function readPromotionWorkflowJob(workflow) {
     const run = stepLines
       .map((line) => line.match(/^        run:\s*(.+)$/)?.[1]?.trim())
       .find((value) => value && value !== "|" && value !== ">");
+    const uses = stepLines
+      .map((line) => line.match(/^        uses:\s*(.+)$/)?.[1]?.trim())
+      .find(Boolean);
     const executionModifier = stepLines.some(
       (line) =>
         hasWorkflowListMappingKey(
@@ -1098,10 +1196,19 @@ function readPromotionWorkflowJob(workflow) {
           promotionStepExecutionModifierKeys,
         ) || hasWorkflowMappingKey(line, 8, promotionStepExecutionModifierKeys),
     );
-    steps.push({ run, executionModifier });
+    steps.push({
+      lines: stepLines,
+      run,
+      uses,
+      executionModifier,
+      workingDirectory: stepLines.some((line) =>
+        hasWorkflowMappingKey(line, 8, ["working-directory"]),
+      ),
+    });
     index = nextStep;
   }
   return {
+    jobLines,
     steps,
     executionModifier: jobLines.some((line) =>
       hasWorkflowMappingKey(line, 4, promotionJobExecutionModifierKeys),
@@ -1110,6 +1217,189 @@ function readPromotionWorkflowJob(workflow) {
       hasWorkflowMappingKey(line, 4, ["defaults"]),
     ),
   };
+}
+
+function validatePromotionCloseJob(workflow, failures) {
+  const jobHeader = "  close-promotion-reminders:";
+  const jobCount = workflow
+    .split("\n")
+    .filter((line) => line === jobHeader).length;
+  if (jobCount !== 1) {
+    failures.push(
+      "Plugin promotion workflow must define close-promotion-reminders exactly once",
+    );
+    return;
+  }
+
+  const closeJob = readPromotionWorkflowJob(
+    workflow,
+    "close-promotion-reminders",
+  );
+  if (!closeJob) {
+    failures.push(
+      "Plugin promotion workflow must define close-promotion-reminders job steps",
+    );
+    return;
+  }
+
+  if (
+    readPromotionWorkflowJobScalar(closeJob.jobLines, "needs") !==
+    "verify-plugin-promotion"
+  ) {
+    failures.push(
+      "Plugin promotion close job needs must equal verify-plugin-promotion",
+    );
+  }
+  if (
+    readPromotionWorkflowJobScalar(closeJob.jobLines, "if") !==
+    promotionCloseJobCondition
+  ) {
+    failures.push(
+      "Plugin promotion close job if must allow only main push or main workflow_dispatch",
+    );
+  }
+  if (
+    !isDeepStrictEqual(readPromotionWorkflowJobPermissions(closeJob.jobLines), {
+      contents: "read",
+      issues: "write",
+    })
+  ) {
+    failures.push(
+      "Plugin promotion close job permissions must contain only contents read and issues write",
+    );
+  }
+  if (
+    closeJob.jobLines.some((line) =>
+      hasWorkflowMappingKey(line, 4, ["continue-on-error"]),
+    )
+  ) {
+    failures.push("Plugin promotion close job must not use continue-on-error");
+  }
+  if (closeJob.defaults) {
+    failures.push("Plugin promotion close job must not configure defaults");
+  }
+  if (
+    closeJob.jobLines.some((line) =>
+      hasWorkflowMappingKey(line, 4, ["container"]),
+    )
+  ) {
+    failures.push("Plugin promotion close job must not configure a container");
+  }
+  if (
+    closeJob.jobLines.some((line) => hasWorkflowMappingKey(line, 4, ["env"]))
+  ) {
+    failures.push(
+      "Plugin promotion close job must not configure job-level env",
+    );
+  }
+
+  const reconcile = findPromotionWorkflowCommand(
+    closeJob.steps,
+    "node scripts/plugin-promotion-issues.mjs",
+    "promotion reminder reconciliation",
+    failures,
+  );
+  if (reconcile !== undefined && closeJob.steps[reconcile]?.workingDirectory) {
+    failures.push(
+      "Plugin promotion workflow must run promotion reminder reconciliation without working-directory",
+    );
+  }
+
+  const [checkoutStep, setupNodeStep, reconcileStep] = closeJob.steps;
+  if (
+    closeJob.steps.length !== 3 ||
+    stripWorkflowComment(checkoutStep?.uses) !==
+      "actions/checkout@" + "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" ||
+    !checkoutStep.lines.includes("          persist-credentials: false") ||
+    stripWorkflowComment(setupNodeStep?.uses) !==
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
+    !setupNodeStep.lines.includes('          node-version: "24"') ||
+    reconcileStep?.run !== "node scripts/plugin-promotion-issues.mjs"
+  ) {
+    failures.push(
+      "Plugin promotion close job steps must be checkout, Node 24 setup, and reconciliation only",
+    );
+  }
+  if (
+    !isDeepStrictEqual(
+      readPromotionWorkflowStepEnvironment(reconcileStep?.lines),
+      {
+        GH_TOKEN: "${{ github.token }}",
+      },
+    ) ||
+    closeJob.jobLines.filter((line) => line.includes("GH_TOKEN:")).length !== 1
+  ) {
+    failures.push(
+      "Plugin promotion reconciliation step must receive only GH_TOKEN from github.token",
+    );
+  }
+}
+
+function readPromotionWorkflowJobScalar(jobLines, key) {
+  const pattern = new RegExp(`^    ${key}:\\s*(.*)$`);
+  const starts = jobLines.reduce((matches, line, index) => {
+    const match = line.match(pattern);
+    return match ? [...matches, { index, value: match[1].trim() }] : matches;
+  }, []);
+  if (starts.length !== 1) return undefined;
+  const [{ index, value }] = starts;
+  const parts = [value];
+  if (value === ">-" || value === ">" || value === "|" || value === "|-") {
+    for (
+      let lineIndex = index + 1;
+      lineIndex < jobLines.length;
+      lineIndex += 1
+    ) {
+      const line = jobLines[lineIndex];
+      if (
+        line.trim().length > 0 &&
+        line.length - line.trimStart().length <= 4
+      ) {
+        break;
+      }
+      if (line.trim().length > 0) parts.push(line.trim());
+    }
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function readPromotionWorkflowJobPermissions(jobLines) {
+  return readPromotionWorkflowMapping(jobLines, 4, 6, "permissions");
+}
+
+function readPromotionWorkflowStepEnvironment(stepLines) {
+  if (!stepLines) return undefined;
+  return readPromotionWorkflowMapping(stepLines, 8, 10, "env");
+}
+
+function readPromotionWorkflowMapping(
+  lines,
+  keyIndentation,
+  valueIndentation,
+  key,
+) {
+  const header = `${" ".repeat(keyIndentation)}${key}:`;
+  const starts = lines.reduce(
+    (indices, line, index) => (line === header ? [...indices, index] : indices),
+    [],
+  );
+  if (starts.length !== 1) return undefined;
+  const entries = {};
+  for (let index = starts[0] + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) continue;
+    if (line.length - line.trimStart().length <= keyIndentation) break;
+    const match = line.match(
+      new RegExp(`^${" ".repeat(valueIndentation)}([A-Za-z0-9_-]+):\\s*(.+)$`),
+    );
+    if (!match?.[1] || !match[2] || match[1] in entries) return undefined;
+    entries[match[1]] = match[2].trim();
+  }
+  return entries;
+}
+
+function stripWorkflowComment(value) {
+  return value?.replace(/\s+#.*$/, "");
 }
 
 function findPromotionWorkflowCommand(steps, command, description, failures) {

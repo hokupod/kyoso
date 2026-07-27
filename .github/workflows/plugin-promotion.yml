@@ -3,6 +3,17 @@
 name: Plugin promotion verification
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".claude-plugin/marketplace.json"
+      - "docs/compatibility/codex-plugin-runtime.json"
+      - "plugins/kyoso/.claude-plugin/plugin.json"
+      - "plugins/kyoso/.codex-plugin/mcp.json"
+      - "plugins/kyoso/.codex-plugin/plugin.json"
+      - "plugins/kyoso/skills/kyoso-review/SKILL.md"
+      - "src/cli/pluginRuntimeContract.ts"
   pull_request:
     paths:
       - ".agents/plugins/**"
@@ -96,3 +107,28 @@ jobs:
           name: codex-plugin-runtime-compatibility
           path: docs/compatibility/codex-plugin-runtime.json
           if-no-files-found: error
+
+  close-promotion-reminders:
+    needs: verify-plugin-promotion
+    if: >-
+      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+
+      - name: Close resolved promotion reminders
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/plugin-promotion-issues.mjs

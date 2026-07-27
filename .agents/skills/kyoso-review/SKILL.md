@@ -46,7 +46,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `plan_review` -> `plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
      - `security_review` -> `security --goal <text> [--diff <path>] [--file <path>] --json`
      - `diff_review` -> `diff --base <ref> --head <ref> --json`
-   - The CLI also accepts `--repo-summary`, repeatable `--focus`, `--constraint`, and `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
+   - The CLI also accepts `--repo-summary`, repeatable `--focus`, `--constraint`, and `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutS=<seconds>`.
    - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
 5. Check `coverage` before acting. If required lenses or perspectives are missing, stop and present the incomplete review.

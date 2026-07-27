@@ -343,7 +343,6 @@ describe("MCP smoke harness", () => {
               end: (input?: string) => void;
             };
             Object.assign(child, {
-              pid: 12_345,
               stdin,
               stdout: new EventEmitter(),
               stderr: new EventEmitter(),

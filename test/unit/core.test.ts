@@ -30,6 +30,8 @@ import {
 import { defaultConfig } from "../../src/config/defaultConfig.js";
 import { applyConfigOverrides } from "../../src/config/configOverrides.js";
 import { flattenLeaves } from "../../src/config/projectScope.js";
+import { configTimeUnitPairs } from "../../src/config/timeUnits.js";
+import { defineConfig } from "../../src/config/defineConfig.js";
 import { buildContext } from "../../src/context/buildContext.js";
 import {
   isAllowedPath,
@@ -122,6 +124,24 @@ describe("config", () => {
 
     expect(parsed.agents.codex.timeoutMs).toBe(600_000);
     expect(parsed.agents.claude.timeoutMs).toBe(600_000);
+  });
+
+  test("types seconds aliases in legacy TypeScript config", () => {
+    const config = defineConfig({
+      agents: {
+        codex: {
+          timeoutS: 1.5,
+          openRouter: { streamIdleTimeoutS: 2 },
+        },
+        claude: { timeoutS: 3 },
+      },
+      judge: { timeoutS: 4 },
+      verification: { timeoutS: 5 },
+      reviewBudget: { maxTotalWallTimeS: 6 },
+    });
+
+    expect(config.agents?.codex?.timeoutS).toBe(1.5);
+    expect(config.reviewBudget?.maxTotalWallTimeS).toBe(6);
   });
 
   test("requires enough global model-call budget for enabled primary reviewers", () => {
@@ -297,11 +317,17 @@ maxAgentOutputBytes = 65536
   test("global config known-path metadata covers defaults and dynamic records", () => {
     const schemaPaths = collectSchemaPathsForTest(kyosoConfigSchema);
     const knownPaths = new Set(kyosoConfigKnownLeafPaths);
+    const secondsAliasPaths = configTimeUnitPairs.map(
+      (pair) => `${pair.parentPath.join(".")}.${pair.secondsKey}`,
+    );
     const recordPrefixes = kyosoConfigRecordPrefixes.map((path) =>
       path.split("."),
     );
     expect([...knownPaths].sort()).toEqual(
-      schemaPaths.leafPaths.map((path) => path.join(".")).sort(),
+      [
+        ...schemaPaths.leafPaths.map((path) => path.join(".")),
+        ...secondsAliasPaths,
+      ].sort(),
     );
     expect([...kyosoConfigRecordPrefixes].sort()).toEqual(
       schemaPaths.recordPrefixes.map((path) => path.join(".")).sort(),
@@ -317,6 +343,8 @@ maxAgentOutputBytes = 65536
     expect(knownPaths.has("agents.codex.model")).toBe(true);
     expect(knownPaths.has("agents.claude.model")).toBe(true);
     expect(knownPaths.has("agents.codex.provider")).toBe(true);
+    expect(knownPaths.has("agents.codex.timeoutS")).toBe(true);
+    expect(knownPaths.has("reviewBudget.maxTotalWallTimeS")).toBe(true);
     expect(knownPaths.has("agents.claude.provider")).toBe(false);
     expect(kyosoConfigRecordPrefixes).toContain("agents.codex.env");
     expect(kyosoConfigRecordPrefixes).toContain("agents.claude.env");
@@ -438,6 +466,166 @@ model = "gpt-5.5"
       "global_toml",
       "project_toml",
     ]);
+  });
+
+  test("normalizes every global seconds alias to canonical milliseconds", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-seconds-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+timeoutS = 1.5
+
+[agents.codex.openRouter]
+streamIdleTimeoutS = 2
+
+[agents.claude]
+timeoutS = 3
+
+[judge]
+timeoutS = 4
+
+[verification]
+timeoutS = 5
+
+[reviewBudget]
+maxTotalWallTimeS = 6
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+
+    expect(loaded.config.agents.codex.timeoutMs).toBe(1_500);
+    expect(loaded.config.agents.codex.openRouter.streamIdleTimeoutMs).toBe(
+      2_000,
+    );
+    expect(loaded.config.agents.claude.timeoutMs).toBe(3_000);
+    expect(loaded.config.judge.timeoutMs).toBe(4_000);
+    expect(loaded.config.verification.timeoutMs).toBe(5_000);
+    expect(loaded.config.reviewBudget.maxTotalWallTimeMs).toBe(6_000);
+    expect(loaded.warnings.join("\n")).not.toContain("unknown settings");
+    expect(loaded.config).not.toHaveProperty("agents.codex.timeoutS");
+  });
+
+  test("preserves config layer precedence across seconds and milliseconds", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-layered-seconds-"));
+    const configHome = join(cwd, "xdg");
+    const globalConfigPath = join(configHome, "kyoso", "config.toml");
+    const projectConfigPath = join(cwd, "kyoso.toml");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      globalConfigPath,
+      `[agents.claude]
+timeoutS = 10
+`,
+      "utf8",
+    );
+    await writeFile(
+      projectConfigPath,
+      `[agents.claude]
+timeoutMs = 2000
+`,
+      "utf8",
+    );
+
+    const projectMilliseconds = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+    expect(projectMilliseconds.config.agents.claude.timeoutMs).toBe(2_000);
+
+    await writeFile(
+      globalConfigPath,
+      `[agents.claude]
+timeoutMs = 2000
+`,
+      "utf8",
+    );
+    await writeFile(
+      projectConfigPath,
+      `[agents.claude]
+timeoutMs = 1000
+timeoutS = 10
+`,
+      "utf8",
+    );
+
+    const projectSeconds = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+    });
+    expect(projectSeconds.config.agents.claude.timeoutMs).toBe(10_000);
+  });
+
+  test("normalizes seconds in trusted legacy TypeScript config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-legacy-seconds-"));
+    const trustStorePath = join(cwd, "trusted-configs.json");
+    await writeFile(
+      join(cwd, "kyoso.config.ts"),
+      `import { defineConfig } from "@kyo-so/cli";
+export default defineConfig({
+  agents: { claude: { timeoutS: 1.5 } },
+  verification: { timeoutS: 2 },
+});
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      trustStorePath,
+      trustConfig: true,
+    });
+
+    expect(loaded.config.agents.claude.timeoutMs).toBe(1_500);
+    expect(loaded.config.verification.timeoutMs).toBe(2_000);
+  });
+
+  test("keeps review budget seconds global-only in project TOML", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-budget-seconds-"));
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[reviewBudget]
+maxTotalWallTimeS = 10
+`,
+      "utf8",
+    );
+
+    await expect(loadConfig({ cwd })).rejects.toThrow(
+      "must be a user-global review budget ceiling",
+    );
+  });
+
+  test("does not let stream idle seconds bypass OpenRouter authorization", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-openrouter-seconds-"));
+    const configHome = join(cwd, "xdg");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      join(configHome, "kyoso", "config.toml"),
+      `[agents.codex]
+provider = "openrouter"
+model = "openai/o4-mini"
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, "kyoso.toml"),
+      `[agents.codex.openRouter]
+streamIdleTimeoutS = 2
+`,
+      "utf8",
+    );
+
+    await expect(
+      loadConfig({ cwd, env: { XDG_CONFIG_HOME: configHome } }),
+    ).rejects.toThrow("not in the user-global allowlist");
   });
 
   test("loads the OpenRouter provider from global and an exact project TOML allowlist", async () => {
@@ -1298,6 +1486,34 @@ enabled = true
     expect(loaded.config.verification.enabled).toBe(true);
     expect(loaded.warnings).toContain(
       `unknown settings in ${configPath} were ignored: "verifcation.enabled"`,
+    );
+  });
+
+  test("keeps timeoutSec as a security-sensitive typo instead of a seconds alias", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-global-timeout-typo-"));
+    const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));
+    const configHome = join(home, "xdg");
+    const configPath = join(configHome, "kyoso", "config.toml");
+    await mkdir(join(configHome, "kyoso"), { recursive: true });
+    await writeFile(
+      configPath,
+      `[agents.claude]
+timeoutSec = 5
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      env: { XDG_CONFIG_HOME: configHome },
+      allowUnknownConfig: true,
+    });
+
+    const defaultTimeoutMs =
+      kyosoConfigSchema.parse(defaultConfig).agents.claude.timeoutMs;
+    expect(loaded.config.agents.claude.timeoutMs).toBe(defaultTimeoutMs);
+    expect(loaded.warnings).toContain(
+      `security-sensitive unknown settings in ${configPath} were ignored: "agents.claude.timeoutSec"`,
     );
   });
 

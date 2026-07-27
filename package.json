@@ -53,6 +53,7 @@
     "plugin:runtime:migrate": "node scripts/plugin-runtime-contract-migrate.mjs",
     "plugin:runtime:verify": "node scripts/verify-plugin-runtime.mjs",
     "plugin:promote": "node scripts/plugin-promote.mjs",
+    "plugin:promotion:reconcile": "node scripts/plugin-promotion-issues.mjs",
     "skill:runtime:verify": "node scripts/verify-skill-runtime.mjs",
     "audit:runtime:verify": "node scripts/verify-audit-runtime.mjs",
     "audit:budget-report": "node scripts/review-budget-report.mjs",

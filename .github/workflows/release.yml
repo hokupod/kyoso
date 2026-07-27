@@ -203,6 +203,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -302,6 +303,8 @@ jobs:
           fi
 
           ISSUE_BODY="$(printf '%s\n' \
+            "<!-- kyoso:plugin-promotion-reminder cli=${RELEASE_VERSION} -->" \
+            "" \
             "CLI v${RELEASE_VERSION} was published, while the distributed Plugin pin is still behind it." \
             "" \
             "- Codex MCP pin: @kyo-so/cli@${CODEX_PIN}" \

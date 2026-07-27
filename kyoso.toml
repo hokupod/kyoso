@@ -3,11 +3,11 @@
 # Phase 1 is annotate-only; allowDemotion stays false.
 
 [agents.codex]
-timeoutMs = 900000
+timeoutS = 900
 
 [agents.claude]
-timeoutMs = 900000
+timeoutS = 900
 
 [verification]
 enabled = true
-timeoutMs = 900000
+timeoutS = 900

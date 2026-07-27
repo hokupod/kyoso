@@ -15,6 +15,10 @@ import type {
 import { KyosoRequestError } from "./errors.js";
 import { normalizeModelTokenUsage } from "./tokenUsage.js";
 import { normalizeModelExecutionIdentity } from "./modelExecutionIdentity.js";
+import {
+  resolveTimeUnitPair,
+  TimeUnitValidationError,
+} from "../utils/timeUnits.js";
 
 type ReservationStatus = "reserved" | "started" | "completed" | "skipped";
 
@@ -49,6 +53,7 @@ export type BudgetReservationFailure = {
 const REVIEW_BUDGET_KEYS = new Set<keyof ReviewBudgetRequest>([
   "maxModelCalls",
   "maxTotalWallTimeMs",
+  "maxTotalWallTimeS",
   "maxAgentOutputBytes",
   "maxFindingsPerAgent",
   "skipOptionalPhasesWhenTokenUsageUnknown",
@@ -66,6 +71,7 @@ export function resolveReviewBudget(
       "REVIEW_BUDGET_INVALID",
     );
   }
+  const hasWallTimeSeconds = requested?.maxTotalWallTimeS !== undefined;
 
   for (const [key, value] of Object.entries(requested ?? {})) {
     if (!REVIEW_BUDGET_KEYS.has(key as keyof ReviewBudgetRequest)) {
@@ -73,6 +79,12 @@ export function resolveReviewBudget(
         `options.reviewBudget.${key} is not supported.`,
         "REVIEW_BUDGET_INVALID",
       );
+    }
+    if (
+      key === "maxTotalWallTimeS" ||
+      (key === "maxTotalWallTimeMs" && hasWallTimeSeconds)
+    ) {
+      continue;
     }
     if (key === "skipOptionalPhasesWhenTokenUsageUnknown") {
       if (typeof value !== "boolean") {
@@ -91,17 +103,34 @@ export function resolveReviewBudget(
     }
   }
 
+  let requestedWallTime: ReturnType<typeof resolveTimeUnitPair> | undefined;
+  if (hasWallTimeSeconds) {
+    try {
+      requestedWallTime = resolveTimeUnitPair(
+        {
+          milliseconds: requested?.maxTotalWallTimeMs,
+          seconds: requested?.maxTotalWallTimeS,
+        },
+        {
+          milliseconds: "options.reviewBudget.maxTotalWallTimeMs",
+          seconds: "options.reviewBudget.maxTotalWallTimeS",
+        },
+      );
+    } catch (error) {
+      if (error instanceof TimeUnitValidationError) {
+        throw new KyosoRequestError(error.message, "REVIEW_BUDGET_INVALID");
+      }
+      throw error;
+    }
+  }
+
   const numericKeys: Array<
-    Exclude<
-      keyof ReviewBudgetRequest,
-      "skipOptionalPhasesWhenTokenUsageUnknown"
-    >
-  > = [
-    "maxModelCalls",
-    "maxTotalWallTimeMs",
-    "maxAgentOutputBytes",
-    "maxFindingsPerAgent",
-  ];
+    | "maxModelCalls"
+    | "maxTotalWallTimeMs"
+    | "maxAgentOutputBytes"
+    | "maxFindingsPerAgent"
+  > = ["maxModelCalls", "maxAgentOutputBytes", "maxFindingsPerAgent"];
+  if (!hasWallTimeSeconds) numericKeys.push("maxTotalWallTimeMs");
   for (const key of numericKeys) {
     const value = requested?.[key];
     if (value === undefined) continue;
@@ -111,6 +140,25 @@ export function resolveReviewBudget(
         "REVIEW_BUDGET_EXCEEDS_CEILING",
       );
     }
+  }
+  if (
+    hasWallTimeSeconds &&
+    requested?.maxTotalWallTimeMs !== undefined &&
+    requested.maxTotalWallTimeMs > ceiling.maxTotalWallTimeMs
+  ) {
+    throw new KyosoRequestError(
+      "options.reviewBudget.maxTotalWallTimeMs cannot exceed the user-global ceiling.",
+      "REVIEW_BUDGET_EXCEEDS_CEILING",
+    );
+  }
+  if (
+    requestedWallTime &&
+    requestedWallTime.milliseconds > ceiling.maxTotalWallTimeMs
+  ) {
+    throw new KyosoRequestError(
+      `${requestedWallTime.sourceField} cannot exceed the user-global ceiling.`,
+      "REVIEW_BUDGET_EXCEEDS_CEILING",
+    );
   }
   if (
     ceiling.skipOptionalPhasesWhenTokenUsageUnknown &&
@@ -127,7 +175,9 @@ export function resolveReviewBudget(
   return {
     maxModelCalls: requested?.maxModelCalls ?? ceiling.maxModelCalls,
     maxTotalWallTimeMs:
-      requested?.maxTotalWallTimeMs ?? ceiling.maxTotalWallTimeMs,
+      requestedWallTime?.milliseconds ??
+      requested?.maxTotalWallTimeMs ??
+      ceiling.maxTotalWallTimeMs,
     warnAgentOutputBytes: ceiling.warnAgentOutputBytes,
     maxAgentOutputBytes,
     maxFindingsPerAgent:

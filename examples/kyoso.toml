@@ -17,7 +17,7 @@ defaultMode = "model_only"
 # Experimental OpenRouter transport retry policy. Omit every field to preserve
 # the installed Codex runtime defaults; 0 explicitly disables a retry class.
 # [agents.codex.openRouter]
-# streamIdleTimeoutMs = 90000
+# streamIdleTimeoutS = 90
 # streamMaxRetries = 3
 # requestMaxRetries = 2
 #
@@ -29,4 +29,4 @@ defaultMode = "model_only"
 [agents.claude]
 # Omit model to use the Claude adapter default.
 # model = "claude-sonnet-5"
-timeoutMs = 300000
+timeoutS = 300

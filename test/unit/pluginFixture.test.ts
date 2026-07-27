@@ -9,6 +9,8 @@ import {
   PLUGIN_RUNTIME_EXPECTED_CONTRACT,
 } from "../../src/cli/pluginRuntimeContract.js";
 import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
+// @ts-expect-error The distribution verifier is intentionally shipped as a standalone Node.js script.
+import { transformCanonicalToPlugin } from "../../scripts/plugin-distribution.mjs";
 
 const root = process.cwd();
 describe("Codex Plugin fixture", () => {
@@ -123,11 +125,31 @@ describe("Codex Plugin fixture", () => {
       "`bunx --package @kyo-so/cli kyoso`",
     );
     expect(canonicalInstructions).not.toContain(cliPackagePin);
+    expect(canonicalInstructions).toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
     expect(pluginInstructions).toContain(
       `\`npx -y --package=${cliPackagePin} kyoso\``,
     );
     expect(pluginInstructions).toContain(
       `\`bunx --package ${cliPackagePin} kyoso\``,
+    );
+    expect(pluginInstructions).toContain(
+      "`--set agents.<agent>.timeoutMs=<ms>`",
+    );
+    expect(pluginInstructions).not.toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
+    const promotedInstructions = transformCanonicalToPlugin(
+      "SKILL.md",
+      Buffer.from(canonicalInstructions),
+      "@kyo-so/cli@0.16.0",
+    ).toString("utf8");
+    expect(promotedInstructions).toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
+    expect(promotedInstructions).not.toContain(
+      "`--set agents.<agent>.timeoutMs=<ms>`",
     );
     expect(await directorySnapshot(plugin)).toEqual({
       ...canonicalSnapshot,
@@ -501,6 +523,7 @@ describe("Codex Plugin fixture", () => {
               "plugin:verify:registry",
               "plugin:verify:published-cli",
               "plugin:runtime:verify",
+              "plugin:promotion:reconcile",
             ]) {
               const original = packageMetadata.scripts[name];
               packageMetadata.scripts[name] = "node scripts/other.mjs";
@@ -525,6 +548,28 @@ describe("Codex Plugin fixture", () => {
     );
 
     expect(result.status).toBe(0);
+  });
+
+  test("creates identifiable promotion reminders from the default branch", async () => {
+    const workflow = await readFile(
+      join(root, ".github", "workflows", "release.yml"),
+      "utf8",
+    );
+    const reminderStart = workflow.indexOf("  promotion-reminder:");
+    expect(reminderStart).toBeGreaterThan(-1);
+    const reminder = workflow.slice(reminderStart);
+
+    expect(reminder).toContain("    continue-on-error: true");
+    expect(reminder).toContain("        id: promotion_reminder");
+    expect(reminder).toContain(
+      "        continue-on-error: true\n        env:\n          GH_TOKEN:",
+    );
+    expect(reminder).toContain(
+      "          ref: ${{ github.event.repository.default_branch }}",
+    );
+    expect(reminder).toContain(
+      '"<!-- kyoso:plugin-promotion-reminder cli=${RELEASE_VERSION} -->"',
+    );
   });
 
   test("rejects Plugin promotion workflow drift", () => {
@@ -566,6 +611,274 @@ describe("Codex Plugin fixture", () => {
                 );
               },
               expected: "pull_request.paths must contain canonical paths exactly once",
+            },
+            {
+              name: "missing push branch",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    branches:\\n      - main\\n",
+                  "",
+                );
+              },
+              expected: "push.branches must contain main exactly once",
+            },
+            {
+              name: "non-main push branch",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      - main\\n    paths:",
+                  "      - release\\n    paths:",
+                );
+              },
+              expected: "push.branches must contain main exactly once",
+            },
+            {
+              name: "duplicate push branch",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      - main\\n    paths:",
+                  "      - main\\n      - main\\n    paths:",
+                );
+              },
+              expected: "push.branches must contain main exactly once",
+            },
+            {
+              name: "missing push artifact",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - ".claude-plugin/marketplace.json"\\n',
+                  "",
+                );
+              },
+              expected: "push.paths must contain promotion artifacts exactly once",
+            },
+            {
+              name: "extra push artifact",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - ".claude-plugin/marketplace.json"\\n',
+                  '      - ".claude-plugin/marketplace.json"\\n      - "package.json"\\n',
+                );
+              },
+              expected: "push.paths must contain promotion artifacts exactly once",
+            },
+            {
+              name: "duplicate push artifact",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - ".claude-plugin/marketplace.json"\\n',
+                  '      - ".claude-plugin/marketplace.json"\\n      - ".claude-plugin/marketplace.json"\\n',
+                );
+              },
+              expected: "push.paths must contain promotion artifacts exactly once",
+            },
+            {
+              name: "broad push artifact",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  '      - ".claude-plugin/marketplace.json"\\n',
+                  '      - ".claude-plugin/marketplace.json"\\n      - "plugins/**"\\n',
+                );
+              },
+              expected: "push.paths must contain promotion artifacts exactly once",
+            },
+            {
+              name: "extra push trigger key",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "  pull_request:\\n",
+                  "    tags:\\n      - v*\\n  pull_request:\\n",
+                );
+              },
+              expected: "push must define only branches and paths",
+            },
+            {
+              name: "inline extra push trigger key",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    paths:\\n",
+                  '    tags: ["v*"]\\n    paths:\\n',
+                );
+              },
+              expected: "push must define only branches and paths",
+            },
+            {
+              name: "missing close job",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.slice(
+                  0,
+                  workflow.value.indexOf("  close-promotion-reminders:"),
+                );
+              },
+              expected: "must define close-promotion-reminders exactly once",
+            },
+            {
+              name: "duplicate close job",
+              mutate({ workflow }) {
+                const closeJob = workflow.value.slice(
+                  workflow.value.indexOf("  close-promotion-reminders:"),
+                );
+                workflow.value += "\\n" + closeJob;
+              },
+              expected: "must define close-promotion-reminders exactly once",
+            },
+            {
+              name: "wrong close dependency",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    needs: verify-plugin-promotion\\n    if: >-",
+                  "    needs: other-job\\n    if: >-",
+                );
+              },
+              expected: "close job needs must equal verify-plugin-promotion",
+            },
+            {
+              name: "pull request close condition",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "github.event_name == 'push'",
+                  "github.event_name == 'pull_request'",
+                );
+              },
+              expected: "close job if must allow only main push or main workflow_dispatch",
+            },
+            {
+              name: "non-main close condition",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "refs/heads/main",
+                  "refs/heads/release",
+                );
+              },
+              expected: "close job if must allow only main push or main workflow_dispatch",
+            },
+            {
+              name: "missing issue permission",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      issues: write\\n    steps:",
+                  "    steps:",
+                );
+              },
+              expected: "permissions must contain only contents read and issues write",
+            },
+            {
+              name: "extra close permission",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      issues: write\\n    steps:",
+                  "      issues: write\\n      actions: write\\n    steps:",
+                );
+              },
+              expected: "permissions must contain only contents read and issues write",
+            },
+            {
+              name: "missing reconciliation command",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        run: node scripts/other.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation exactly once",
+            },
+            {
+              name: "duplicate reconciliation command",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        run: node scripts/plugin-promotion-issues.mjs\\n\\n      - name: Duplicate reconciliation\\n        run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation exactly once",
+            },
+            {
+              name: "inert reconciliation env run",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "          run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation exactly once",
+            },
+            {
+              name: "conditional reconciliation",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        if: false\\n        run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation without if, continue-on-error, or shell",
+            },
+            {
+              name: "best-effort reconciliation",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        continue-on-error: true\\n        run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation without if, continue-on-error, or shell",
+            },
+            {
+              name: "reconciliation shell override",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        shell: echo {0}\\n        run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation without if, continue-on-error, or shell",
+            },
+            {
+              name: "reconciliation working directory",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "        run: node scripts/plugin-promotion-issues.mjs",
+                  "        working-directory: other\\n        run: node scripts/plugin-promotion-issues.mjs",
+                );
+              },
+              expected: "must run promotion reminder reconciliation without working-directory",
+            },
+            {
+              name: "close job continue on error",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "  close-promotion-reminders:\\n    needs:",
+                  "  close-promotion-reminders:\\n    continue-on-error: true\\n    needs:",
+                );
+              },
+              expected: "close job must not use continue-on-error",
+            },
+            {
+              name: "close job defaults",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "      issues: write\\n    steps:",
+                  "      issues: write\\n    defaults:\\n      run:\\n        working-directory: other\\n    steps:",
+                );
+              },
+              expected: "close job must not configure defaults",
+            },
+            {
+              name: "close job container",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    runs-on: ubuntu-latest\\n    permissions:\\n      contents: read\\n      issues: write",
+                  "    runs-on: ubuntu-latest\\n    container: attacker/image\\n    permissions:\\n      contents: read\\n      issues: write",
+                );
+              },
+              expected: "close job must not configure a container",
+            },
+            {
+              name: "close job extra step",
+              mutate({ workflow }) {
+                workflow.value +=
+                  "\\n      - name: Extra issue writer\\n        run: gh issue close 1\\n";
+              },
+              expected: "close job steps must be checkout, Node 24 setup, and reconciliation only",
             },
             {
               name: "inert safe-chain verification",
@@ -640,7 +953,10 @@ describe("Codex Plugin fixture", () => {
             {
               name: "post-steps quoted continue-on-error promotion job",
               mutate({ workflow }) {
-                workflow.value += '    "continue-on-error": true\\n';
+                workflow.value = workflow.value.replace(
+                  "\\n  close-promotion-reminders:",
+                  '\\n    "continue-on-error": true\\n\\n  close-promotion-reminders:',
+                );
               },
               expected: "job must not use if or continue-on-error",
             },

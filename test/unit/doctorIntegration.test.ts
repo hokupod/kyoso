@@ -159,10 +159,41 @@ timeoutMs = 900000
 
       expect(output).toContain(expectedWarning);
       expect(output).toContain(
-        "hint: set user-global reviewBudget.maxTotalWallTimeMs to at least 1980000.",
+        "hint: set user-global reviewBudget.maxTotalWallTimeS to at least 1980.",
       );
     },
   );
+
+  test("rounds a recommended review deadline up to whole seconds", async () => {
+    const context = await doctorFixture();
+    const globalConfigDir = join(context.home, ".config", "kyoso");
+    await mkdir(globalConfigDir, { recursive: true });
+    await writeFile(
+      join(globalConfigDir, "config.toml"),
+      "[reviewBudget]\nmaxTotalWallTimeMs = 1000\n",
+      "utf8",
+    );
+    await writeFile(
+      join(context.cwd, "kyoso.toml"),
+      `[agents.codex]
+timeoutMs = 1001
+
+[agents.claude]
+timeoutMs = 1001
+`,
+      "utf8",
+    );
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain(
+      "hint: set user-global reviewBudget.maxTotalWallTimeS to at least 62.",
+    );
+  });
 
   test("adds judge time only for a credential-backed LLM route", async () => {
     const context = await doctorFixture();

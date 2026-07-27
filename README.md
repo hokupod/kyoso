@@ -321,7 +321,7 @@ Kyoso loads config in this order:
 
 Unknown keys are rejected. Boolean and numeric config keys are converted to their schema types; string keys remain strings. The complete config is then validated.
 
-Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as agent `enabled` / `model` / `effort` / `role` / `timeoutMs`, the Codex-only `provider`, OpenRouter model, or retry-policy override after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network/CISA settings.
+Project `kyoso.toml` is declarative and does not require trust approval. It can set safe project-scoped keys such as agent `enabled` / `model` / `effort` / `role` / `timeoutS`, the Codex-only `provider`, OpenRouter model, or retry-policy override after user-global authorization, workspace byte limits and additive `workspace.deny`, verification settings, advisory judge settings, and tightening-only security/network/CISA settings.
 
 `entrypoints.*`, `tools.*`, and `reviewPolicy.*` are user-global policy. A disabled entrypoint or tool returns a structured policy block before agents start. `firstClassClient = "codex"`, `workspace.readOnly = true`, `network.mediatedWeb.enabled = false`, and `audit.includeFileContents = false` are fixed or reserved values; unsupported values are rejected instead of acting as no-ops.
 
@@ -340,7 +340,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`. Codex also supports `agents.codex.provider`: `"openrouter"` selects the external provider, while `"default"` resets an inherited OpenRouter selection to normal Codex behavior; Claude has no provider setting. `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` configure the selected OpenRouter transport only. Selecting the provider or changing that retry policy from a project requires the global-config-only `agents.codex.allowProjectProvider` allowlist; see [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in) for the full rules. The `command`, `args`, and `env` keys are also global-config-only (see [Files and precedence](#files-and-precedence)).
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutS>`. The legacy-compatible `timeoutMs` input remains accepted. Codex also supports `agents.codex.provider`: `"openrouter"` selects the external provider, while `"default"` resets an inherited OpenRouter selection to normal Codex behavior; Claude has no provider setting. `agents.codex.openRouter.streamIdleTimeoutS`, `streamMaxRetries`, and `requestMaxRetries` configure the selected OpenRouter transport only; `streamIdleTimeoutMs` remains accepted. Selecting the provider or changing that retry policy from a project requires the global-config-only `agents.codex.allowProjectProvider` allowlist; see [Codex OpenRouter project opt-in](#codex-openrouter-project-opt-in) for the full rules. The `command`, `args`, and `env` keys are also global-config-only (see [Files and precedence](#files-and-precedence)).
 
 Omit `agents.<name>.model` or `agents.<name>.effort` to use each agent's own default. Codex uses the local Codex config, such as `~/.codex/config.toml` (or `$CODEX_HOME/config.toml` when `CODEX_HOME` is set); Claude uses the adapter default.
 
@@ -382,14 +382,14 @@ provider = "openrouter"
 model = "openai/o4-mini"
 
 [agents.codex.openRouter]
-streamIdleTimeoutMs = 90000
+streamIdleTimeoutS = 90
 streamMaxRetries = 3
 requestMaxRetries = 2
 ```
 
 `model` is required and must not be blank when `provider = "openrouter"`. It is an OpenRouter model ID; Kyoso does not validate the catalog or whether that model supports tool calling, so confirm tool support with the provider.
 
-`agents.codex.openRouter` is experimental. `streamIdleTimeoutMs` is an integer of at least `1000`; `streamMaxRetries` and `requestMaxRetries` are integers from `0` through `100`, where `0` disables that retry class. These fields require `provider = "openrouter"`; omitting them leaves the corresponding Codex runtime defaults unchanged. Retry regenerates an unfinished Codex turn rather than resuming its bytes; pre-retry partial output is discarded and never reaches final results.
+`agents.codex.openRouter` is experimental. `streamIdleTimeoutS` is a number of at least `1` second that converts exactly to integer milliseconds; `streamMaxRetries` and `requestMaxRetries` are integers from `0` through `100`, where `0` disables that retry class. These fields require `provider = "openrouter"`; omitting them leaves the corresponding Codex runtime defaults unchanged. Retry regenerates an unfinished Codex turn rather than resuming its bytes; pre-retry partial output is discarded and never reaches final results.
 
 `allowProjectProvider` applies to a project `provider`, a project `model` override while OpenRouter is inherited, and a project `agents.codex.openRouter.*` override while OpenRouter is inherited; its list must contain the absolute canonical directory containing the resolved project configuration file, not the invocation cwd or a lexical path, with no descendant or glob matching. A project configuration file (including trusted `kyoso.config.ts`) and an allowlist entry that resolve through symlinks to that directory match; entries resolving elsewhere, or unresolvable paths, fail closed. A user-global `provider = "openrouter"` needs no allowlist entry. An explicit CLI pair of `--set agents.codex.provider=openrouter` and `--set agents.codex.model=<model>` in the same invocation is also allowed without it; a project model cannot supply the CLI override's model. `allowProjectProvider` is not a `--set` path and legacy boolean values are rejected.
 
@@ -407,7 +407,7 @@ The Marketplace Plugin exposes the `OPENROUTER_API_KEY` variable name to its MCP
 
 New manual MCP registrations omit `OPENROUTER_API_KEY` by default. Add it only with `--with-openrouter` after intentionally selecting the provider; existing registrations are never rewritten. The `kyoso setup ... --with-openrouter` output and the manual setup examples remain user-managed client-registration templates. In a Claude Code registration, `${OPENROUTER_API_KEY}` must be expanded by the client; Kyoso ignores only a whole unexpanded credential placeholder — `${NAME}`, `$NAME`, or `%NAME%`, with optional surrounding whitespace — and emits a sanitized warning containing only the variable name. Values with any other text are preserved. The same rule applies to custom credential-like names ending in `_KEY`, `_TOKEN`, `_SECRET`, or `_PASSWORD`; non-credential templates are preserved.
 
-Prefer this user-authorized project-scoped opt-in. A global `provider = "openrouter"` is inherited by projects until a project sets `provider = "default"`; merely omitting `provider` does not unset it. The fixed OpenRouter Responses API preset is beta; custom endpoints, provider routing, fallbacks, and judge integration are not exposed. When configured, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` map only to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries`; omitted fields are absent from `CODEX_CONFIG`. To keep the key bound to that preset, OpenRouter mode rejects a `CODEX_CONFIG` with a top-level `profile` or `profiles` field and rejects a non-object `model_providers` value before launching the child. For an object value, it replaces `model_providers` with only the fixed `kyoso-openrouter` entry and emits a sanitized warning with the discarded-entry count only; provider IDs and configuration values never appear. Apart from those rejected fields, it preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, so no foreign provider configuration can select an endpoint with the key. Claude remains on its configured provider, and the judge does not use `OPENROUTER_API_KEY`.
+Prefer this user-authorized project-scoped opt-in. A global `provider = "openrouter"` is inherited by projects until a project sets `provider = "default"`; merely omitting `provider` does not unset it. The fixed OpenRouter Responses API preset is beta; custom endpoints, provider routing, fallbacks, and judge integration are not exposed. When configured, `streamIdleTimeoutS` is normalized to internal `streamIdleTimeoutMs`; that value, `streamMaxRetries`, and `requestMaxRetries` map only to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries`. Omitted fields are absent from `CODEX_CONFIG`. To keep the key bound to that preset, OpenRouter mode rejects a `CODEX_CONFIG` with a top-level `profile` or `profiles` field and rejects a non-object `model_providers` value before launching the child. For an object value, it replaces `model_providers` with only the fixed `kyoso-openrouter` entry and emits a sanitized warning with the discarded-entry count only; provider IDs and configuration values never appear. Apart from those rejected fields, it preserves unrelated `CODEX_CONFIG` fields outside `model`, `model_provider`, and `model_providers`, so no foreign provider configuration can select an endpoint with the key. Claude remains on its configured provider, and the judge does not use `OPENROUTER_API_KEY`.
 
 After user-global authorization, a project `kyoso.toml` can select the external provider or override its inherited OpenRouter model and route review context to it. For an untrusted repository, use `--ignore-config` and pass only the needed CLI options explicitly.
 
@@ -467,7 +467,7 @@ Every review has user-global hard ceilings for model calls, total wall time, and
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 660000
+maxTotalWallTimeS = 660
 warnAgentOutputBytes = 524288
 maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
@@ -480,13 +480,17 @@ The result includes `completion`, `executionBudget`, and `requestFingerprint`; M
 
 ### Timeouts
 
-Default agent timeouts are 600 seconds for both Codex and Claude; the verification round defaults to 90 seconds. The review-wide deadline defaults to 660 seconds (`reviewBudget.maxTotalWallTimeMs`), leaving the standard 60-second finalization margin after the default parallel primary phase. Each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
+Prefer numeric seconds inputs: agent `timeoutS`, OpenRouter `streamIdleTimeoutS`, `verification.timeoutS`, `judge.timeoutS`, user-global `reviewBudget.maxTotalWallTimeS`, request `options.maxAgentTimeoutS`, request `options.reviewBudget.maxTotalWallTimeS`, and library option `progressHeartbeatS`. Existing `*Ms` inputs remain accepted without a runtime warning, while resolved config, execution, results, and Audit remain in milliseconds.
+
+Seconds may be fractional only when multiplication by 1,000 produces a safe integer number of milliseconds: `1.5` and `0.001` are valid, while `0.0001` is not. Timeouts are positive; only `progressHeartbeatS = 0` disables heartbeat. When both units appear in one layer or request object, both values are validated and `S` wins. Config layer precedence is applied first, so a later project or CLI `Ms` value still overrides an earlier global `S` value.
+
+Default agent timeouts are 600 seconds for both Codex and Claude; the verification round defaults to 90 seconds. The review-wide deadline defaults to 660 seconds (`reviewBudget.maxTotalWallTimeS`), leaving the standard 60-second finalization margin after the default parallel primary phase. Each phase uses the remaining deadline rather than extending it. `kyoso doctor` reports the configured sequential phase time and a recommended review-wide deadline with a 10% or 60-second margin, whichever is larger. It includes an LLM judge timeout only when the judge mode permits it and a direct-provider credential is available.
 
 This repository's 15-minute primary plus 15-minute verification dogfooding preset uses the following user-global override:
 
 ```toml
 [reviewBudget]
-maxTotalWallTimeMs = 2100000
+maxTotalWallTimeS = 2100
 ```
 
 The Codex Plugin and newly generated manual Codex registrations use `tool_timeout_sec = 2160`, leaving 60 seconds beyond that 35-minute Kyoso deadline. Existing manual registrations are preserved by `kyoso setup` and must be updated manually. The Claude Code Plugin manifest does not set a client tool timeout; launch Claude Code with the equivalent millisecond value, then restart the client:
@@ -495,17 +499,17 @@ The Codex Plugin and newly generated manual Codex registrations use `tool_timeou
 MCP_TOOL_TIMEOUT=2160000 claude
 ```
 
-Increasing the client timeout does not extend Kyoso's internal review-wide deadline. For other presets, keep the client timeout longer than `reviewBudget.maxTotalWallTimeMs`.
+Increasing the client timeout does not extend Kyoso's internal review-wide deadline. For other presets, keep the client timeout longer than `reviewBudget.maxTotalWallTimeS`.
 
 ### Verification
 
-Verification keys: `verification.<enabled|maxFindings|timeoutMs>`. Optional finding verification is disabled by default:
+Verification keys: `verification.<enabled|maxFindings|timeoutS>`. The legacy-compatible `timeoutMs` input remains accepted. Optional finding verification is disabled by default:
 
 ```toml
 [verification]
 enabled = false
 maxFindings = 5
-timeoutMs = 90000
+timeoutS = 90
 # global config only; project kyoso.toml cannot set this
 allowDemotion = false
 ```
@@ -514,7 +518,7 @@ When enabled, Kyoso asks the agent that did not report each high/critical single
 
 ### Judge
 
-Judge keys: `judge.<mode|provider|timeoutMs>`. Judge LLMs are optional and default to `mode = "deterministic_only"`; credentials alone do not start a judge call. Set `mode = "deterministic_plus_llm"` plus `OPENAI_API_KEY` or `CODEX_API_KEY` for OpenAI, or `ANTHROPIC_API_KEY` for Anthropic. Optional overrides:
+Judge keys: `judge.<mode|provider|timeoutS>`. The legacy-compatible `timeoutMs` input remains accepted. Judge LLMs are optional and default to `mode = "deterministic_only"`; credentials alone do not start a judge call. Set `mode = "deterministic_plus_llm"` plus `OPENAI_API_KEY` or `CODEX_API_KEY` for OpenAI, or `ANTHROPIC_API_KEY` for Anthropic. Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`

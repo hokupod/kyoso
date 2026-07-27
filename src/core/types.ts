@@ -60,9 +60,14 @@ export type ReviewBudget = {
   skipOptionalPhasesWhenTokenUsageUnknown: boolean;
 };
 
-export type ReviewBudgetRequest = Partial<
-  Omit<ReviewBudget, "warnAgentOutputBytes">
->;
+export type ReviewBudgetRequest = {
+  maxModelCalls?: number;
+  maxTotalWallTimeMs?: number;
+  maxTotalWallTimeS?: number;
+  maxAgentOutputBytes?: number;
+  maxFindingsPerAgent?: number;
+  skipOptionalPhasesWhenTokenUsageUnknown?: boolean;
+};
 
 export type ResolvedReviewBudget = ReviewBudget & {
   effectiveWarnAgentOutputBytes?: number;
@@ -165,6 +170,7 @@ export type KyosoReviewRequest = {
   options?: {
     network?: NetworkMode;
     maxAgentTimeoutMs?: number;
+    maxAgentTimeoutS?: number;
     reviewBudget?: ReviewBudgetRequest;
     includeAgentRawOutputs?: boolean;
     judgeProvider?: JudgeProvider;

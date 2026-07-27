@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Accept numeric seconds aliases for public config, CLI overrides, MCP/library
+  request timeouts and review budgets, and the `runReview()` progress heartbeat
+  while preserving millisecond inputs and canonical millisecond outputs.
+
 ### Changed
 
 - Close machine-marked Plugin promotion reminders with an audit comment only

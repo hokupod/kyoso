@@ -5,6 +5,8 @@ import {
   type KyosoConfig,
 } from "./schema.js";
 import { isAllowedConfigOverridePath } from "./projectScope.js";
+import { normalizeConfigTimeUnits } from "./timeUnits.js";
+import { TimeUnitValidationError } from "../utils/timeUnits.js";
 
 type ParsedConfigOverride = {
   assignment: string;
@@ -14,9 +16,14 @@ type ParsedConfigOverride = {
 
 const NUMBER_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 const UNSET_NUMBER_OVERRIDE_PATHS = new Set([
+  "agents.codex.timeoutS",
+  "agents.claude.timeoutS",
   "agents.codex.openRouter.streamIdleTimeoutMs",
+  "agents.codex.openRouter.streamIdleTimeoutS",
   "agents.codex.openRouter.streamMaxRetries",
   "agents.codex.openRouter.requestMaxRetries",
+  "judge.timeoutS",
+  "verification.timeoutS",
 ]);
 
 export function applyConfigOverrides(
@@ -39,18 +46,34 @@ export function applyConfigOverrides(
       ),
     );
   }
+  let normalized: Record<string, unknown>;
+  try {
+    normalized = normalizeConfigTimeUnits(overridden) as Record<
+      string,
+      unknown
+    >;
+  } catch (error) {
+    if (!(error instanceof TimeUnitValidationError)) throw error;
+    const assignment = findAssignmentForPath(overrides, error.field);
+    if (!assignment) {
+      throw new Error(`Invalid config time value: ${error.message}`);
+    }
+    throw new Error(
+      `Invalid --set value ${JSON.stringify(assignment)}: ${error.message}`,
+    );
+  }
   clearInheritedOpenRouterConfigForProviderReset(
     baseConfig,
-    overridden,
+    normalized,
     overrides,
   );
   assertOpenRouterProviderOverrideIncludesModel(
     baseConfig,
-    overridden,
+    normalized,
     overrides,
   );
 
-  const parsed = kyosoConfigSchema.safeParse(overridden);
+  const parsed = kyosoConfigSchema.safeParse(normalized);
   if (parsed.success) return parsed.data;
 
   const issue = parsed.error.issues[0];

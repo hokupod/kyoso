@@ -217,6 +217,7 @@ function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
     `agents.${agent}.effort`,
     `agents.${agent}.role`,
     `agents.${agent}.timeoutMs`,
+    `agents.${agent}.timeoutS`,
     `agents.${agent}.env`,
     `agents.${agent}.auth.mode`,
     `agents.${agent}.auth.preferExistingLogin`,
@@ -229,6 +230,7 @@ function agentConfigLeafPaths(agent: "codex" | "claude"): string[] {
       "agents.codex.provider",
       "agents.codex.allowProjectProvider",
       "agents.codex.openRouter.streamIdleTimeoutMs",
+      "agents.codex.openRouter.streamIdleTimeoutS",
       "agents.codex.openRouter.streamMaxRetries",
       "agents.codex.openRouter.requestMaxRetries",
     );
@@ -269,12 +271,15 @@ export const kyosoConfigKnownLeafPaths = [
   "judge.mode",
   "judge.provider",
   "judge.timeoutMs",
+  "judge.timeoutS",
   "verification.enabled",
   "verification.maxFindings",
   "verification.timeoutMs",
+  "verification.timeoutS",
   "verification.allowDemotion",
   "reviewBudget.maxModelCalls",
   "reviewBudget.maxTotalWallTimeMs",
+  "reviewBudget.maxTotalWallTimeS",
   "reviewBudget.warnAgentOutputBytes",
   "reviewBudget.maxAgentOutputBytes",
   "reviewBudget.maxFindingsPerAgent",
@@ -306,4 +311,25 @@ export const kyosoConfigSecuritySensitivePrefixes = [
 ];
 
 export type KyosoConfig = z.infer<typeof kyosoConfigSchema>;
-export type KyosoConfigInput = PartialDeep<KyosoConfig>;
+export type KyosoConfigInput = PartialDeep<KyosoConfig> & {
+  agents?: {
+    codex?: {
+      timeoutS?: number;
+      openRouter?: {
+        streamIdleTimeoutS?: number;
+      };
+    };
+    claude?: {
+      timeoutS?: number;
+    };
+  };
+  judge?: {
+    timeoutS?: number;
+  };
+  verification?: {
+    timeoutS?: number;
+  };
+  reviewBudget?: {
+    maxTotalWallTimeS?: number;
+  };
+};

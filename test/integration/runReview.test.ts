@@ -88,6 +88,102 @@ describe("runReview", () => {
     expect(manager.calls[0]?.timeoutMs).toBe(1_234);
   });
 
+  test("converts a seconds config override before starting agents", async () => {
+    const manager = new FakeAgentManager();
+
+    await runReview(
+      "plan_review",
+      { goal: "review seconds override", currentPlan: "do it" },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("claude"),
+        configOverrides: ["agents.claude.timeoutS=1.5"],
+        agentManager: manager,
+      },
+    );
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.timeoutMs).toBe(1_500);
+  });
+
+  test("converts request timeout and heartbeat seconds before starting agents", async () => {
+    const manager = new FakeAgentManager();
+
+    await runReview(
+      "plan_review",
+      {
+        goal: "review request seconds",
+        options: { maxAgentTimeoutMs: 1_000, maxAgentTimeoutS: 2 },
+      },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("claude"),
+        agentManager: manager,
+        progressHeartbeatMs: 100,
+        progressHeartbeatS: 0.25,
+      },
+    );
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.timeoutMs).toBe(2_000);
+    expect(manager.calls[0]?.heartbeatMs).toBe(250);
+  });
+
+  test("preserves a legacy millisecond heartbeat without a seconds alias", async () => {
+    const manager = new FakeAgentManager();
+
+    await runReview(
+      "plan_review",
+      { goal: "review legacy heartbeat", currentPlan: "do it" },
+      {
+        cwd: await tempCwd(),
+        config: singleAgentConfig("claude"),
+        agentManager: manager,
+        progressHeartbeatMs: 0.5,
+      },
+    );
+
+    expect(manager.calls).toHaveLength(1);
+    expect(manager.calls[0]?.heartbeatMs).toBe(0.5);
+  });
+
+  test("canonicalizes equivalent request time units before fingerprinting", async () => {
+    const config = singleAgentConfig("claude");
+    const seconds = await runReview(
+      "plan_review",
+      {
+        goal: "review equivalent time units",
+        options: {
+          maxAgentTimeoutS: 2,
+          reviewBudget: { maxTotalWallTimeS: 120 },
+        },
+      },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new FakeAgentManager(),
+      },
+    );
+    const milliseconds = await runReview(
+      "plan_review",
+      {
+        goal: "review equivalent time units",
+        options: {
+          maxAgentTimeoutMs: 2_000,
+          reviewBudget: { maxTotalWallTimeMs: 120_000 },
+        },
+      },
+      {
+        cwd: await tempCwd(),
+        config,
+        agentManager: new FakeAgentManager(),
+      },
+    );
+
+    expect(seconds.requestFingerprint).toBe(milliseconds.requestFingerprint);
+    expect(seconds.executionBudget.wallTime.limitMs).toBe(120_000);
+  });
+
   test("emits ordered review progress phases through a collecting sink", async () => {
     const progress: ReviewProgressEvent[] = [];
 

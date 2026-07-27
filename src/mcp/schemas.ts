@@ -1,5 +1,9 @@
 import * as z from "zod/v4";
 import { REVIEW_LENSES } from "../core/reviewPolicy.js";
+import {
+  secondsToMilliseconds,
+  TimeUnitValidationError,
+} from "../utils/timeUnits.js";
 
 export const kyosoReviewRequestSchema = z.object({
   goal: z.string().min(1),
@@ -53,10 +57,14 @@ export const kyosoReviewRequestSchema = z.object({
     .object({
       network: z.enum(["model_only", "unrestricted"]).optional(),
       maxAgentTimeoutMs: z.number().int().positive().optional(),
+      maxAgentTimeoutS: secondsSchema("options.maxAgentTimeoutS").optional(),
       reviewBudget: z
         .object({
           maxModelCalls: z.number().int().positive().optional(),
           maxTotalWallTimeMs: z.number().int().positive().optional(),
+          maxTotalWallTimeS: secondsSchema(
+            "options.reviewBudget.maxTotalWallTimeS",
+          ).optional(),
           maxAgentOutputBytes: z.number().int().positive().optional(),
           maxFindingsPerAgent: z.number().int().positive().optional(),
           skipOptionalPhasesWhenTokenUsageUnknown: z.boolean().optional(),
@@ -69,3 +77,19 @@ export const kyosoReviewRequestSchema = z.object({
     })
     .optional(),
 });
+
+function secondsSchema(field: string) {
+  return z.number().superRefine((value, context) => {
+    try {
+      secondsToMilliseconds(value, field);
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message:
+          error instanceof TimeUnitValidationError
+            ? error.message
+            : `${field} is invalid.`,
+      });
+    }
+  });
+}

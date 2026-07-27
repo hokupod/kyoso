@@ -86,6 +86,10 @@ import {
   type ModelCallReservation,
 } from "./reviewBudget.js";
 import {
+  normalizeRequestTimeUnits,
+  resolveProgressHeartbeatMs,
+} from "./requestTimeUnits.js";
+import {
   admitFindings,
   buildAdmissionOpenQuestions,
   findingFingerprint,
@@ -120,13 +124,15 @@ export type RunReviewOptions = LoadConfigOptions & {
   onProgress?: ReviewProgressSink;
   signal?: AbortSignal;
   progressHeartbeatMs?: number;
+  progressHeartbeatS?: number;
 };
 
 function requestForRecursionFingerprint(
   request: KyosoReviewRequest,
 ): KyosoReviewRequest {
   try {
-    return scanAndRedactSecrets(request).redactedRequest;
+    return scanAndRedactSecrets(normalizeRequestTimeUnits(request))
+      .redactedRequest;
   } catch {
     return { goal: "" };
   }
@@ -446,6 +452,8 @@ export async function runReview(
         loaded.config.reviewBudget,
         request.options?.reviewBudget,
       );
+      const normalizedRequest = normalizeRequestTimeUnits(request);
+      const progressHeartbeatMs = resolveProgressHeartbeatMs(options);
       const budgetTracker = new ReviewBudgetTracker(
         reviewBudget,
         startedAtEpochMs,
@@ -453,16 +461,16 @@ export async function runReview(
           loaded.config,
           reviewBudget,
           options.env ?? process.env,
-          request.options?.judgeProvider,
+          normalizedRequest.options?.judgeProvider,
         ),
       );
       assertTrustedWorkspaceRoot(
-        request.workspace?.root,
+        normalizedRequest.workspace?.root,
         loaded.config.workspace.root,
         cwd,
       );
       const networkMode = resolveNetworkMode(
-        request.options?.network,
+        normalizedRequest.options?.network,
         loaded.config.network.defaultMode,
         options.mcpNetworkMode,
       );
@@ -482,7 +490,8 @@ export async function runReview(
         options.entrypoint,
       );
       if (disabledPolicy) {
-        const redactedRequest = requestForRecursionFingerprint(request);
+        const redactedRequest =
+          requestForRecursionFingerprint(normalizedRequest);
         const requestFingerprint = createRequestFingerprint({
           tool,
           request: redactedRequest,
@@ -545,7 +554,7 @@ export async function runReview(
       }
 
       startPhase("context");
-      const secretScan = scanAndRedactSecrets(request);
+      const secretScan = scanAndRedactSecrets(normalizedRequest);
       await trace.write({
         type: "secret_scan_completed",
         traceId,
@@ -556,7 +565,7 @@ export async function runReview(
 
       const allowSecretOverride =
         loaded.config.secrets.allowOverride &&
-        request.options?.allowSecretRedaction === true;
+        normalizedRequest.options?.allowSecretRedaction === true;
       if (
         secretScan.detected &&
         loaded.config.secrets.blockOnDetectedSecret &&
@@ -658,7 +667,7 @@ export async function runReview(
         budgetTracker,
         progressDispatcher: dispatcher,
         signal: options.signal,
-        progressHeartbeatMs: options.progressHeartbeatMs,
+        progressHeartbeatMs,
       });
       completePhase("primary");
 

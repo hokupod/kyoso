@@ -965,6 +965,8 @@ timeoutMs = 5000
         "--ignore-config",
         "--set",
         "agents.codex.enabled=false",
+        "--set",
+        "agents.claude.timeoutS=5",
         "--json",
       ],
       {
@@ -1046,6 +1048,14 @@ timeoutMs = 5000
       {
         args: ["--set", "agents.claude.timeoutMs=-1"],
         message: 'Invalid --set value "agents.claude.timeoutMs=-1"',
+      },
+      {
+        args: ["--set", "agents.claude.timeoutS=0.0001"],
+        message: 'Invalid --set value "agents.claude.timeoutS=0.0001"',
+      },
+      {
+        args: ["--set", "reviewBudget.maxTotalWallTimeS=10"],
+        message: 'Unknown --set key "reviewBudget.maxTotalWallTimeS"',
       },
       {
         args: ["--set"],

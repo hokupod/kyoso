@@ -65,7 +65,10 @@ describe("MCP stdio integration", () => {
           name: "plan_review",
           arguments: {
             goal: "review plan",
-            options: { maxAgentTimeoutMs: 2_000 },
+            options: {
+              maxAgentTimeoutS: 2,
+              reviewBudget: { maxTotalWallTimeS: 5 },
+            },
           },
         },
       });
@@ -78,6 +81,7 @@ describe("MCP stdio integration", () => {
         decision?: string;
         degraded?: boolean;
         agentOpinions?: Array<{ status?: string }>;
+        executionBudget?: { wallTime?: { limitMs?: number } };
       };
 
       expect(texts[0]).toContain("**Decision:**");
@@ -86,6 +90,7 @@ describe("MCP stdio integration", () => {
       expect(
         jsonResult.agentOpinions?.map((opinion) => opinion.status),
       ).toEqual(["completed", "completed"]);
+      expect(jsonResult.executionBudget?.wallTime?.limitMs).toBe(5_000);
       expect(client.progressNotifications).toEqual([]);
       expectJsonRpcStdout(client);
       expect(client.stderr).toBe("");

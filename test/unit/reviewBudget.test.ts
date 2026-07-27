@@ -14,6 +14,7 @@ import {
 import { kyosoReviewRequestSchema } from "../../src/mcp/schemas.js";
 import { normalizeModelTokenUsage } from "../../src/core/tokenUsage.js";
 import { scanAndRedactSecrets } from "../../src/security/secretScan.js";
+import { normalizeRequestTimeUnits } from "../../src/core/requestTimeUnits.js";
 
 const budget = {
   maxModelCalls: 4,
@@ -55,6 +56,40 @@ describe("review budget", () => {
     ).toThrow("is not supported");
   });
 
+  test("accepts wall-time seconds without relaxing the ceiling", () => {
+    expect(
+      resolveReviewBudget(budget, {
+        maxTotalWallTimeMs: 1_000,
+        maxTotalWallTimeS: 120,
+      }).maxTotalWallTimeMs,
+    ).toBe(120_000);
+    expect(() =>
+      resolveReviewBudget(budget, {
+        maxTotalWallTimeMs: -1,
+        maxTotalWallTimeS: 120,
+      }),
+    ).toThrow("options.reviewBudget.maxTotalWallTimeMs");
+    expect(() =>
+      resolveReviewBudget(budget, {
+        maxTotalWallTimeMs: 481_000,
+        maxTotalWallTimeS: 120,
+      }),
+    ).toThrow(
+      "options.reviewBudget.maxTotalWallTimeMs cannot exceed the user-global ceiling",
+    );
+    expect(() =>
+      resolveReviewBudget(budget, { maxTotalWallTimeS: 481 }),
+    ).toThrow(
+      "options.reviewBudget.maxTotalWallTimeS cannot exceed the user-global ceiling",
+    );
+    expect(() =>
+      resolveReviewBudget(budget, { maxTotalWallTimeS: 0.0001 }),
+    ).toThrow("options.reviewBudget.maxTotalWallTimeS");
+    expect(() =>
+      resolveReviewBudget(budget, { maxTotalWallTimeMs: 0.5 }),
+    ).toThrow("must be a positive integer");
+  });
+
   test("resolves the soft warning only when it is below the effective hard limit", () => {
     expect(resolveReviewBudget(budget, undefined)).toEqual({
       ...budget,
@@ -76,6 +111,33 @@ describe("review budget", () => {
       kyosoReviewRequestSchema.safeParse({
         goal: "review",
         options: { reviewBudget: { warnAgentOutputBytes: 1 } },
+      }).success,
+    ).toBe(false);
+  });
+
+  test("validates seconds fields in the MCP request contract", () => {
+    expect(
+      kyosoReviewRequestSchema.safeParse({
+        goal: "review",
+        options: {
+          maxAgentTimeoutS: 1.5,
+          reviewBudget: { maxTotalWallTimeS: 2 },
+        },
+      }).success,
+    ).toBe(true);
+    for (const options of [
+      { maxAgentTimeoutS: 0 },
+      { maxAgentTimeoutS: 0.0001 },
+      { reviewBudget: { maxTotalWallTimeS: Number.POSITIVE_INFINITY } },
+    ]) {
+      expect(
+        kyosoReviewRequestSchema.safeParse({ goal: "review", options }).success,
+      ).toBe(false);
+    }
+    expect(
+      kyosoReviewRequestSchema.safeParse({
+        goal: "review",
+        options: { maxAgentTimeoutMs: -1, maxAgentTimeoutS: 2 },
       }).success,
     ).toBe(false);
   });
@@ -252,6 +314,52 @@ describe("review budget", () => {
       }),
     );
     expect(REVIEW_CONTRACT_VERSION).toBe("2026-07-16-v3");
+  });
+
+  test("uses one fingerprint for equivalent seconds and milliseconds", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const secondsRequest = {
+      goal: "review",
+      options: {
+        maxAgentTimeoutS: 2,
+        reviewBudget: { maxTotalWallTimeS: 120 },
+      },
+    };
+    const millisecondsRequest = {
+      goal: "review",
+      options: {
+        maxAgentTimeoutMs: 2_000,
+        reviewBudget: { maxTotalWallTimeMs: 120_000 },
+      },
+    };
+    const input = {
+      tool: "plan_review" as const,
+      config,
+      roles: {
+        codex: "implementation_reviewer" as const,
+        claude: "architecture_security_reviewer" as const,
+      },
+    };
+
+    expect(
+      createRequestFingerprint({
+        ...input,
+        request: normalizeRequestTimeUnits(secondsRequest),
+        budget: resolveReviewBudget(
+          config.reviewBudget,
+          secondsRequest.options.reviewBudget,
+        ),
+      }),
+    ).toBe(
+      createRequestFingerprint({
+        ...input,
+        request: normalizeRequestTimeUnits(millisecondsRequest),
+        budget: resolveReviewBudget(
+          config.reviewBudget,
+          millisecondsRequest.options.reviewBudget,
+        ),
+      }),
+    );
   });
 
   test("canonicalizes object keys with locale-independent ordering", () => {

@@ -32,6 +32,88 @@ describe("config overrides", () => {
     expect(config.agents.claude.effort).toBeUndefined();
   });
 
+  test("parses every seconds override as a number", () => {
+    const overridden = applyConfigOverrides(
+      kyosoConfigSchema.parse(defaultConfig),
+      [
+        "agents.codex.provider=openrouter",
+        "agents.codex.model=openai/o4-mini",
+        "agents.codex.timeoutS=1.5",
+        "agents.claude.timeoutS=2",
+        "agents.codex.openRouter.streamIdleTimeoutS=3",
+        "verification.timeoutS=4",
+        "judge.timeoutS=5",
+      ],
+    );
+
+    expect(overridden.agents.codex.timeoutMs).toBe(1_500);
+    expect(overridden.agents.claude.timeoutMs).toBe(2_000);
+    expect(overridden.agents.codex.openRouter.streamIdleTimeoutMs).toBe(3_000);
+    expect(overridden.verification.timeoutMs).toBe(4_000);
+    expect(overridden.judge.timeoutMs).toBe(5_000);
+  });
+
+  test("prefers seconds regardless of assignment order", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    for (const assignments of [
+      ["agents.claude.timeoutMs=1000", "agents.claude.timeoutS=2"],
+      ["agents.claude.timeoutS=2", "agents.claude.timeoutMs=1000"],
+    ]) {
+      expect(
+        applyConfigOverrides(config, assignments).agents.claude.timeoutMs,
+      ).toBe(2_000);
+    }
+  });
+
+  test("keeps last-write-wins for repeated seconds assignments", () => {
+    const overridden = applyConfigOverrides(
+      kyosoConfigSchema.parse(defaultConfig),
+      ["agents.claude.timeoutS=1", "agents.claude.timeoutS=2"],
+    );
+
+    expect(overridden.agents.claude.timeoutMs).toBe(2_000);
+  });
+
+  test("attributes invalid seconds to the original assignment", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+
+    expect(() =>
+      applyConfigOverrides(config, [
+        "agents.claude.timeoutS=0.0001",
+        "agents.codex.enabled=false",
+      ]),
+    ).toThrow(
+      'Invalid --set value "agents.claude.timeoutS=0.0001": agents.claude.timeoutS',
+    );
+    expect(() =>
+      applyConfigOverrides(config, [
+        "agents.claude.timeoutMs=-1",
+        "agents.claude.timeoutS=2",
+      ]),
+    ).toThrow('Invalid --set value "agents.claude.timeoutMs=-1"');
+  });
+
+  test("does not attribute inherited conversion errors to unrelated assignments", () => {
+    const config = kyosoConfigSchema.parse(defaultConfig);
+    const invalidConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        claude: {
+          ...config.agents.claude,
+          timeoutMs: -1,
+        },
+      },
+    };
+
+    expect(() =>
+      applyConfigOverrides(invalidConfig, [
+        "agents.claude.timeoutS=2",
+        "agents.codex.enabled=false",
+      ]),
+    ).toThrow("Invalid config time value: agents.claude.timeoutMs");
+  });
+
   test("rejects assignments without key=value", () => {
     const config = kyosoConfigSchema.parse(defaultConfig);
 
@@ -51,6 +133,9 @@ describe("config overrides", () => {
     expect(() =>
       applyConfigOverrides(config, ["agents.codex.allowProjectProvider=true"]),
     ).toThrow('Unknown --set key "agents.codex.allowProjectProvider".');
+    expect(() =>
+      applyConfigOverrides(config, ["reviewBudget.maxTotalWallTimeS=10"]),
+    ).toThrow('Unknown --set key "reviewBudget.maxTotalWallTimeS".');
     expect(isAllowedConfigOverridePath(["workspace", "root"])).toBe(false);
   });
 

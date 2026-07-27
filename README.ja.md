@@ -310,7 +310,7 @@ Kyoso は次の順に config を load します。
 
 未知の key は拒否されます。boolean / numeric config keys は schema の型へ変換し、string keys は文字列のまま保持した後、config 全体を再検証します。
 
-Project `kyoso.toml` は declarative で、trust approval は不要です。agent `enabled` / `model` / `effort` / `role` / `timeoutMs`、user global authorization後のCodex専用`provider`、継承したOpenRouterのmodel上書きまたはretry-policy上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network/CISA settings を設定できます。
+Project `kyoso.toml` は declarative で、trust approval は不要です。agent `enabled` / `model` / `effort` / `role` / `timeoutS`、user global authorization後のCodex専用`provider`、継承したOpenRouterのmodel上書きまたはretry-policy上書き、workspace byte limits と additive `workspace.deny`、verification settings、advisory judge settings、tightening-only security/network/CISA settings を設定できます。
 
 `entrypoints.*`、`tools.*`、`reviewPolicy.*` は user-global policy です。entrypoint または tool が disabled の場合、agents の起動前に structured policy block を返します。`firstClassClient = "codex"`、`workspace.readOnly = true`、`network.mediatedWeb.enabled = false`、`audit.includeFileContents = false` は fixed / reserved value であり、未対応値は no-op にせず拒否します。
 
@@ -329,7 +329,7 @@ CODEX_CONFIG = '{"model":"gpt-5.5"}'
 
 ### Agents
 
-Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutMs>`。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。`agents.codex.openRouter.streamIdleTimeoutMs`、`streamMaxRetries`、`requestMaxRetries`は、選択したOpenRouter transportだけを設定します。projectから`provider`を選択、またはそのretry policyを変更するには、global config専用の`agents.codex.allowProjectProvider` allowlistが必要です。詳細な規則は [Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
+Agent keys: `agents.<codex|claude>.<enabled|model|effort|role|timeoutS>`。legacy-compatibleな`timeoutMs` inputも引き続き受理します。Codexには`agents.codex.provider`もあり、`"openrouter"`はexternal providerを選択し、`"default"`は継承したOpenRouter選択を通常のCodex behaviorへ戻します。Claudeにprovider設定はありません。`agents.codex.openRouter.streamIdleTimeoutS`、`streamMaxRetries`、`requestMaxRetries`は、選択したOpenRouter transportだけを設定し、`streamIdleTimeoutMs`も引き続き受理します。projectから`provider`を選択、またはそのretry policyを変更するには、global config専用の`agents.codex.allowProjectProvider` allowlistが必要です。詳細な規則は [Codex の OpenRouter project opt-in](#codex-の-openrouter-project-opt-in) を参照してください。`command` / `args` / `env`もglobal config専用です([Files and precedence](#files-and-precedence) を参照)。
 
 `agents.<name>.model` または `agents.<name>.effort` を省略すると、各 agent 独自の default を使用します。Codex は `~/.codex/config.toml`（`CODEX_HOME`を設定している場合は`$CODEX_HOME/config.toml`）などの local Codex config を使用し、Claude は adapter default を使用します。
 
@@ -371,14 +371,14 @@ provider = "openrouter"
 model = "openai/o4-mini"
 
 [agents.codex.openRouter]
-streamIdleTimeoutMs = 90000
+streamIdleTimeoutS = 90
 streamMaxRetries = 3
 requestMaxRetries = 2
 ```
 
 `provider = "openrouter"` の場合、`model`は空白でない値が必須です。これはOpenRouterのmodel IDです。Kyosoはcatalogやtool calling対応を検証しないため、利用するmodelのtool supportはproviderで確認してください。
 
-`agents.codex.openRouter` は experimental です。`streamIdleTimeoutMs` は `1000` 以上の整数、`streamMaxRetries` と `requestMaxRetries` は `0` から `100` の整数で、`0` はそのretry classを無効化します。これらのfieldには `provider = "openrouter"` が必須で、省略したfieldは対応するCodex runtime defaultsを変更しません。retryはCodex turnのbyte単位のresumeではなく未完了turnの再生成であり、retry前のpartial outputは破棄され最終結果には決して含まれません。
+`agents.codex.openRouter` は experimental です。`streamIdleTimeoutS` は1秒以上で、整数millisecondへ正確に変換できるnumberです。`streamMaxRetries` と `requestMaxRetries` は `0` から `100` の整数で、`0` はそのretry classを無効化します。これらのfieldには `provider = "openrouter"` が必須で、省略したfieldは対応するCodex runtime defaultsを変更しません。retryはCodex turnのbyte単位のresumeではなく未完了turnの再生成であり、retry前のpartial outputは破棄され最終結果には決して含まれません。
 
 `allowProjectProvider`はprojectの`provider`、OpenRouterを継承中のproject `model`上書き、OpenRouterを継承中のproject `agents.codex.openRouter.*`上書きに必要で、listには解決後のproject config fileを含むcanonical directoryのabsolute pathを完全一致で指定します。invocationのcwdやlexical pathではありません。descendantやglobには一致しません。trusted `kyoso.config.ts`を含むproject config fileとallowlist entryの両方をsymlink経由も含めて同じdirectoryのreal pathへ解決して比較するため、そのdirectoryへ解決されるentryは一致し、別の場所へ解決されるentryまたは解決できないpathはfail closedです。user globalの`provider = "openrouter"`にはallowlist entryは不要です。CLIで選択する場合は、同一 invocation に`--set agents.codex.provider=openrouter`と`--set agents.codex.model=<model>`の両方が必要であり、project modelで前者を補完することはできません。`allowProjectProvider`は`--set` pathではなく、legacy boolean値は拒否されます。
 
@@ -396,7 +396,7 @@ Marketplace PluginはMCP processへ`OPENROUTER_API_KEY`の変数名を公開し�
 
 新規manual MCP registrationは既定で`OPENROUTER_API_KEY`を含めません。providerを意図して選択した後だけ`--with-openrouter`で追加し、既存registrationは書換えません。`kyoso setup ... --with-openrouter` の出力と手動セットアップ例は、引き続き利用者が管理するクライアント登録テンプレートです。Claude Code registrationの`${OPENROUTER_API_KEY}`はclientが展開する必要があり、Kyosoは`${NAME}`、`$NAME`、`%NAME%`（前後の空白は許容）だけから成る未展開credential placeholderだけを無視し、変数名だけを含むsanitized warningを出します。ほかの文字列を含む値は維持します。custom credential-like nameの末尾が`_KEY`、`_TOKEN`、`_SECRET`、`_PASSWORD`である場合にも同じ規則を適用し、credentialではないtemplateは維持されます。
 
-このuser-authorized project-scoped opt-inを推奨します。global `provider = "openrouter"`は、projectが`provider = "default"`を設定するまで継承されます。`provider`の省略だけでは解除されません。固定のOpenRouter Responses API presetはbetaです。custom endpoint、provider routing、fallback、judge integrationは公開しません。設定した場合、`streamIdleTimeoutMs`、`streamMaxRetries`、`requestMaxRetries`は`stream_idle_timeout_ms`、`stream_max_retries`、`request_max_retries`だけへmappingされ、省略したfieldは`CODEX_CONFIG`に現れません。keyをこのpresetに束縛するため、OpenRouter modeではtop-levelの`profile`または`profiles`を含む`CODEX_CONFIG`と、objectではない`model_providers` valueをchild起動前に拒否します。objectの場合は`model_providers`を固定の`kyoso-openrouter` entryだけに置換し、破棄したentry数だけを含むsanitized warningを出します。provider IDやconfig valueは出力しません。拒否するfield以外では、`model`、`model_provider`、`model_providers`以外のunrelatedな`CODEX_CONFIG` fieldを維持するため、foreign provider configurationがkey付きのendpointを選択することはできません。Claudeは設定済みproviderのままで、judgeは`OPENROUTER_API_KEY`を使用しません。
+このuser-authorized project-scoped opt-inを推奨します。global `provider = "openrouter"`は、projectが`provider = "default"`を設定するまで継承されます。`provider`の省略だけでは解除されません。固定のOpenRouter Responses API presetはbetaです。custom endpoint、provider routing、fallback、judge integrationは公開しません。設定した`streamIdleTimeoutS`は内部の`streamIdleTimeoutMs`へ正規化され、その値と`streamMaxRetries`、`requestMaxRetries`は`stream_idle_timeout_ms`、`stream_max_retries`、`request_max_retries`だけへmappingされます。省略したfieldは`CODEX_CONFIG`に現れません。keyをこのpresetに束縛するため、OpenRouter modeではtop-levelの`profile`または`profiles`を含む`CODEX_CONFIG`と、objectではない`model_providers` valueをchild起動前に拒否します。objectの場合は`model_providers`を固定の`kyoso-openrouter` entryだけに置換し、破棄したentry数だけを含むsanitized warningを出します。provider IDやconfig valueは出力しません。拒否するfield以外では、`model`、`model_provider`、`model_providers`以外のunrelatedな`CODEX_CONFIG` fieldを維持するため、foreign provider configurationがkey付きのendpointを選択することはできません。Claudeは設定済みproviderのままで、judgeは`OPENROUTER_API_KEY`を使用しません。
 
 user global authorization後、projectの`kyoso.toml`はexternal providerを選択、または継承したOpenRouter modelを上書きし、review contextをそこへ送ることがあります。untrusted repositoryでは`--ignore-config`を使用し、必要なCLI optionsだけを明示してください。
 
@@ -456,7 +456,7 @@ single-agent mode では、残った backend が `combined_reviewer` として1�
 ```toml
 [reviewBudget]
 maxModelCalls = 4
-maxTotalWallTimeMs = 660000
+maxTotalWallTimeS = 660
 warnAgentOutputBytes = 524288
 maxAgentOutputBytes = 1048576
 maxFindingsPerAgent = 10
@@ -469,13 +469,17 @@ skipOptionalPhasesWhenTokenUsageUnknown = false
 
 ### Timeouts
 
-Default agent timeout は Codex / Claude ともに600秒です。verification round の default は 90 秒です。review全体のdeadlineは既定660秒(`reviewBudget.maxTotalWallTimeMs`)で、defaultの並列primary phase後に標準の60秒のfinalization余裕を確保します。各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許し、direct provider credentialが利用できる場合だけ加算します。
+人が指定する時間値にはnumeric seconds inputを推奨します。agent `timeoutS`、OpenRouter `streamIdleTimeoutS`、`verification.timeoutS`、`judge.timeoutS`、user-global `reviewBudget.maxTotalWallTimeS`、request `options.maxAgentTimeoutS`、request `options.reviewBudget.maxTotalWallTimeS`、library option `progressHeartbeatS`を使用できます。既存の`*Ms` inputもruntime warningなしで受理し、resolved config、execution、result、Auditはmillisecondのままです。
+
+secondsの小数は、1,000倍した値がsafe integer millisecondになる場合だけ受理します。`1.5`と`0.001`は有効ですが、`0.0001`は無効です。timeoutは正数で、`progressHeartbeatS = 0`だけがheartbeat無効化を表します。同じlayerまたはrequest objectに両unitがある場合は両方をvalidationして`S`を優先します。config layer precedenceを先に適用するため、後段のprojectまたはCLIの`Ms`は、前段globalの`S`より優先されます。
+
+Default agent timeout は Codex / Claude ともに600秒です。verification round の default は 90 秒です。review全体のdeadlineは既定660秒(`reviewBudget.maxTotalWallTimeS`)で、defaultの並列primary phase後に標準の60秒のfinalization余裕を確保します。各phaseはdeadlineを延長せず残り時間を使います。`kyoso doctor` は設定済みの直列phase時間と、10%または60秒の大きい方を余裕として加えたreview-wide推奨値を表示します。LLM judge timeoutは、judge modeが許し、direct provider credentialが利用できる場合だけ加算します。
 
 このrepositoryのprimary 15分＋verification 15分のdogfooding presetでは、次のuser-global overrideを使います。
 
 ```toml
 [reviewBudget]
-maxTotalWallTimeMs = 2100000
+maxTotalWallTimeS = 2100
 ```
 
 Codex Pluginと新規生成するmanual Codex registrationは`tool_timeout_sec = 2160`を使い、Kyosoの35分deadlineより60秒長く待機します。既存manual registrationは`kyoso setup`が保持するため、手動更新が必要です。Claude Code Plugin manifestはclient tool timeoutを設定しないため、同値をミリ秒で指定してClaude Codeを起動し、clientを再起動してください。
@@ -484,17 +488,17 @@ Codex Pluginと新規生成するmanual Codex registrationは`tool_timeout_sec =
 MCP_TOOL_TIMEOUT=2160000 claude
 ```
 
-client timeoutを延ばしてもKyoso内部のreview-wide deadlineは延長されません。ほかのpresetでは、client timeoutを`reviewBudget.maxTotalWallTimeMs`より長くしてください。
+client timeoutを延ばしてもKyoso内部のreview-wide deadlineは延長されません。ほかのpresetでは、client timeoutを`reviewBudget.maxTotalWallTimeS`より長くしてください。
 
 ### Verification
 
-Verification keys: `verification.<enabled|maxFindings|timeoutMs>`。Optional finding verification は default で disabled です:
+Verification keys: `verification.<enabled|maxFindings|timeoutS>`。legacy-compatibleな`timeoutMs` inputも引き続き受理します。Optional finding verification は default で disabled です:
 
 ```toml
 [verification]
 enabled = false
 maxFindings = 5
-timeoutMs = 90000
+timeoutS = 90
 # global config only; project kyoso.toml cannot set this
 allowDemotion = false
 ```
@@ -503,7 +507,7 @@ Enabled の場合、Kyoso は high/critical かつ single-source の各 finding 
 
 ### Judge
 
-Judge keys: `judge.<mode|provider|timeoutMs>`。Judge LLMs は optional で、default は `mode = "deterministic_only"` です。credential だけでは judge call を開始しません。OpenAI judge は `mode = "deterministic_plus_llm"` と `OPENAI_API_KEY` または `CODEX_API_KEY`、Anthropic judge は同modeと `ANTHROPIC_API_KEY` を設定します。Optional overrides:
+Judge keys: `judge.<mode|provider|timeoutS>`。legacy-compatibleな`timeoutMs` inputも引き続き受理します。Judge LLMs は optional で、default は `mode = "deterministic_only"` です。credential だけでは judge call を開始しません。OpenAI judge は `mode = "deterministic_plus_llm"` と `OPENAI_API_KEY` または `CODEX_API_KEY`、Anthropic judge は同modeと `ANTHROPIC_API_KEY` を設定します。Optional overrides:
 
 - `OPENAI_BASE_URL`: OpenAI-compatible API base URL
 - `KYOSO_OPENAI_JUDGE_MODEL`: OpenAI judge model, default `gpt-5.4-mini`

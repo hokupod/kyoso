@@ -25,6 +25,7 @@ import {
   trustConfig,
   type ConfigTrustStatus,
 } from "./trustedConfig.js";
+import { normalizeConfigTimeUnits } from "./timeUnits.js";
 
 export type LoadConfigOptions = {
   cwd?: string;
@@ -130,7 +131,9 @@ export async function loadConfig(
 
   if (!options.ignoreConfig) {
     if (await exists(globalConfigPath)) {
-      const globalConfig = await loadTomlConfigFile(globalConfigPath);
+      const globalConfig = normalizeConfigTimeUnits(
+        await loadTomlConfigFile(globalConfigPath),
+      );
       validateExplicitReviewBudgetThresholds(globalConfig, defaultConfig);
       const globalConfigWarnings = collectGlobalConfigWarnings(
         globalConfigPath,
@@ -324,7 +327,9 @@ async function loadProjectConfig(input: {
     input.projectConfig;
   const extension = extname(requestedPath);
   if (extension === ".toml") {
-    const projectTomlConfig = await loadTomlConfigFile(canonicalPath);
+    const projectTomlConfig = normalizeConfigTimeUnits(
+      await loadTomlConfigFile(canonicalPath),
+    );
     const projectChangesOpenRouterPolicy = projectConfigChangesOpenRouterPolicy(
       projectTomlConfig,
       input.baseConfig,
@@ -560,7 +565,9 @@ async function loadProjectTsConfig(input: {
   });
 
   if (trustDecision.execute) {
-    const userConfig = await loadUserConfig(canonicalPath, source);
+    const userConfig = normalizeConfigTimeUnits(
+      await loadUserConfig(canonicalPath, source),
+    );
     validateExplicitReviewBudgetThresholds(userConfig, input.baseConfig);
     const projectChangesOpenRouterPolicy = projectConfigChangesOpenRouterPolicy(
       userConfig,

@@ -1,9 +1,16 @@
 import { KYOSO_VERSION } from "../core/constants.js";
 
 export const CURRENT_SKILL_DIGEST =
-  "sha256:d28acaadf490df9e58e12f195804f181a683d0d33344275d7989efbee26a4504";
+  "sha256:1ea8914f4657741fcd544822326f80e82033078f8e2b11b1f5aad420072dcb39";
 
 export const KNOWN_SKILL_DIGESTS_BY_VERSION = {
+  "0.15.2": [
+    {
+      digest:
+        "sha256:d28acaadf490df9e58e12f195804f181a683d0d33344275d7989efbee26a4504",
+      kind: "historical",
+    },
+  ],
   "0.13.1": [
     {
       digest:

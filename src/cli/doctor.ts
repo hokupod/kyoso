@@ -301,6 +301,9 @@ export async function runDoctor(options: {
     loaded.config,
     judgeRoute.llmAvailable,
   );
+  const recommendedReviewWallTimeS = Math.ceil(
+    reviewTiming.recommendedReviewWallTimeMs / 1_000,
+  );
   lines.push("", "Review timing");
   lines.push(
     `  review-wide deadline: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms`,
@@ -313,7 +316,7 @@ export async function runDoctor(options: {
   ) {
     lines.push(
       `  warning: review-wide deadline is insufficient: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms is below the configured sequential phase time of ${reviewTiming.sequentialPhaseMs} ms; later phases cannot receive their configured timeout.`,
-      `  hint: set user-global reviewBudget.maxTotalWallTimeMs to at least ${reviewTiming.recommendedReviewWallTimeMs}.`,
+      `  hint: set user-global reviewBudget.maxTotalWallTimeS to at least ${recommendedReviewWallTimeS}.`,
     );
   } else if (
     loaded.config.reviewBudget.maxTotalWallTimeMs <
@@ -321,7 +324,7 @@ export async function runDoctor(options: {
   ) {
     lines.push(
       `  warning: review-wide deadline has low margin: ${loaded.config.reviewBudget.maxTotalWallTimeMs} ms is below the recommended ${reviewTiming.recommendedReviewWallTimeMs} ms; scheduling and finalization margin is reduced.`,
-      `  hint: set user-global reviewBudget.maxTotalWallTimeMs to at least ${reviewTiming.recommendedReviewWallTimeMs}.`,
+      `  hint: set user-global reviewBudget.maxTotalWallTimeS to at least ${recommendedReviewWallTimeS}.`,
     );
   }
 

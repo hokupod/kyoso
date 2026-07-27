@@ -588,9 +588,11 @@ export type KyosoReviewRequest = {
   options?: {
     network?: "model_only" | "unrestricted";
     maxAgentTimeoutMs?: number;
+    maxAgentTimeoutS?: number;
     reviewBudget?: Partial<{
       maxModelCalls: number;
       maxTotalWallTimeMs: number;
+      maxTotalWallTimeS: number;
       maxAgentOutputBytes: number;
       maxFindingsPerAgent: number;
       skipOptionalPhasesWhenTokenUsageUnknown: boolean;
@@ -603,6 +605,8 @@ export type KyosoReviewRequest = {
 ```
 
 `includeAgentRawOutputs` only affects `KyosoResult.agentOpinions[*].rawText`, and the value is sanitized and truncated to 16,384 characters with an explicit truncation marker, preserving whitespace. It never returns pre-redaction secrets.
+
+`RunReviewOptions` also accepts `progressHeartbeatS?: number` alongside the legacy-compatible `progressHeartbeatMs?: number`.
 
 ### 8.1 Validation rules
 
@@ -617,6 +621,7 @@ export type KyosoReviewRequest = {
 - `diff.unifiedDiff` has a separate default budget of 300 KB.
 - `workspace.root`, if provided, must be explicitly trusted by config or CLI invocation.
 - Never follow symlinks that point outside the allowed root.
+- Public numeric seconds fields must convert to a safe integer number of milliseconds. Normal timeouts are positive; `progressHeartbeatS` alone permits `0` to disable heartbeat. When both units are present in one request object, both are validated and `S` wins.
 
 ### 8.2 Tool-specific fields
 
@@ -854,16 +859,16 @@ export type KyosoResult = {
 
 TOML config is declarative and does not require trust approval. The user global TOML layer may set all schema keys. Project TOML is restricted to project-scoped keys:
 
-- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
+- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutS` (`timeoutMs` remains legacy-compatible)
 - `agents.codex.provider`: `"openrouter"` selects the external provider and requires a non-empty Codex `model` plus user-global authorization when set by project TOML; a project `model` override also requires that authorization while OpenRouter is inherited; `"default"` is a project-safe reset for an inherited OpenRouter selection
-- `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, `requestMaxRetries`: OpenRouter-only retry policy; each requires the selected provider and the same project authorization
+- `agents.codex.openRouter.streamIdleTimeoutS`, `streamMaxRetries`, `requestMaxRetries`: OpenRouter-only retry policy; `streamIdleTimeoutMs` remains legacy-compatible, and each field requires the selected provider and the same project authorization
 - `workspace.maxContextBytes`, `workspace.maxDiffBytes`, additive `workspace.deny`
-- `verification.enabled`, `maxFindings`, `timeoutMs`
-- `judge.mode`, `judge.provider`, `judge.timeoutMs`
+- `verification.enabled`, `maxFindings`, `timeoutS` (`timeoutMs` remains legacy-compatible)
+- `judge.mode`, `judge.provider`, `judge.timeoutS` (`timeoutMs` remains legacy-compatible)
 - tightening-only `network.defaultMode = "model_only"`, `secrets.blockOnDetectedSecret = true`, `secrets.allowOverride = false`
 - `securityReview.cisaSecureByDesign.* = true`
 
-Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 660-second absolute deadline, a non-blocking warning at 524,288 UTF-8 bytes per agent, and a hard breaker at 1,048,576 bytes across streamed message and thought text chunks. Ten findings per agent is a prompt target rather than a truncation limit, and unknown token usage warns while optional phases continue by default. A request may lower the hard ceilings and soft targets through `options.reviewBudget`, but project TOML and `--set` never change them.
+Global-only keys include agent `command`, `args`, `env`, `auth`, `agents.codex.allowProjectProvider`, workspace root/mode/readOnly, network unrestricted policy, audit settings, entrypoints, `tools.*`, `reviewPolicy.*`, `verification.allowDemotion`, and all `reviewBudget.*` values, including `maxTotalWallTimeS` and legacy-compatible `maxTotalWallTimeMs`. A disabled entrypoint or tool returns a structured policy block before agents start. The global default budget is four model calls, a 660-second absolute deadline, a non-blocking warning at 524,288 UTF-8 bytes per agent, and a hard breaker at 1,048,576 bytes across streamed message and thought text chunks. Ten findings per agent is a prompt target rather than a truncation limit, and unknown token usage warns while optional phases continue by default. A request may lower the hard ceilings and soft targets through `options.reviewBudget`, but project TOML and `--set` never change them.
 
 Fixed or reserved schema values are explicit: `firstClassClient = "codex"` is metadata only, `workspace.readOnly = true` describes the enforced read-only review contract, `network.mediatedWeb.enabled = false` reserves the future mode, and `audit.includeFileContents = false` prevents file-content persistence through Audit config. `verification.allowDemotion` is accepted for compatibility but is annotate-only and has no runtime demotion effect.
 
@@ -873,13 +878,17 @@ Selecting `agents.codex.provider`, overriding an inherited OpenRouter model, or 
 
 Review CLI overrides use repeatable `--set <key>=<value>` arguments and are limited to:
 
-- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutMs`
+- `agents.codex|claude.enabled`, `model`, `effort`, `role`, `timeoutS` or legacy-compatible `timeoutMs`
 - `agents.codex.provider`
-- `agents.codex.openRouter.streamIdleTimeoutMs`, `streamMaxRetries`, `requestMaxRetries`
-- `verification.enabled`, `maxFindings`, `timeoutMs`
-- `judge.mode`, `provider`, `timeoutMs`
+- `agents.codex.openRouter.streamIdleTimeoutS` or legacy-compatible `streamIdleTimeoutMs`, plus `streamMaxRetries` and `requestMaxRetries`
+- `verification.enabled`, `maxFindings`, `timeoutS` or legacy-compatible `timeoutMs`
+- `judge.mode`, `provider`, `timeoutS` or legacy-compatible `timeoutMs`
 
 CLI overrides are applied after config files. They do not execute code or require config trust. Unknown keys are rejected, boolean and numeric keys are converted according to their existing config type, string keys stay strings, and the complete config is schema-validated after application.
+
+Time input aliases are normalized at input boundaries. Config pairs are `agents.codex.timeoutS`, `agents.claude.timeoutS`, `agents.codex.openRouter.streamIdleTimeoutS`, `judge.timeoutS`, `verification.timeoutS`, and user-global-only `reviewBudget.maxTotalWallTimeS`, each paired with its existing `*Ms` field. Every raw config layer is normalized separately before unknown-key checks, project-scope/OpenRouter authorization checks, and merge. This preserves layer precedence. Within one layer both units are validated and `S` wins, then the alias is removed so resolved `KyosoConfig` remains millisecond-only.
+
+MCP/library requests similarly normalize `options.maxAgentTimeoutS` and `options.reviewBudget.maxTotalWallTimeS` after raw validation and lower-only budget-ceiling validation, but before fingerprinting, secret scan, prompt construction, or agent launch. `progressHeartbeatS` is normalized with the same rule and alone permits zero. Seconds may be fractional only when multiplication by 1,000 produces a safe integer millisecond value. Runtime timers, `AgentRunInput`, results, progress events, and Audit remain canonical milliseconds.
 
 `reviewBudget.*` is intentionally absent from the CLI override list. It remains a user-global hard ceiling rather than a repository-owned or invocation-owned escalation path.
 
@@ -912,14 +921,14 @@ model = "openai/o4-mini"
 effort = "medium"
 
 [agents.codex.openRouter]
-streamIdleTimeoutMs = 90000
+streamIdleTimeoutS = 90
 streamMaxRetries = 3
 requestMaxRetries = 2
 
 [agents.claude]
 model = "claude-sonnet-5"
 effort = "high"
-timeoutMs = 300000
+timeoutS = 300
 ```
 
 User global `~/.config/kyoso/config.toml`:
@@ -1173,7 +1182,7 @@ The selected provider forces `MODEL_PROVIDER=kyoso-openrouter` and replaces `mod
 }
 ```
 
-When present, `streamIdleTimeoutMs`, `streamMaxRetries`, and `requestMaxRetries` are integers mapped to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries` in that preset. `streamIdleTimeoutMs` is at least `1000`; both retry counts are in `0..100`, and `0` remains explicit. Omitted values are absent from `CODEX_CONFIG`, so the installed Codex runtime controls its own defaults. A stream retry regenerates the unfinished response within the same Codex turn; it is not byte-offset resume.
+When present, input `streamIdleTimeoutS` is normalized to canonical `streamIdleTimeoutMs`; that integer and `streamMaxRetries` and `requestMaxRetries` are mapped to `stream_idle_timeout_ms`, `stream_max_retries`, and `request_max_retries` in that preset. Canonical `streamIdleTimeoutMs` is at least `1000`; both retry counts are in `0..100`, and `0` remains explicit. Omitted values are absent from `CODEX_CONFIG`, so the installed Codex runtime controls its own defaults. A stream retry regenerates the unfinished response within the same Codex turn; it is not byte-offset resume.
 
 #### Retry-aware output accumulation
 
@@ -2212,7 +2221,7 @@ Do not use this skill for every coding task. It is intended for deliberate revie
      - `plan_review` -> `plan --goal <text> [--plan <path-or-text>] [--file <path>] --json`
      - `security_review` -> `security --goal <text> [--diff <path>] [--file <path>] --json`
      - `diff_review` -> `diff --base <ref> --head <ref> --json`
-   - The CLI also accepts `--repo-summary`, repeatable `--focus`, `--constraint`, and `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutMs=<ms>`.
+   - The CLI also accepts `--repo-summary`, repeatable `--focus`, `--constraint`, and `--file` flags. For a large review, adjust an agent timeout with `--set agents.<agent>.timeoutS=<seconds>`.
    - Run the CLI without a config trust flag first. Inspect `audit.warnings` in the JSON result; if it contains `untrusted config was not executed`, or the command fails with an untrusted-config message, ask the user whether to rerun with `--trust-config` to use it or `--ignore-config` to skip it. Never add `--trust-config` without confirmation.
    - Keep `--json` enabled and interpret the returned `decision` exactly like the MCP result.
 5. Check `coverage` before acting. If required lenses or perspectives are missing, stop and present the incomplete review.

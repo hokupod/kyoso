@@ -19,6 +19,7 @@ const {
   buildMcpHandshakeInput,
   buildMcpSmokeEnvironment,
   createKyosoPathSentinel,
+  runMcpCommandSmoke,
   runMcpPackageRunnerSmoke,
 } = mcpSmoke;
 
@@ -296,11 +297,12 @@ describe("MCP smoke harness", () => {
     let terminationFinished = false;
 
     await expect(
-      runMcpPackageRunnerSmoke({
+      runMcpCommandSmoke({
         command: process.execPath,
         args: ["--eval", "setInterval(() => {}, 1000)"],
+        cwd: process.cwd(),
+        env: sourceEnv,
         expectedVersion: version,
-        sourceEnv,
         timeoutMs: 250,
         dependencies: {
           terminateProcessTree: (child: { kill: (signal: string) => void }) =>

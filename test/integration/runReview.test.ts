@@ -181,13 +181,7 @@ describe("runReview", () => {
       async runAgent(input: AgentRunInput): Promise<AgentRunResult> {
         started = true;
         await input.onStarted?.();
-        return new Promise<AgentRunResult>((_resolve, reject) => {
-          input.signal?.addEventListener(
-            "abort",
-            () => reject(new KyosoCancellationError("cancel during primary")),
-            { once: true },
-          );
-        });
+        return rejectOnAbort(input.signal, "cancel during primary");
       },
       async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
         return Promise.all(inputs.map((input) => manager.runAgent(input)));
@@ -229,14 +223,7 @@ describe("runReview", () => {
         }
         verifierStarted = true;
         await input.onStarted?.();
-        return new Promise<AgentRunResult>((_resolve, reject) => {
-          input.signal?.addEventListener(
-            "abort",
-            () =>
-              reject(new KyosoCancellationError("cancel during verification")),
-            { once: true },
-          );
-        });
+        return rejectOnAbort(input.signal, "cancel during verification");
       },
       async runAll(inputs: AgentRunInput[]): Promise<AgentRunResult[]> {
         return Promise.all(inputs.map((input) => manager.runAgent(input)));
@@ -3835,4 +3822,20 @@ async function waitFor(condition: () => boolean): Promise<void> {
     await Bun.sleep(10);
   }
   throw new Error("Timed out waiting for condition");
+}
+
+function rejectOnAbort(
+  signal: AbortSignal | undefined,
+  message: string,
+): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const rejectCancellation = () => {
+      reject(new KyosoCancellationError(message));
+    };
+    if (signal?.aborted) {
+      rejectCancellation();
+      return;
+    }
+    signal?.addEventListener("abort", rejectCancellation, { once: true });
+  });
 }

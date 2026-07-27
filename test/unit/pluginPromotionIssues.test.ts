@@ -368,6 +368,51 @@ describe("Plugin promotion reminder reconciliation", () => {
       }
     `);
   });
+
+  test("bounds gh output and reports buffer and signal failures precisely", () => {
+    runModuleTest(`
+      const calls = [];
+      const output = runGh(["api"], {
+        spawn(command, args, options) {
+          calls.push({ command, args, options });
+          return { status: 0, signal: null, stdout: "[]", stderr: "" };
+        },
+      });
+      assert.equal(output, "[]");
+      assert.equal(calls[0].command, "gh");
+      assert.equal(calls[0].options.maxBuffer, 64 * 1024 * 1024);
+
+      const bufferError = Object.assign(
+        new Error("stdout maxBuffer length exceeded"),
+        { code: "ENOBUFS" },
+      );
+      assert.throws(
+        () =>
+          runGh(["api"], {
+            spawn: () => ({
+              error: bufferError,
+              status: null,
+              signal: "SIGTERM",
+              stdout: "",
+              stderr: "",
+            }),
+          }),
+        /gh api output exceeded 64 MiB buffer/,
+      );
+      assert.throws(
+        () =>
+          runGh(["issue"], {
+            spawn: () => ({
+              status: null,
+              signal: "SIGTERM",
+              stdout: "",
+              stderr: "stopped",
+            }),
+          }),
+        /gh issue failed with signal SIGTERM: stopped/,
+      );
+    `);
+  });
 });
 
 function runModuleTest(source: string): void {
@@ -378,6 +423,7 @@ function runModuleTest(source: string): void {
     'import { join } from "node:path";',
     "import {",
     "  parsePromotionReminderIssue,",
+    "  runGh,",
     "  runPluginPromotionIssueReconciliation,",
     "  selectClosablePromotionReminderIssues,",
     '} from "./scripts/plugin-promotion-issues.mjs";',

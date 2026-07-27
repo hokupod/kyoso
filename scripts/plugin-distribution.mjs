@@ -56,6 +56,10 @@ const promotionWorkflowPushPaths = [
 const promotionCloseJobCondition =
   ">- ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}";
 const skillFallbackRunners = ["npx", "bunx"];
+const secondsAliasMinimumCliVersion = [0, 16, 0];
+const canonicalAgentTimeoutGuidance =
+  "`--set agents.<agent>.timeoutS=<seconds>`";
+const legacyAgentTimeoutGuidance = "`--set agents.<agent>.timeoutMs=<ms>`";
 const promotionJobExecutionModifierKeys = ["if", "continue-on-error"];
 const promotionStepExecutionModifierKeys = [
   ...promotionJobExecutionModifierKeys,
@@ -182,7 +186,8 @@ export function transformCanonicalToPlugin(
 ) {
   let transformed = content;
   if (relativePath === pluginSkillInstructionsRelativePath) {
-    if (!parsePackagePin(cliPackagePin)) {
+    const parsedPackagePin = parsePackagePin(cliPackagePin);
+    if (!parsedPackagePin) {
       throw new Error(
         "Plugin Skill transform requires an exact @kyo-so/cli SemVer pin",
       );
@@ -198,6 +203,19 @@ export function transformCanonicalToPlugin(
         );
       }
       instructions = instructions.replace(canonicalFallback, pinnedFallback);
+    }
+    if (!supportsSecondsAliases(parsedPackagePin.packageVersion)) {
+      const occurrences =
+        instructions.split(canonicalAgentTimeoutGuidance).length - 1;
+      if (occurrences !== 1) {
+        throw new Error(
+          `Canonical Skill ${relativePath} must contain exactly one ${canonicalAgentTimeoutGuidance} timeout example`,
+        );
+      }
+      instructions = instructions.replace(
+        canonicalAgentTimeoutGuidance,
+        legacyAgentTimeoutGuidance,
+      );
     }
     transformed = Buffer.from(instructions, "utf8");
   }
@@ -1114,7 +1132,7 @@ function hasExactWorkflowList(values, expectedValues) {
 
 function hasExactWorkflowEventKeys(eventLines, expectedKeys) {
   const keys = eventLines.flatMap((line) => {
-    const match = line.match(/^    ([A-Za-z0-9_-]+):\s*$/);
+    const match = line.match(/^    ([A-Za-z0-9_-]+)\s*:/);
     return match?.[1] ? [match[1]] : [];
   });
   return hasExactWorkflowList(keys, expectedKeys);
@@ -1843,6 +1861,21 @@ function parsePackagePin(value) {
     return undefined;
   }
   return { packageName, packageVersion };
+}
+
+function supportsSecondsAliases(packageVersion) {
+  const match = semverPattern.exec(packageVersion);
+  if (!match) return false;
+  const actual = match.slice(1, 4).map(Number);
+  for (
+    let index = 0;
+    index < secondsAliasMinimumCliVersion.length;
+    index += 1
+  ) {
+    if (actual[index] === secondsAliasMinimumCliVersion[index]) continue;
+    return actual[index] > secondsAliasMinimumCliVersion[index];
+  }
+  return true;
 }
 
 function parsePluginMcpPackagePin(args) {

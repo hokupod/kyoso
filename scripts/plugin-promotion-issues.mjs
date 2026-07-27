@@ -139,13 +139,14 @@ export async function runPluginPromotionIssueReconciliation(
   const context = readActionsContext(options.env ?? process.env);
   const issues = await listOpenIssues({ repository: context.repository });
   const closable = selectClosablePromotionReminderIssues(issues, currentPin);
+  const comment = buildAuditComment({
+    context,
+    currentPin,
+    pluginVersion,
+  });
   const closures = closable.map((issue) => ({
     issue,
-    comment: buildAuditComment({
-      context,
-      currentPin,
-      pluginVersion,
-    }),
+    comment,
   }));
 
   for (const closure of closures) {
@@ -254,18 +255,29 @@ function closeGitHubIssue({ repository, number, comment }) {
   ]);
 }
 
-function runGh(args) {
-  const result = spawnSync("gh", args, {
+export function runGh(args, { spawn = spawnSync } = {}) {
+  const maxBuffer = 64 * 1024 * 1024;
+  const result = spawn("gh", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer,
   });
   if (result.error) {
+    if (result.error.code === "ENOBUFS") {
+      throw new Error(
+        `gh ${args[0]} output exceeded ${maxBuffer / (1024 * 1024)} MiB buffer`,
+      );
+    }
     throw new Error(`Could not run gh: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    const detail = result.stderr.trim();
+    const detail = (result.stderr ?? "").trim();
+    const outcome =
+      result.status === null
+        ? `signal ${result.signal ?? "unknown"}`
+        : `exit ${result.status}`;
     throw new Error(
-      `gh ${args[0]} failed with exit ${result.status}${detail ? `: ${detail}` : ""}`,
+      `gh ${args[0]} failed with ${outcome}${detail ? `: ${detail}` : ""}`,
     );
   }
   return result.stdout;

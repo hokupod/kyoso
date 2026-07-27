@@ -12,41 +12,27 @@ export function normalizeRequestTimeUnits(
   if (!request.options) return request;
 
   const options = { ...request.options };
-  if (options.maxAgentTimeoutS !== undefined) {
-    const maxAgentTimeout = resolveRequestTimeUnit(
-      {
-        milliseconds: options.maxAgentTimeoutMs,
-        seconds: options.maxAgentTimeoutS,
-      },
-      {
-        milliseconds: "options.maxAgentTimeoutMs",
-        seconds: "options.maxAgentTimeoutS",
-      },
-    );
-    if (maxAgentTimeout) {
-      options.maxAgentTimeoutMs = maxAgentTimeout.milliseconds;
-    }
-  }
-  delete options.maxAgentTimeoutS;
+  normalizeRequestTimeUnitField(
+    options as Record<string, unknown>,
+    "maxAgentTimeoutMs",
+    "maxAgentTimeoutS",
+    {
+      milliseconds: "options.maxAgentTimeoutMs",
+      seconds: "options.maxAgentTimeoutS",
+    },
+  );
 
   if (options.reviewBudget) {
     const reviewBudget = { ...options.reviewBudget };
-    if (reviewBudget.maxTotalWallTimeS !== undefined) {
-      const maxTotalWallTime = resolveRequestTimeUnit(
-        {
-          milliseconds: reviewBudget.maxTotalWallTimeMs,
-          seconds: reviewBudget.maxTotalWallTimeS,
-        },
-        {
-          milliseconds: "options.reviewBudget.maxTotalWallTimeMs",
-          seconds: "options.reviewBudget.maxTotalWallTimeS",
-        },
-      );
-      if (maxTotalWallTime) {
-        reviewBudget.maxTotalWallTimeMs = maxTotalWallTime.milliseconds;
-      }
-    }
-    delete reviewBudget.maxTotalWallTimeS;
+    normalizeRequestTimeUnitField(
+      reviewBudget as Record<string, unknown>,
+      "maxTotalWallTimeMs",
+      "maxTotalWallTimeS",
+      {
+        milliseconds: "options.reviewBudget.maxTotalWallTimeMs",
+        seconds: "options.reviewBudget.maxTotalWallTimeS",
+      },
+    );
     options.reviewBudget = reviewBudget;
   }
 
@@ -71,6 +57,28 @@ export function resolveProgressHeartbeatMs(input: {
     },
     { allowZero: true },
   )?.milliseconds;
+}
+
+function normalizeRequestTimeUnitField(
+  target: Record<string, unknown>,
+  millisecondsKey: string,
+  secondsKey: string,
+  fields: {
+    milliseconds: string;
+    seconds: string;
+  },
+): void {
+  if (target[secondsKey] !== undefined) {
+    const resolved = resolveRequestTimeUnit(
+      {
+        milliseconds: target[millisecondsKey],
+        seconds: target[secondsKey],
+      },
+      fields,
+    );
+    if (resolved) target[millisecondsKey] = resolved.milliseconds;
+  }
+  delete target[secondsKey];
 }
 
 function resolveRequestTimeUnit(

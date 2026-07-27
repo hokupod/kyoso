@@ -9,6 +9,8 @@ import {
   PLUGIN_RUNTIME_EXPECTED_CONTRACT,
 } from "../../src/cli/pluginRuntimeContract.js";
 import { hashSkillDirectory } from "../../src/cli/skillInstall.js";
+// @ts-expect-error The distribution verifier is intentionally shipped as a standalone Node.js script.
+import { transformCanonicalToPlugin } from "../../scripts/plugin-distribution.mjs";
 
 const root = process.cwd();
 describe("Codex Plugin fixture", () => {
@@ -123,11 +125,31 @@ describe("Codex Plugin fixture", () => {
       "`bunx --package @kyo-so/cli kyoso`",
     );
     expect(canonicalInstructions).not.toContain(cliPackagePin);
+    expect(canonicalInstructions).toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
     expect(pluginInstructions).toContain(
       `\`npx -y --package=${cliPackagePin} kyoso\``,
     );
     expect(pluginInstructions).toContain(
       `\`bunx --package ${cliPackagePin} kyoso\``,
+    );
+    expect(pluginInstructions).toContain(
+      "`--set agents.<agent>.timeoutMs=<ms>`",
+    );
+    expect(pluginInstructions).not.toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
+    const promotedInstructions = transformCanonicalToPlugin(
+      "SKILL.md",
+      Buffer.from(canonicalInstructions),
+      "@kyo-so/cli@0.16.0",
+    ).toString("utf8");
+    expect(promotedInstructions).toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
+    );
+    expect(promotedInstructions).not.toContain(
+      "`--set agents.<agent>.timeoutMs=<ms>`",
     );
     expect(await directorySnapshot(plugin)).toEqual({
       ...canonicalSnapshot,
@@ -666,6 +688,16 @@ describe("Codex Plugin fixture", () => {
                 workflow.value = workflow.value.replace(
                   "  pull_request:\\n",
                   "    tags:\\n      - v*\\n  pull_request:\\n",
+                );
+              },
+              expected: "push must define only branches and paths",
+            },
+            {
+              name: "inline extra push trigger key",
+              mutate({ workflow }) {
+                workflow.value = workflow.value.replace(
+                  "    paths:\\n",
+                  '    tags: ["v*"]\\n    paths:\\n',
                 );
               },
               expected: "push must define only branches and paths",

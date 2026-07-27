@@ -135,21 +135,21 @@ describe("Codex Plugin fixture", () => {
       `\`bunx --package ${cliPackagePin} kyoso\``,
     );
     expect(pluginInstructions).toContain(
-      "`--set agents.<agent>.timeoutMs=<ms>`",
+      "`--set agents.<agent>.timeoutS=<seconds>`",
     );
     expect(pluginInstructions).not.toContain(
-      "`--set agents.<agent>.timeoutS=<seconds>`",
+      "`--set agents.<agent>.timeoutMs=<ms>`",
     );
-    const promotedInstructions = transformCanonicalToPlugin(
+    const legacyInstructions = transformCanonicalToPlugin(
       "SKILL.md",
       Buffer.from(canonicalInstructions),
-      "@kyo-so/cli@0.16.0",
+      "@kyo-so/cli@0.15.2",
     ).toString("utf8");
-    expect(promotedInstructions).toContain(
-      "`--set agents.<agent>.timeoutS=<seconds>`",
-    );
-    expect(promotedInstructions).not.toContain(
+    expect(legacyInstructions).toContain(
       "`--set agents.<agent>.timeoutMs=<ms>`",
+    );
+    expect(legacyInstructions).not.toContain(
+      "`--set agents.<agent>.timeoutS=<seconds>`",
     );
     expect(await directorySnapshot(plugin)).toEqual({
       ...canonicalSnapshot,

@@ -7,4 +7,4 @@ export const JUDGE_MAX_OUTPUT_TOKENS = 4_096;
 export const RAW_OUTPUT_MAX_CHARS = 16_384;
 export const TRACE_DIR = ".kyoso/traces";
 export const KYOSO_CHILD_AGENT = "KYOSO_CHILD_AGENT";
-export const KYOSO_VERSION = "0.16.1";
+export const KYOSO_VERSION = "0.16.2";

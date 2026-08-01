@@ -30,7 +30,7 @@ jobs:
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
-        run: npm install -g @aikidosec/safe-chain@1.5.13
+        run: npm install -g @aikidosec/safe-chain@1.5.14
 
       - name: Setup safe-chain shims
         run: safe-chain setup-ci
@@ -92,7 +92,7 @@ jobs:
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
-        run: npm install -g @aikidosec/safe-chain@1.5.13
+        run: npm install -g @aikidosec/safe-chain@1.5.14
 
       - name: Setup safe-chain shims
         run: safe-chain setup-ci
@@ -131,7 +131,7 @@ jobs:
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
-        run: npm install -g @aikidosec/safe-chain@1.5.13
+        run: npm install -g @aikidosec/safe-chain@1.5.14
 
       - name: Setup safe-chain shims
         run: safe-chain setup-ci

@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-08-03
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.10` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.2`.
+- Update the default Claude ACP adapter to
+  `@agentclientprotocol/claude-agent-acp@0.64.0`.
+- Update the pinned Safe-chain version used by CI and release workflows to
+  `1.5.14`.
 
 ## [0.16.2] - 2026-08-01
 

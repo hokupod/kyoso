@@ -154,7 +154,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 ## CLI
 
-package-runner の実行経路では、package と executable を必ず別指定します: `npx -y --package=@kyo-so/cli kyoso` と `bunx --package @kyo-so/cli kyoso` です。workflowで固定する場合は、`@kyo-so/cli@0.16.3` のようにpackage名へcomplete SemVer pinを付けます。以下の例の `kyoso` は、すでにインストールされた executable の省略形です。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
+package-runner の実行経路では、package と executable を必ず別指定します: `npx -y --package=@kyo-so/cli kyoso` と `bunx --package @kyo-so/cli kyoso` です。workflowで固定する場合は、`@kyo-so/cli@0.16.4` のようにpackage名へcomplete SemVer pinを付けます。以下の例の `kyoso` は、すでにインストールされた executable の省略形です。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応) で、インストールされる CLI コマンドは短い `kyoso` です。
 
 Bun fallback は Bun `1.3.14` で検証済みです。古い Bun では npx 形式またはインストール済みの `kyoso` を使い、複数bin packageからの Bun のbinary推論に依存しないでください。
 

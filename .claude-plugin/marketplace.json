@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Kyoso plugin marketplace for Claude Code",
-    "version": "0.7.13"
+    "version": "0.7.14"
   },
   "plugins": [
     {
       "name": "kyoso",
       "source": "./plugins/kyoso",
       "description": "Multi-agent plan, security, and diff review through Codex and Claude.",
-      "version": "0.7.13",
+      "version": "0.7.14",
       "author": {
         "name": "hokupod"
       },

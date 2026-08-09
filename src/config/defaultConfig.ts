@@ -23,7 +23,7 @@ export const defaultConfig: KyosoConfigInput = {
       command: "npx",
       // Pinned on purpose: adapters are fetched at runtime on user machines,
       // so updates must go through a deliberate kyoso release.
-      args: ["-y", "@agentclientprotocol/codex-acp@1.1.9"],
+      args: ["-y", "@agentclientprotocol/codex-acp@1.1.10"],
       role: "implementation_reviewer",
       timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
       allowProjectProvider: [],

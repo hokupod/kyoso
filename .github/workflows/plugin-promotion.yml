@@ -12,6 +12,7 @@ on:
       - "plugins/kyoso/.claude-plugin/plugin.json"
       - "plugins/kyoso/.codex-plugin/mcp.json"
       - "plugins/kyoso/.codex-plugin/plugin.json"
+      - "plugins/kyoso/assets/kyoso-icon.png"
       - "plugins/kyoso/skills/kyoso-review/SKILL.md"
       - "src/cli/pluginRuntimeContract.ts"
   pull_request:

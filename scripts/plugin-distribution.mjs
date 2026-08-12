@@ -27,6 +27,8 @@ const pluginMcpServerName = "kyoso";
 const canonicalSkillRelativePath = ".agents/skills/kyoso-review";
 const pluginSkillRelativePath = "plugins/kyoso/skills/kyoso-review";
 const pluginRootRelativePath = "plugins/kyoso";
+const pluginIconAssetRelativePath = "./assets/kyoso-icon.png";
+const pluginIconRelativePath = `${pluginRootRelativePath}/assets/kyoso-icon.png`;
 const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
 const promotionWorkflowRelativePath = ".github/workflows/plugin-promotion.yml";
@@ -50,6 +52,7 @@ const promotionWorkflowPushPaths = [
   "plugins/kyoso/.claude-plugin/plugin.json",
   "plugins/kyoso/.codex-plugin/mcp.json",
   "plugins/kyoso/.codex-plugin/plugin.json",
+  pluginIconRelativePath,
   "plugins/kyoso/skills/kyoso-review/SKILL.md",
   "src/cli/pluginRuntimeContract.ts",
 ];
@@ -148,6 +151,7 @@ export function distributionPaths(root = repositoryRoot) {
       ".codex-plugin",
       "plugin.json",
     ),
+    icon: join(root, pluginIconRelativePath),
     mcp: join(root, pluginRootRelativePath, ".codex-plugin", "mcp.json"),
     pluginRoot: join(root, pluginRootRelativePath),
     pluginSkill: join(root, pluginSkillRelativePath),
@@ -592,6 +596,23 @@ function validateManifest(manifest, paths, failures) {
   }
   if (!isHttpsUrl(interfaceMetadata.websiteUrl)) {
     failures.push("Plugin manifest interface.websiteUrl must be an HTTPS URL");
+  }
+  for (const key of ["composerIcon", "logo"]) {
+    const label = `Plugin manifest interface.${key}`;
+    const iconPath = validateRelativePath(
+      paths.pluginRoot,
+      interfaceMetadata[key],
+      label,
+      failures,
+    );
+    if (!iconPath) continue;
+    if (iconPath !== paths.icon) {
+      failures.push(`${label} must resolve to ${pluginIconAssetRelativePath}`);
+      continue;
+    }
+    if (!lstatSync(iconPath).isFile()) {
+      failures.push(`${label} must resolve to a regular file`);
+    }
   }
 }
 

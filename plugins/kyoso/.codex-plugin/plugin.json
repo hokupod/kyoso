@@ -19,6 +19,8 @@
     "developerName": "hokupod",
     "category": "Engineering",
     "capabilities": ["Read"],
-    "websiteUrl": "https://github.com/hokupod/kyoso"
+    "websiteUrl": "https://github.com/hokupod/kyoso",
+    "composerIcon": "./assets/kyoso-icon.png",
+    "logo": "./assets/kyoso-icon.png"
   }
 }

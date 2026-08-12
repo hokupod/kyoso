@@ -2284,6 +2284,7 @@ plugins/kyoso/
 ├── .codex-plugin/plugin.json                   # Codex Plugin manifest
 ├── .codex-plugin/mcp.json                      # Codex MCP definition
 ├── .claude-plugin/plugin.json                  # Claude manifest with inline mcpServers
+├── assets/kyoso-icon.png                        # Codex composer and Plugin logo
 └── skills/kyoso-review/                        # shared generated Skill mirror
 ```
 
@@ -2291,7 +2292,10 @@ Codex resolves its MCP server through the path in `.codex-plugin/plugin.json`.
 Claude Code resolves the inline `mcpServers` declaration in
 `.claude-plugin/plugin.json`. Both clients share the same generated Skill
 mirror, but only the Codex manifest carries Codex-specific metadata and only
-the Claude manifest carries the Claude-compatible MCP shape.
+the Claude manifest carries the Claude-compatible MCP shape. The Codex
+manifest uses `interface.composerIcon` and `interface.logo` to point to the
+same bundled `./assets/kyoso-icon.png`; the Claude manifest does not declare
+these Codex-specific fields.
 
 Marketplace Plugin `0.7.15` pins `@kyo-so/cli@0.16.7` and uses `npx --package` to select the `kyoso` executable explicitly. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`. Its Claude MCP definition declares optional empty-default placeholders for `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENROUTER_API_KEY`, because Claude Code does not implicitly inherit its own OAuth token into an MCP subprocess. These surfaces expose variable names without storing credential values. Kyoso applies the configured Claude auth preference before launching the Claude child, forwards the OpenRouter value only to a Codex child that explicitly selects OpenRouter, and treats an empty optional expansion or a recognized unexpanded credential placeholder as missing.
 

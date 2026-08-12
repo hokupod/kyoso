@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { CURRENT_SKILL_DIGEST } from "../../src/cli/knownSkillDigests.js";
@@ -22,6 +22,7 @@ describe("Codex Plugin fixture", () => {
     const manifest = await readJson(
       join(root, "plugins", "kyoso", ".codex-plugin", "plugin.json"),
     );
+    const icon = join(root, "plugins", "kyoso", "assets", "kyoso-icon.png");
     const claudeManifest = await readJson(
       join(root, "plugins", "kyoso", ".claude-plugin", "plugin.json"),
     );
@@ -51,7 +52,11 @@ describe("Codex Plugin fixture", () => {
       skills: "./skills/",
       mcpServers: "./.codex-plugin/mcp.json",
       license: "AGPL-3.0-or-later",
-      interface: { capabilities: ["Read"] },
+      interface: {
+        capabilities: ["Read"],
+        composerIcon: "./assets/kyoso-icon.png",
+        logo: "./assets/kyoso-icon.png",
+      },
     });
     expect(mcp).toEqual({
       kyoso: {
@@ -84,6 +89,7 @@ describe("Codex Plugin fixture", () => {
     expect(packageMetadata.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(packageMetadata.bin).toMatchObject({ kyoso: "dist/bin/kyoso.js" });
     expect(distribution.mcpExecutable).toBe("kyoso");
+    expect((await stat(icon)).isFile()).toBe(true);
   });
 
   test("keeps the Plugin MCP dependency separate from the canonical Skill", async () => {
@@ -1419,7 +1425,7 @@ describe("Codex Plugin fixture", () => {
     expect(result.status).toBe(0);
   });
 
-  test("rejects camelCase policy keys and noncanonical MCP paths", () => {
+  test("rejects unsafe manifest keys and noncanonical Plugin paths", () => {
     const result = spawnSync(
       "node",
       [
@@ -1447,6 +1453,8 @@ describe("Codex Plugin fixture", () => {
             manifest.sandboxPermissions = "dangerously-bypass";
             manifest.trustLevel = "trusted";
             manifest.sandboxMode = "danger-full-access";
+            manifest.interface.composerIcon = "./.codex-plugin/mcp.json";
+            manifest.interface.logo = "./.codex-plugin/mcp.json";
             cpSync(
               join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
               join(fixture, "plugins", "kyoso", ".codex-plugin", "mcp-legacy.json"),
@@ -1462,6 +1470,12 @@ describe("Codex Plugin fixture", () => {
                 !String(error).includes("sandboxPermissions") ||
                 !String(error).includes("trustLevel") ||
                 !String(error).includes("sandboxMode") ||
+                !String(error).includes(
+                  "Plugin manifest interface.composerIcon must resolve to ./assets/kyoso-icon.png",
+                ) ||
+                !String(error).includes(
+                  "Plugin manifest interface.logo must resolve to ./assets/kyoso-icon.png",
+                ) ||
                 !String(error).includes(
                   "Plugin manifest mcpServers must resolve to ./.codex-plugin/mcp.json",
                 )

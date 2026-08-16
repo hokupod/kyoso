@@ -1,5 +1,7 @@
 node_modules/
 dist/
 .kyoso/
+.codex/
+/.mcp.json
 .direnv/
 .DS_Store

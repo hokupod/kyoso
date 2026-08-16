@@ -1248,7 +1248,7 @@ describe("Codex Plugin fixture", () => {
                 manifest.mcpServers.kyoso.args[1] = "@kyo-so/cli@0.13.1";
               },
               expected: [
-                "Claude plugin MCP package pin must carry the kyoso-cli@npm: npm alias (invariant I4)",
+                "Claude plugin MCP package pin must be selected by an --package= argument at args[1]",
                 "args[1] was",
               ],
             },
@@ -1404,7 +1404,7 @@ describe("Codex Plugin fixture", () => {
               mutate({ mcp }) {
                 mcp.kyoso.args = ["-y", "@kyo-so/cli@0.13.1", "mcp"];
               },
-              expected: ["Plugin MCP package pin must carry the kyoso-cli@npm: npm alias (invariant I4)"],
+              expected: ["Plugin MCP package pin must be selected by an --package= argument at args[1]"],
             },
             {
               name: "unaliased Codex package pin",

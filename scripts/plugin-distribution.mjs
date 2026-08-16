@@ -1901,21 +1901,32 @@ function supportsSecondsAliases(packageVersion) {
   return true;
 }
 
-// I4 (alias form) and I3 (exact SemVer) are violated for different reasons and
-// are repaired differently, so the parse reports which invariant failed instead
-// of collapsing both into one message.
+// A missing `--package=` argument, I4 (alias form) and I3 (exact SemVer) are
+// violated for different reasons and are repaired differently, so the parse
+// reports which one failed instead of collapsing them into one message. The
+// reason travels alone through readPluginPackagePin, so it must name the actual
+// repair without the expected shape beside it.
 function parsePluginMcpPackagePin(args) {
   const packageArgument = args?.[1];
-  const aliasedPrefix = `${pluginMcpPackageArgumentPrefix}${pluginMcpPackageAliasPrefix}`;
   if (
     !isNonEmptyString(packageArgument) ||
-    !packageArgument.startsWith(aliasedPrefix)
+    !packageArgument.startsWith(pluginMcpPackageArgumentPrefix)
   ) {
+    return {
+      reason: `must be selected by an ${pluginMcpPackageArgumentPrefix} argument at args[1]`,
+    };
+  }
+  const packageSpec = packageArgument.slice(
+    pluginMcpPackageArgumentPrefix.length,
+  );
+  if (!packageSpec.startsWith(pluginMcpPackageAliasPrefix)) {
     return {
       reason: `must carry the ${pluginMcpPackageAliasPrefix} npm alias (invariant I4)`,
     };
   }
-  const pin = parsePackagePin(packageArgument.slice(aliasedPrefix.length));
+  const pin = parsePackagePin(
+    packageSpec.slice(pluginMcpPackageAliasPrefix.length),
+  );
   return pin
     ? { pin }
     : { reason: "must pin an exact @kyo-so/cli SemVer (invariant I3)" };

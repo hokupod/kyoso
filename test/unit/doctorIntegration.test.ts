@@ -903,7 +903,7 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
     expect(output).toContain("Codex registration: repair required (legacy)");
     expect(output).toContain("Codex integration: unknown");
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup codex --write --runner npx --force",
+      "npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup codex --write --runner npx --force",
     );
     expect(output).not.toContain("Codex integration: manual-mcp");
   });
@@ -928,7 +928,7 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
       "Claude Code registration: repair required (legacy)",
     );
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
+      "npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
     );
   });
 
@@ -950,7 +950,7 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
     });
 
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
+      "npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup claude-code --write --runner npx --force",
     );
   });
 
@@ -1067,9 +1067,56 @@ allowProjectProvider = [${JSON.stringify(context.cwd)}]
       "normal doctor does not verify the required Bun capability",
     );
     expect(output).toContain(
-      "npx -y --package=@kyo-so/cli kyoso setup codex --write --runner bunx",
+      "npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup codex --write --runner bunx",
     );
     expect(existsSync(invocationPath)).toBe(false);
+  });
+
+  // An unaliased registration is still current, so the alias has to surface as a
+  // warning on a ready registration rather than through the status line.
+  test("warns about a missing package alias without demoting the registration", async () => {
+    const context = await doctorFixture();
+    await writeFile(
+      join(context.codexHome, "config.toml"),
+      '[mcp_servers.kyoso]\ncommand = "npx"\nargs = ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"]\nenabled = true\n',
+      "utf8",
+    );
+    await createSkill(context, "codex");
+    await createExecutable(join(context.bin, "npx"));
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      ignoreConfig: true,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("Codex registration: ok");
+    expect(output).toContain("omits the kyoso-cli npm alias");
+    expect(output).toContain(
+      "Replace its package spec with kyoso-cli@npm:@kyo-so/cli@0.13.1",
+    );
+  });
+
+  test("does not warn about the alias when the registration already carries it", async () => {
+    const context = await doctorFixture();
+    await writeFile(
+      join(context.codexHome, "config.toml"),
+      '[mcp_servers.kyoso]\ncommand = "npx"\nargs = ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"]\nenabled = true\n',
+      "utf8",
+    );
+    await createSkill(context, "codex");
+    await createExecutable(join(context.bin, "npx"));
+
+    const output = await runDoctor({
+      cwd: context.cwd,
+      ignoreConfig: true,
+      env: context.env,
+      pluginInspector: () => pluginUnsupported,
+    });
+
+    expect(output).toContain("Codex registration: ok");
+    expect(output).not.toContain("omits the kyoso-cli npm alias");
   });
 
   test("does not report a current npx manual MCP as ready when npx is missing", async () => {

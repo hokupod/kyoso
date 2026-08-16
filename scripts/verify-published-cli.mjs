@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  pluginMcpPackageAliasPrefix,
   repositoryRoot,
   verifyPluginDistribution,
 } from "./plugin-distribution.mjs";
@@ -30,6 +31,7 @@ export async function verifyPublishedCliTarget(
     packageVersion,
   });
   const packageSpecifier = `${requestedPackageName}@${packageVersion}`;
+  const aliasedPackageSpecifier = `${pluginMcpPackageAliasPrefix}${packageSpecifier}`;
   const mcpArgs = [
     "kyoso",
     "mcp",
@@ -40,7 +42,7 @@ export async function verifyPublishedCliTarget(
   await runSmoke({
     runner: "npx",
     command: "npx",
-    args: ["-y", `--package=${packageSpecifier}`, ...mcpArgs],
+    args: ["-y", `--package=${aliasedPackageSpecifier}`, ...mcpArgs],
     expectedVersion: packageVersion,
     published: true,
     requireSafeChainInCi: false,
@@ -48,7 +50,7 @@ export async function verifyPublishedCliTarget(
   await runSmoke({
     runner: "bunx",
     command: "bunx",
-    args: ["--package", packageSpecifier, ...mcpArgs],
+    args: ["--package", aliasedPackageSpecifier, ...mcpArgs],
     expectedVersion: packageVersion,
     published: true,
     requireSafeChainInCi: false,

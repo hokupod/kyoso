@@ -68,7 +68,10 @@ const promotionStepExecutionModifierKeys = [
   ...promotionJobExecutionModifierKeys,
   "shell",
 ];
-const pluginMcpPackageArgumentPrefix = "--package=";
+export const pluginMcpPackageArgumentPrefix = "--package=";
+// npm alias so a checkout whose own package name is `@kyo-so/cli` cannot shadow
+// the published package when a package runner resolves the specifier.
+export const pluginMcpPackageAliasPrefix = "kyoso-cli@npm:";
 const pluginMcpDependencyBlock = [
   "dependencies:",
   "  tools:",
@@ -166,17 +169,18 @@ export function buildPluginMcpArgs(cliPackagePin) {
   }
   return [
     "-y",
-    `${pluginMcpPackageArgumentPrefix}${cliPackagePin}`,
+    `${pluginMcpPackageArgumentPrefix}${pluginMcpPackageAliasPrefix}${cliPackagePin}`,
     pluginMcpServerName,
     "mcp",
   ];
 }
 
 function buildSkillCliFallback(runner, packageSpecifier) {
+  const aliasedPackageSpecifier = `${pluginMcpPackageAliasPrefix}${packageSpecifier}`;
   if (runner === "npx") {
-    return `\`npx -y --package=${packageSpecifier} kyoso\``;
+    return `\`npx -y --package=${aliasedPackageSpecifier} kyoso\``;
   }
-  return `\`bunx --package ${packageSpecifier} kyoso\``;
+  return `\`bunx --package ${aliasedPackageSpecifier} kyoso\``;
 }
 
 /**
@@ -1466,33 +1470,31 @@ function findPromotionWorkflowCommand(steps, command, description, failures) {
 }
 
 function validatePluginMcpInvocation(server, label, failures) {
+  // Composed from the same two constants the parser below reads, so renaming
+  // the alias cannot leave this message describing a shape nothing accepts.
+  const expectedShape = `["-y", "${pluginMcpPackageArgumentPrefix}${pluginMcpPackageAliasPrefix}@kyo-so/cli@VERSION", "kyoso", "mcp"]`;
   if (server.command !== "npx") {
     failures.push(`${label} command must be "npx"`);
   }
   if (!Array.isArray(server.args)) {
-    failures.push(
-      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
-    );
+    failures.push(`${label} args must be ${expectedShape}`);
     return { packageName: "", packageVersion: "" };
   }
-  const pin = parsePluginMcpPackagePin(server.args);
-  if (!pin) {
+  const parsed = parsePluginMcpPackagePin(server.args);
+  if (!parsed.pin) {
     failures.push(
-      `${label} package pin must be an exact @kyo-so/cli SemVer; args[1] was ${formatValue(server.args[1])}`,
+      `${label} package pin ${parsed.reason}; args[1] was ${formatValue(server.args[1])}`,
     );
-    failures.push(
-      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
-    );
+    failures.push(`${label} args must be ${expectedShape}`);
     return { packageName: "", packageVersion: "" };
   }
+  const pin = parsed.pin;
   const expectedArgs = buildPluginMcpArgs(packagePin(pin));
   if (!isDeepStrictEqual(server.args, expectedArgs)) {
     failures.push(
       `${label} args must exactly equal ${formatValue(expectedArgs)}; received ${formatValue(server.args)}`,
     );
-    failures.push(
-      `${label} args must be ["-y", "--package=@kyo-so/cli@VERSION", "kyoso", "mcp"]`,
-    );
+    failures.push(`${label} args must be ${expectedShape}`);
   }
   return pin;
 }
@@ -1899,17 +1901,24 @@ function supportsSecondsAliases(packageVersion) {
   return true;
 }
 
+// I4 (alias form) and I3 (exact SemVer) are violated for different reasons and
+// are repaired differently, so the parse reports which invariant failed instead
+// of collapsing both into one message.
 function parsePluginMcpPackagePin(args) {
   const packageArgument = args?.[1];
+  const aliasedPrefix = `${pluginMcpPackageArgumentPrefix}${pluginMcpPackageAliasPrefix}`;
   if (
     !isNonEmptyString(packageArgument) ||
-    !packageArgument.startsWith(pluginMcpPackageArgumentPrefix)
+    !packageArgument.startsWith(aliasedPrefix)
   ) {
-    return undefined;
+    return {
+      reason: `must carry the ${pluginMcpPackageAliasPrefix} npm alias (invariant I4)`,
+    };
   }
-  return parsePackagePin(
-    packageArgument.slice(pluginMcpPackageArgumentPrefix.length),
-  );
+  const pin = parsePackagePin(packageArgument.slice(aliasedPrefix.length));
+  return pin
+    ? { pin }
+    : { reason: "must pin an exact @kyo-so/cli SemVer (invariant I3)" };
 }
 
 function readPluginPackagePin(path) {
@@ -1921,13 +1930,11 @@ function readPluginPackagePin(path) {
       `Plugin MCP config could not be read: ${errorMessage(error)}`,
     );
   }
-  const pin = parsePluginMcpPackagePin(mcp?.[pluginMcpServerName]?.args);
-  if (!pin) {
-    throw new Error(
-      "Plugin MCP package pin must be an exact @kyo-so/cli SemVer",
-    );
+  const parsed = parsePluginMcpPackagePin(mcp?.[pluginMcpServerName]?.args);
+  if (!parsed.pin) {
+    throw new Error(`Plugin MCP package pin ${parsed.reason}`);
   }
-  return packagePin(pin);
+  return packagePin(parsed.pin);
 }
 
 function packagePin(pin) {

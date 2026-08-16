@@ -37,7 +37,7 @@ describe("published CLI verification", () => {
         command: "npx",
         args: [
           "-y",
-          "--package=@kyo-so/cli@0.13.1",
+          "--package=kyoso-cli@npm:@kyo-so/cli@0.13.1",
           "kyoso",
           "mcp",
           "--ignore-config",
@@ -53,7 +53,7 @@ describe("published CLI verification", () => {
         command: "bunx",
         args: [
           "--package",
-          "@kyo-so/cli@0.13.1",
+          "kyoso-cli@npm:@kyo-so/cli@0.13.1",
           "kyoso",
           "mcp",
           "--ignore-config",

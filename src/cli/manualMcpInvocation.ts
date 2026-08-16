@@ -2,6 +2,7 @@ import {
   buildKyosoPackageCommand,
   isCompleteSemVer,
   KYOSO_EXECUTABLE_NAME,
+  KYOSO_PACKAGE_ALIAS_PREFIX,
   KYOSO_PACKAGE_NAME,
   type KyosoPackageCommand,
   type KyosoPackageRunner,
@@ -237,11 +238,34 @@ function parseBunxLegacy(args: string[]): string | undefined {
     : undefined;
 }
 
+// An explicit argv selects the executable correctly with or without the
+// `kyoso-cli@npm:` alias, so both spellings stay current and a registration
+// written before the alias keeps working untouched. Strip the alias before
+// applying the same pin bar to either spelling.
 function isKnownPackageSpec(packageSpec: string): boolean {
+  const bare = packageSpecWithoutAlias(packageSpec);
   return (
-    packageSpec === KYOSO_PACKAGE_NAME ||
-    versionFromKnownPackageSpec(packageSpec) !== undefined
+    bare === KYOSO_PACKAGE_NAME ||
+    versionFromKnownPackageSpec(bare) !== undefined
   );
+}
+
+function packageSpecWithoutAlias(packageSpec: string): string {
+  return packageSpec.startsWith(KYOSO_PACKAGE_ALIAS_PREFIX)
+    ? packageSpec.slice(KYOSO_PACKAGE_ALIAS_PREFIX.length)
+    : packageSpec;
+}
+
+/**
+ * Whether an inspected package spec carries the alias. Only a package runner
+ * launched from a checkout whose own package name is `@kyo-so/cli` can resolve
+ * that workspace instead of the published package, so an unaliased spec is
+ * reported rather than repaired.
+ */
+export function packageSpecCarriesAlias(
+  packageSpec: string | undefined,
+): boolean {
+  return packageSpec?.startsWith(KYOSO_PACKAGE_ALIAS_PREFIX) ?? false;
 }
 
 function versionFromKnownPackageSpec(packageSpec: string): string | undefined {

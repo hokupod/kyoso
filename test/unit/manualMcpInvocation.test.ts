@@ -21,6 +21,30 @@ describe("manual MCP invocation classifier", () => {
       ["--package", "@kyo-so/cli", "kyoso", "mcp"],
       "current",
     ],
+    [
+      "current aliased npx",
+      "npx",
+      ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
+      "current",
+    ],
+    [
+      "current aliased pinned npx",
+      "npx",
+      ["-y", "--package=kyoso-cli@npm:@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      "current",
+    ],
+    [
+      "current aliased bunx",
+      "bunx",
+      ["--package", "kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
+      "current",
+    ],
+    [
+      "aliased tag",
+      "npx",
+      ["-y", "--package=kyoso-cli@npm:@kyo-so/cli@latest", "kyoso", "mcp"],
+      "custom",
+    ],
     ["legacy npx", "npx", ["-y", "@kyo-so/cli", "mcp"], "legacy"],
     ["legacy npx without yes", "npx", ["@kyo-so/cli@0.13.1", "mcp"], "legacy"],
     ["legacy bunx", "bunx", ["@kyo-so/cli@0.13.1", "mcp"], "legacy"],
@@ -54,7 +78,12 @@ describe("manual MCP invocation classifier", () => {
       kind: "legacy",
       replacement: {
         command: "npx",
-        args: ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+        args: [
+          "-y",
+          "--package=kyoso-cli@npm:@kyo-so/cli@0.13.1",
+          "kyoso",
+          "mcp",
+        ],
       },
     });
     expect(
@@ -63,6 +92,26 @@ describe("manual MCP invocation classifier", () => {
         args: ["-y", "@kyo-so/cli@latest", "mcp"],
       }).replacement,
     ).toBeUndefined();
+  });
+
+  // The explicit argv selects the right executable either way, so the alias is
+  // reported through `packageSpec` rather than by demoting the registration.
+  test("reports the alias through the package spec without changing the kind", () => {
+    expect(
+      inspectManualMcpInvocation({
+        command: "npx",
+        args: ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      }),
+    ).toMatchObject({ kind: "current", packageSpec: "@kyo-so/cli@0.13.1" });
+    expect(
+      inspectManualMcpInvocation({
+        command: "bunx",
+        args: ["--package", "kyoso-cli@npm:@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      }),
+    ).toMatchObject({
+      kind: "current",
+      packageSpec: "kyoso-cli@npm:@kyo-so/cli@0.13.1",
+    });
   });
 
   test("keeps generated credential placeholders current", () => {

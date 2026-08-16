@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Select the CLI package through the npm alias `kyoso-cli@npm:@kyo-so/cli` in
+  every package-runner path: generated `kyoso setup` registrations, Marketplace
+  Plugin MCP definitions, Skill CLI fallbacks, manual-registration examples,
+  and documentation. Without the alias, a package runner invoked from a
+  checkout whose own package name is `@kyo-so/cli` can resolve that workspace
+  instead of the published package — which is what happens when Kyoso is used
+  to review Kyoso. Existing unaliased registrations are unaffected: the
+  explicit package-and-executable form stays `current` with or without the
+  alias, so nothing is demoted and setup preserves those entries. An available
+  npx registration remains `ready`; a bunx registration remains `unverified`
+  until its Bun capability is verified by setup. `kyoso doctor` adds a warning
+  naming the aliased spec to write, carrying over a complete SemVer pin when
+  the registration has one; applying it is a hand edit. During the upgrade
+  window the reverse also holds: an aliased registration written by hand from
+  the updated examples is reported as `custom/unverified` by a doctor that
+  predates the alias. Upgrade the CLI before rerunning doctor.
+- Extract the Plugin CLI pin from the aliased argv in
+  `.github/workflows/release.yml`, matching the alias adopted above.
 - Promote the Marketplace Plugin to `0.7.17` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.9`.
 

@@ -154,7 +154,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 ## CLI
 
-package-runner 执行路径始终分别指定 package 和 executable：`npx -y --package=@kyo-so/cli kyoso` 与 `bunx --package @kyo-so/cli kyoso`。需要固定 workflow 时，在 package 名后加 complete SemVer pin，例如 `@kyo-so/cli@0.16.8`。下面的示例把已安装 executable 简写为 `kyoso`。Naming note: npm package 是 `@kyo-so/cli` (对应产品名 Kyo-so)，安装后的 CLI command 是更短的 `kyoso`。
+package-runner 执行路径始终分别指定 package 和 executable：`npx -y --package=@kyo-so/cli kyoso` 与 `bunx --package @kyo-so/cli kyoso`。需要固定 workflow 时，在 package 名后加 complete SemVer pin，例如 `@kyo-so/cli@0.16.9`。下面的示例把已安装 executable 简写为 `kyoso`。Naming note: npm package 是 `@kyo-so/cli` (对应产品名 Kyo-so)，安装后的 CLI command 是更短的 `kyoso`。
 
 Bun fallback 已在 Bun `1.3.14` 上验证。旧版 Bun 请使用 npx 形式或已安装的 `kyoso`，不要依赖 Bun 从多 bin package 推断 binary。
 

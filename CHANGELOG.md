@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predates the alias. Upgrade the CLI before rerunning doctor.
 - Extract the Plugin CLI pin from the aliased argv in
   `.github/workflows/release.yml`, matching the alias adopted above.
-- Promote the Marketplace Plugin to `0.7.17` and pin its Codex and Claude Code
+- Promote the Marketplace Plugin to `0.7.18` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.9`.
 
 ### Removed

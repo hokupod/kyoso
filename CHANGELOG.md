@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.10] - 2026-08-24
+
 ### Changed
 
+- Update the default Codex ACP adapter to
+  `@agentclientprotocol/codex-acp@1.6.2`.
+- Update `@agentclientprotocol/sdk` to `1.4.0`.
+- Update the CI and package toolchain to Bun and `@types/bun` `1.4.0`.
 - Select the CLI package through the npm alias `kyoso-cli@npm:@kyo-so/cli` in
   every package-runner path: generated `kyoso setup` registrations, Marketplace
   Plugin MCP definitions, Skill CLI fallbacks, manual-registration examples,

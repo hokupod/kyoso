@@ -13,6 +13,8 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  pluginMcpPackageAliasPrefix,
+  pluginMcpPackageArgumentPrefix,
   readBundledPluginRuntimeContract,
   repositoryRoot,
 } from "./plugin-distribution.mjs";
@@ -461,10 +463,18 @@ function summarizeDistributionFixture() {
     join(repositoryRoot, "plugins", "kyoso", ".codex-plugin", "mcp.json"),
   );
   const packageArgument = mcp.kyoso.args.find((argument) =>
-    argument.startsWith("--package="),
+    argument.startsWith(pluginMcpPackageArgumentPrefix),
   );
   if (!packageArgument) {
     throw new Error("Plugin MCP package argument was not found");
+  }
+  // The manifest carries the npm alias; the compatibility contract records the
+  // real package pin, so strip the alias prefix before comparing.
+  const packageArgumentPrefix = `${pluginMcpPackageArgumentPrefix}${pluginMcpPackageAliasPrefix}`;
+  if (!packageArgument.startsWith(packageArgumentPrefix)) {
+    throw new Error(
+      `Plugin MCP package argument must use the ${pluginMcpPackageAliasPrefix} npm alias: ${packageArgument}`,
+    );
   }
   const executable = mcp.kyoso.args[2];
   if (executable !== "kyoso") {
@@ -473,7 +483,7 @@ function summarizeDistributionFixture() {
   return {
     pluginVersion: manifest.version,
     mcpCommand: mcp.kyoso.command,
-    mcpPackagePin: packageArgument.slice("--package=".length),
+    mcpPackagePin: packageArgument.slice(packageArgumentPrefix.length),
     mcpExecutable: executable,
   };
 }

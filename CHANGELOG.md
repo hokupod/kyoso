@@ -9,8 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Select the CLI package through the npm alias `kyoso-cli@npm:@kyo-so/cli` in
+  every package-runner path: generated `kyoso setup` registrations, Marketplace
+  Plugin MCP definitions, Skill CLI fallbacks, manual-registration examples,
+  and documentation. Without the alias, a package runner invoked from a
+  checkout whose own package name is `@kyo-so/cli` can resolve that workspace
+  instead of the published package — which is what happens when Kyoso is used
+  to review Kyoso. Existing unaliased registrations are unaffected: the
+  explicit package-and-executable form stays `current` with or without the
+  alias, so nothing is demoted and setup preserves those entries. An available
+  npx registration remains `ready`; a bunx registration remains `unverified`
+  until its Bun capability is verified by setup. `kyoso doctor` adds a warning
+  naming the aliased spec to write, carrying over a complete SemVer pin when
+  the registration has one; applying it is a hand edit. During the upgrade
+  window the reverse also holds: an aliased registration written by hand from
+  the updated examples is reported as `custom/unverified` by a doctor that
+  predates the alias. Upgrade the CLI before rerunning doctor.
+- Extract the Plugin CLI pin from the aliased argv in
+  `.github/workflows/release.yml`, matching the alias adopted above.
 - Promote the Marketplace Plugin to `0.7.17` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.9`.
+
+### Removed
+
+- Remove the tracked `.codex/config.toml`. Its project-local
+  `mcp_servers.kyoso` entry silently took precedence over the installed Plugin
+  and over a maintainer's own MCP registration, so every dogfooding review ran
+  an unintended runtime. That entry also resolved the CLI through `@latest`
+  rather than an exact pin and passed
+  `--safe-chain-skip-minimum-package-age`, waiving the minimum-package-age
+  check. Forwarding the generated credential set is normal for a Kyoso MCP
+  entry; what this project's own documentation tells users to avoid is handing
+  that set to an unpinned, age-check-waived resolution. `.gitignore` now covers
+  `.codex/` and a project-root `.mcp.json` — the Claude Code equivalent, which
+  shadows the Plugin the same way — so a local copy of either stays out of
+  `git add`.
 
 ## [0.16.9] - 2026-08-20
 

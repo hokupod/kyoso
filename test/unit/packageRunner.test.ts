@@ -12,7 +12,7 @@ describe("Kyoso package runner", () => {
 
     expect(buildKyosoPackageCommand({ runner: "npx", cliArgs })).toEqual({
       command: "npx",
-      args: ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"],
+      args: ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
     });
     expect(
       buildKyosoPackageCommand({
@@ -22,11 +22,16 @@ describe("Kyoso package runner", () => {
       }),
     ).toEqual({
       command: "npx",
-      args: ["-y", "--package=@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      args: [
+        "-y",
+        "--package=kyoso-cli@npm:@kyo-so/cli@0.13.1",
+        "kyoso",
+        "mcp",
+      ],
     });
     expect(buildKyosoPackageCommand({ runner: "bunx", cliArgs })).toEqual({
       command: "bunx",
-      args: ["--package", "@kyo-so/cli", "kyoso", "mcp"],
+      args: ["--package", "kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
     });
     expect(
       buildKyosoPackageCommand({
@@ -36,7 +41,7 @@ describe("Kyoso package runner", () => {
       }),
     ).toEqual({
       command: "bunx",
-      args: ["--package", "@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      args: ["--package", "kyoso-cli@npm:@kyo-so/cli@0.13.1", "kyoso", "mcp"],
     });
     expect(cliArgs).toEqual(["mcp"]);
   });
@@ -56,7 +61,9 @@ describe("Kyoso package runner", () => {
         runner: "npx",
         cliArgs: ["setup", "codex", "--write"],
       }),
-    ).toBe("npx -y --package=@kyo-so/cli kyoso setup codex --write");
+    ).toBe(
+      "npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup codex --write",
+    );
   });
 
   test.each([

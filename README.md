@@ -90,8 +90,8 @@ The Plugin installs the Kyoso review Skill and a local stdio MCP server pinned t
 3. Alternatively, register MCP and install the review skill.
 
 ```bash
-npx -y --package=@kyo-so/cli kyoso setup claude-code --write
-bunx --package @kyo-so/cli kyoso setup claude-code --write
+npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup claude-code --write
+bunx --package kyoso-cli@npm:@kyo-so/cli kyoso setup claude-code --write
 ```
 
 For manual MCP registration, use `examples/claude-code-mcp.json`.
@@ -99,8 +99,8 @@ For manual MCP registration, use `examples/claude-code-mcp.json`.
 4. Verify the setup.
 
 ```bash
-npx -y --package=@kyo-so/cli kyoso doctor
-bunx --package @kyo-so/cli kyoso doctor
+npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso doctor
+bunx --package kyoso-cli@npm:@kyo-so/cli kyoso doctor
 ```
 
 5. Ask for a review from Claude Code.
@@ -131,15 +131,15 @@ Codex Auto mode may reject Kyoso tool calls that require approval. To pre-approv
 3. Alternatively, register MCP and install the review skill.
 
 ```bash
-npx -y --package=@kyo-so/cli kyoso setup codex --write
-bunx --package @kyo-so/cli kyoso setup codex --write
+npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso setup codex --write
+bunx --package kyoso-cli@npm:@kyo-so/cli kyoso setup codex --write
 ```
 
 4. Verify the setup.
 
 ```bash
-npx -y --package=@kyo-so/cli kyoso doctor
-bunx --package @kyo-so/cli kyoso doctor
+npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso doctor
+bunx --package kyoso-cli@npm:@kyo-so/cli kyoso doctor
 ```
 
 5. Ask for a review from Codex.
@@ -152,7 +152,9 @@ Manual setup examples are kept in `examples/codex-config.toml` and `examples/cla
 
 ## CLI
 
-The package-runner execution paths always select the package and executable separately: `npx -y --package=@kyo-so/cli kyoso` and `bunx --package @kyo-so/cli kyoso`. Add a complete SemVer pin after the package name when a workflow needs one, for example `@kyo-so/cli@0.16.9`. The examples below abbreviate an already installed executable as `kyoso`. Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), while the installed CLI command is the shorter `kyoso`.
+The package-runner execution paths install the npm package under the local alias `kyoso-cli`: `npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso` and `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso`. Both forms select the package and the executable separately, so neither relies on binary inference from a multi-bin package, and the alias prevents a checkout whose own package name is `@kyo-so/cli` from shadowing the published package. Add a complete SemVer pin after the real package name when a workflow needs one, for example `kyoso-cli@npm:@kyo-so/cli@0.16.9`. The examples below abbreviate an already installed executable as `kyoso`. Naming note: the npm package is `@kyo-so/cli` (matching the product name Kyo-so), the package-runner alias is `kyoso-cli`, and the installed CLI command is the shorter `kyoso`.
+
+Registrations written before the alias remain supported and classified as `current`. An available npx registration remains `ready`; a bunx registration remains `unverified` until its Bun capability is verified by setup. `kyoso doctor` warns that the alias is missing and names the spec to write; setup preserves such an entry, so that repair is a hand edit.
 
 The Bun fallback is verified on Bun `1.3.14`. On an older Bun, use the npx form or an installed `kyoso`; do not rely on Bun inferring a binary from a multi-bin package.
 
@@ -228,7 +230,7 @@ Register Kyoso with Codex or Claude Code as an MCP server, then call `plan_revie
 # See examples/codex-config.toml
 [mcp_servers.kyoso]
 command = "npx"
-args = ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"]
+args = ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"]
 ```
 
 Example client request:
@@ -240,8 +242,8 @@ Use Kyoso plan_review on this plan and the selected auth files. I need a second 
 ## MCP
 
 ```bash
-npx -y --package=@kyo-so/cli kyoso mcp --network model_only
-bunx --package @kyo-so/cli kyoso mcp --network model_only
+npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso mcp --network model_only
+bunx --package kyoso-cli@npm:@kyo-so/cli kyoso mcp --network model_only
 ```
 
 When `--network` is omitted, Kyoso uses `model_only`. This means Kyoso expects only model-provider traffic from backend agents. It is a policy-level constraint, not OS-level network isolation.
@@ -258,7 +260,7 @@ MCP stdout is reserved for protocol messages. Logs go to stderr or local audit t
 
 The bundled `kyoso-review` skill is intentionally narrow. It should trigger only when you explicitly ask for Kyoso, multi-agent review, plan review, security review, CISA Secure by Design review, or diff review.
 
-The Skill uses the first available path: Kyoso MCP tools, an installed `kyoso` on `PATH`, `npx -y --package=@kyo-so/cli kyoso`, then `bunx --package @kyo-so/cli kyoso`. The package-runner fallbacks may need network access and can resolve a newer unpinned release, so an installed CLI is the normal MCP-less path. If a typed [review contract](#review-contract-and-finding-admission) contains non-goals or accepted risks and MCP is unavailable, the Skill stops because the CLI fallback can preserve only `focus`.
+The Skill uses the first available path: Kyoso MCP tools, an installed `kyoso` on `PATH`, `npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso`, then `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso`. The package-runner fallbacks may need network access and can resolve a newer unpinned release, so an installed CLI is the normal MCP-less path. If a typed [review contract](#review-contract-and-finding-admission) contains non-goals or accepted risks and MCP is unavailable, the Skill stops because the CLI fallback can preserve only `focus`.
 
 `kyoso setup codex --write --skill-only` copies the canonical Skill directory to `.agents/skills/kyoso-review/` by default. Add `--global` to copy it to `~/.agents/skills/kyoso-review/`.
 
@@ -268,7 +270,7 @@ Managed installs record the canonical directory digest and CLI version in `.kyos
 
 ### Manual MCP migration
 
-Run `kyoso setup codex` or `kyoso setup claude-code` first to inspect the existing registration. Dry-run and `--write` preserve every existing MCP entry. `--write --force` migrates an exact recognized legacy npx Kyoso command with a generated-safe environment to the explicit package-and-executable form shown above. For an exact legacy bunx command, omitting `--runner` preserves it without probing; use `--write --runner bunx --force` to verify Bun and migrate it to explicit bunx, or `--write --runner npx --force` to intentionally migrate it to npx. Each migration keeps a complete SemVer pin when the legacy command had one. A current explicit bunx registration can be checked with `--write --runner bunx`; setup verifies Bun without changing the registration bytes.
+Run `kyoso setup codex` or `kyoso setup claude-code` first to inspect the existing registration. Dry-run and `--write` preserve every existing MCP entry. `--write --force` migrates an exact recognized legacy npx Kyoso command with a generated-safe environment to the aliased package-and-executable form shown above. For an exact legacy bunx command, omitting `--runner` preserves it without probing; use `--write --runner bunx --force` to verify Bun and migrate it to aliased bunx, or `--write --runner npx --force` to intentionally migrate it to npx. Each migration keeps a complete SemVer pin when the legacy command had one. A current explicit bunx registration can be checked with `--write --runner bunx`; setup verifies Bun without changing the registration bytes. The explicit package-and-executable form counts as current with or without the alias, so an entry written before the alias is preserved rather than migrated; doctor warns about the missing alias and names the aliased spec to write.
 
 `--force` can replace a managed Skill and migrate only the safe exact legacy MCP entries under the runner policy above. It never changes an entry with execution-altering environment fields such as `NODE_OPTIONS`, a custom `--command` entry, an unknown structure, global or nested registrations outside the selected safe target, or a Marketplace Plugin/cache. `kyoso doctor` reports preserved entries as `legacy`, `custom-unverified`, or `unknown` rather than ready; repair those entries manually from the examples, then rerun doctor.
 
@@ -584,7 +586,8 @@ Windows, and environments where the required filesystem capabilities cannot be p
 ## Troubleshooting
 
 - MCP timeout: keep the client timeout longer than the review-wide deadline. For the 35-minute preset, use 2160 seconds in Codex or `MCP_TOOL_TIMEOUT=2160000` in Claude Code. See [Timeouts](#timeouts).
-- Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx -y --package=@kyo-so/cli@<version> kyoso` after publish. Wait for the exact version instead of falling back to `latest` or an ambient `kyoso`.
+- Fresh npm release: minimum-package-age protection in tools such as safe-chain may briefly block `npx -y --package=kyoso-cli@npm:@kyo-so/cli@<version> kyoso` after publish. Wait for the exact version instead of falling back to `latest` or an ambient `kyoso`.
+- Aliased registration reported as `custom/unverified`: a `kyoso doctor` that predates the `kyoso-cli` alias and does not recognize it, so an entry copied from the current examples looks unverified. Update the CLI before rerunning doctor.
 - Deprecated TypeScript config: untrusted `kyoso.config.ts` is skipped unless you pass `--trust-config`; prefer `kyoso.toml`.
 - OpenRouter key missing: confirm a non-empty Codex `model`, an `OPENROUTER_API_KEY` forwarded to the Kyoso process, and a restarted client; run `kyoso doctor`. Marketplace Plugin `0.4.0` and later forward this variable name to the Kyoso process; earlier versions do not. Existing MCP registrations are not rewritten by setup.
 

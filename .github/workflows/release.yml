@@ -219,8 +219,22 @@ jobs:
           set -euo pipefail
 
           RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          CODEX_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.codex-plugin/mcp.json", "utf8")).kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@")).slice("--package=@kyo-so/cli@".length)')"
-          CLAUDE_PIN="$(node -p 'JSON.parse(require("node:fs").readFileSync("plugins/kyoso/.claude-plugin/plugin.json", "utf8")).mcpServers.kyoso.args.find((argument) => argument.startsWith("--package=@kyo-so/cli@")).slice("--package=@kyo-so/cli@".length)')"
+          extract_pin() {
+            node -e '
+              const [manifestPath, argvPath] = process.argv.slice(1);
+              const manifest = JSON.parse(require("node:fs").readFileSync(manifestPath, "utf8"));
+              const args = argvPath.split(".").reduce((value, key) => value[key], manifest);
+              const prefix = "--package=kyoso-cli@npm:@kyo-so/cli@";
+              const argument = args.find((entry) => entry.startsWith(prefix));
+              if (argument === undefined) {
+                throw new Error(`${manifestPath}: no argument starts with ${prefix}`);
+              }
+              process.stdout.write(argument.slice(prefix.length));
+            ' "$1" "$2"
+          }
+
+          CODEX_PIN="$(extract_pin plugins/kyoso/.codex-plugin/mcp.json kyoso.args)"
+          CLAUDE_PIN="$(extract_pin plugins/kyoso/.claude-plugin/plugin.json mcpServers.kyoso.args)"
 
           is_semver_older() {
             node -e '

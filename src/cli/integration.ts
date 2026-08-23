@@ -16,7 +16,14 @@ import {
   resolve,
 } from "node:path";
 import type { ManualMcpRegistration, ManualMcpStatus } from "./setup.js";
-import { formatKyosoPackageCommand } from "./packageRunner.js";
+import type { ManualMcpInvocationInspection } from "./manualMcpInvocation.js";
+import { packageSpecCarriesAlias } from "./manualMcpInvocation.js";
+import {
+  formatKyosoPackageCommand,
+  KYOSO_PACKAGE_ALIAS,
+  KYOSO_PACKAGE_ALIAS_PREFIX,
+  KYOSO_PACKAGE_NAME,
+} from "./packageRunner.js";
 
 export type IntegrationMode =
   | "manual-mcp"
@@ -251,14 +258,23 @@ function manualMcpWarnings(
       "Manual MCP invocation could not be safely classified and was not treated as a ready Kyoso registration.",
     ];
   }
+  // An unaliased registration selects the right executable and stays ready, so
+  // this warns without demoting it. It only matters inside a checkout whose own
+  // package name is `@kyo-so/cli`, where the runner can resolve that workspace
+  // instead of the published package. Setup preserves a current registration
+  // even under --force, so the repair is a hand edit either way. Naming the
+  // registration's own spec keeps a complete SemVer pin the user already chose.
+  const aliasWarnings = unaliasedManualMcpWarning(invocation);
   if (invocation?.runner === "npx" && cli.npx !== "available") {
     return [
+      ...aliasWarnings,
       "Manual MCP registration uses npx, but npx is not available on PATH.",
     ];
   }
   if (invocation?.runner === "bunx") {
     if (cli.bunx === "missing") {
       return [
+        ...aliasWarnings,
         "Manual MCP registration uses bunx, but bunx is not available on PATH.",
       ];
     }
@@ -270,10 +286,27 @@ function manualMcpWarnings(
         ])
       : undefined;
     return [
+      ...aliasWarnings,
       `Manual MCP registration uses bunx, but normal doctor does not verify the required Bun capability.${verificationCommand ? ` Run \`${verificationCommand}\` before treating it as ready.` : " Run setup with --write --runner bunx from an installed Kyoso CLI before treating it as ready."}`,
     ];
   }
-  return [];
+  return aliasWarnings;
+}
+
+function unaliasedManualMcpWarning(
+  invocation: ManualMcpInvocationInspection | undefined,
+): string[] {
+  const packageSpec = invocation?.packageSpec;
+  if (
+    invocation?.kind !== "current" ||
+    packageSpec === undefined ||
+    packageSpecCarriesAlias(packageSpec)
+  ) {
+    return [];
+  }
+  return [
+    `Manual MCP registration omits the ${KYOSO_PACKAGE_ALIAS} npm alias, so a package runner started from a ${KYOSO_PACKAGE_NAME} checkout can resolve that workspace instead of the published package. Replace its package spec with ${KYOSO_PACKAGE_ALIAS_PREFIX}${packageSpec}; setup preserves this registration and does not rewrite it.`,
+  ];
 }
 
 function legacyManualMcpRepairWarning(

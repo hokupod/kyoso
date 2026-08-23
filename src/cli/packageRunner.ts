@@ -1,4 +1,7 @@
 export const KYOSO_PACKAGE_NAME = "@kyo-so/cli";
+export const KYOSO_PACKAGE_ALIAS = "kyoso-cli";
+/** Prefix of an aliased specifier, so callers never rebuild `@npm:` themselves. */
+export const KYOSO_PACKAGE_ALIAS_PREFIX = `${KYOSO_PACKAGE_ALIAS}@npm:`;
 export const KYOSO_EXECUTABLE_NAME = "kyoso";
 
 export type KyosoPackageRunner = "npx" | "bunx";
@@ -24,6 +27,10 @@ export function buildKyosoPackageCommand(
     options.version === undefined
       ? KYOSO_PACKAGE_NAME
       : `${KYOSO_PACKAGE_NAME}@${assertCompleteSemVer(options.version)}`;
+  // The alias installs the package under a name no Kyoso checkout carries, so a
+  // package runner launched from one cannot resolve that workspace instead of
+  // the published package.
+  const aliasedPackageSpec = `${KYOSO_PACKAGE_ALIAS_PREFIX}${packageSpec}`;
   const cliArgs = [...options.cliArgs];
 
   if (options.runner === "npx") {
@@ -31,7 +38,7 @@ export function buildKyosoPackageCommand(
       command: "npx",
       args: [
         "-y",
-        `--package=${packageSpec}`,
+        `--package=${aliasedPackageSpec}`,
         KYOSO_EXECUTABLE_NAME,
         ...cliArgs,
       ],
@@ -40,7 +47,7 @@ export function buildKyosoPackageCommand(
 
   return {
     command: "bunx",
-    args: ["--package", packageSpec, KYOSO_EXECUTABLE_NAME, ...cliArgs],
+    args: ["--package", aliasedPackageSpec, KYOSO_EXECUTABLE_NAME, ...cliArgs],
   };
 }
 

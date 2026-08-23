@@ -52,11 +52,11 @@ describe("setup", () => {
   test("builds npx and bunx MCP commands", () => {
     expect(commandForRunner("npx")).toEqual({
       command: "npx",
-      args: ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"],
+      args: ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
     });
     expect(commandForRunner("bunx")).toEqual({
       command: "bunx",
-      args: ["--package", "@kyo-so/cli", "kyoso", "mcp"],
+      args: ["--package", "kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
     });
   });
 
@@ -290,7 +290,7 @@ describe("setup", () => {
 
     const dryRun = await runSetup({ ...options, write: false });
     expect(dryRun).toContain("Codex MCP: dry-run");
-    expect(dryRun).toContain("--package=@kyo-so/cli@0.13.1");
+    expect(dryRun).toContain("--package=kyoso-cli@npm:@kyo-so/cli@0.13.1");
     expect(dryRun).not.toContain("codex-preview-secret-value");
     expect(dryRun).not.toContain("[mcp_servers.other]");
     expect(await readFile(configPath, "utf8")).toBe(legacy);
@@ -303,7 +303,7 @@ describe("setup", () => {
     const updated = await readFile(configPath, "utf8");
     expect(migrated).toContain("Codex MCP: updated");
     expect(updated).toContain(
-      'args = ["-y","--package=@kyo-so/cli@0.13.1","kyoso","mcp"] # retain comment',
+      'args = ["-y","--package=kyoso-cli@npm:@kyo-so/cli@0.13.1","kyoso","mcp"] # retain comment',
     );
     expect(updated).toContain("enabled = false");
     expect(updated).toContain('[mcp_servers.other]\ncommand = "node"');
@@ -339,7 +339,7 @@ describe("setup", () => {
     expect(dryRun).toContain("Claude Code MCP: dry-run");
     expect(dryRun).toContain('args = ["@kyo-so/cli@0.13.1", "mcp"]');
     expect(dryRun).toContain(
-      'args = ["--package", "@kyo-so/cli@0.13.1", "kyoso", "mcp"]',
+      'args = ["--package", "kyoso-cli@npm:@kyo-so/cli@0.13.1", "kyoso", "mcp"]',
     );
     expect(dryRun).not.toContain("claude-preview-secret-value");
 
@@ -398,7 +398,7 @@ describe("setup", () => {
     expect(migrated).toContain("Claude Code MCP: updated");
     expect(updated.mcpServers.kyoso).toMatchObject({
       command: "bunx",
-      args: ["--package", "@kyo-so/cli@0.13.1", "kyoso", "mcp"],
+      args: ["--package", "kyoso-cli@npm:@kyo-so/cli@0.13.1", "kyoso", "mcp"],
       enabled: false,
       timeout: 42,
       env: { OPENAI_API_KEY: "${OPENAI_API_KEY}" },
@@ -601,7 +601,7 @@ describe("setup", () => {
     );
     expect(updated).toContain('      "keep": "format"');
     expect(updated).toContain(
-      '      "args": ["--package","@kyo-so/cli","kyoso","mcp"]',
+      '      "args": ["--package","kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"]',
     );
   });
 
@@ -749,7 +749,7 @@ describe("setup", () => {
 
     expect(output).toContain("Claude Code MCP: updated");
     expect(await readFile(configPath, "utf8")).toContain(
-      '"args":["-y","--package=@kyo-so/cli","kyoso","mcp"]',
+      '"args":["-y","--package=kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"]',
     );
   });
 
@@ -817,7 +817,7 @@ describe("setup", () => {
     expect(output).toContain("Claude Code MCP: conflict");
     expect(output).toContain("may have been committed");
     expect(await readFile(configPath, "utf8")).toContain(
-      '"args":["-y","--package=@kyo-so/cli","kyoso","mcp"]',
+      '"args":["-y","--package=kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"]',
     );
   });
 
@@ -874,7 +874,7 @@ describe("setup", () => {
 
     expect(output).toContain("Codex MCP: updated");
     expect(await readFile(configPath, "utf8")).toContain(
-      'args = ["-y","--package=@kyo-so/cli","kyoso","mcp"] # keep [ticket-123]',
+      'args = ["-y","--package=kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"] # keep [ticket-123]',
     );
     expect(await readFile(configPath, "utf8")).toContain("enabled = true");
   });
@@ -955,7 +955,7 @@ describe("setup", () => {
     expect(output).toContain("Codex MCP: updated");
     expect(updated).toContain('command = "npx"');
     expect(updated).toContain(
-      'args = ["-y","--package=@kyo-so/cli@0.13.1","kyoso","mcp"]',
+      'args = ["-y","--package=kyoso-cli@npm:@kyo-so/cli@0.13.1","kyoso","mcp"]',
     );
     expect(updated).toContain("enabled = true");
   });
@@ -995,7 +995,7 @@ describe("setup", () => {
     expect(recovered).toContain("Claude Code MCP: updated");
     expect(await readFile(configPath, "utf8")).toContain('"command":"npx"');
     expect(await readFile(configPath, "utf8")).toContain(
-      '"args":["-y","--package=@kyo-so/cli","kyoso","mcp"]',
+      '"args":["-y","--package=kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"]',
     );
   });
 
@@ -1111,7 +1111,7 @@ describe("setup", () => {
     });
     expect(verified).toContain("Codex MCP: created");
     expect(await readFile(configPath, "utf8")).toContain(
-      'args = ["--package","@kyo-so/cli","kyoso","mcp"]',
+      'args = ["--package","kyoso-cli@npm:@kyo-so/cli","kyoso","mcp"]',
     );
   });
 
@@ -1427,7 +1427,7 @@ describe("setup", () => {
     ]);
     expect(parsed.mcpServers.kyoso).toMatchObject({
       command: "bunx",
-      args: ["--package", "@kyo-so/cli", "kyoso", "mcp"],
+      args: ["--package", "kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
       env: { OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}" },
     });
     expect(
@@ -2110,7 +2110,7 @@ describe("setup", () => {
   test("omits OpenRouter from the default Claude MCP env placeholders", () => {
     expect(buildClaudeMcpEntry(commandForRunner("npx"))).toEqual({
       command: "npx",
-      args: ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"],
+      args: ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
       env: {
         OPENAI_API_KEY: "${OPENAI_API_KEY}",
         ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",
@@ -2122,7 +2122,7 @@ describe("setup", () => {
   test("adds OpenRouter to Claude MCP env placeholders only when requested", () => {
     expect(buildClaudeMcpEntry(commandForRunner("npx"), true)).toEqual({
       command: "npx",
-      args: ["-y", "--package=@kyo-so/cli", "kyoso", "mcp"],
+      args: ["-y", "--package=kyoso-cli@npm:@kyo-so/cli", "kyoso", "mcp"],
       env: {
         OPENAI_API_KEY: "${OPENAI_API_KEY}",
         ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}",

@@ -14,7 +14,12 @@
   "mcpServers": {
     "kyoso": {
       "command": "npx",
-      "args": ["-y", "--package=@kyo-so/cli@0.16.9", "kyoso", "mcp"],
+      "args": [
+        "-y",
+        "--package=kyoso-cli@npm:@kyo-so/cli@0.16.9",
+        "kyoso",
+        "mcp"
+      ],
       "env": {
         "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY:-}",
         "CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN:-}",

@@ -154,7 +154,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 ## CLI
 
-package-runner の実行経路では、npm package をローカル alias `kyoso-cli` としてインストールします: `npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso` と `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso` です。いずれも package と executable を別指定するため multi-bin package の binary 推測に依存せず、alias によって package 名が `@kyo-so/cli` である checkout が公開 package を隠すことも防ぎます。workflowで固定する場合は、`kyoso-cli@npm:@kyo-so/cli@0.16.9` のように実 package 名へcomplete SemVer pinを付けます。以下の例の `kyoso` は、すでにインストールされた executable の省略形です。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応)、package-runner の alias は `kyoso-cli`、インストールされる CLI コマンドは短い `kyoso` です。
+package-runner の実行経路では、npm package をローカル alias `kyoso-cli` としてインストールします: `npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso` と `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso` です。いずれも package と executable を別指定するため multi-bin package の binary 推測に依存せず、alias によって package 名が `@kyo-so/cli` である checkout が公開 package を隠すことも防ぎます。workflowで固定する場合は、`kyoso-cli@npm:@kyo-so/cli@0.16.10` のように実 package 名へcomplete SemVer pinを付けます。以下の例の `kyoso` は、すでにインストールされた executable の省略形です。Naming note: npm パッケージは `@kyo-so/cli` (製品名 Kyo-so に対応)、package-runner の alias は `kyoso-cli`、インストールされる CLI コマンドは短い `kyoso` です。
 
 alias 導入前に書かれた登録は引き続きサポートされ、`current` として分類されます。npx が利用可能な npx 登録は `ready` のままですが、bunx 登録は setup が必要な Bun capability を検証するまで `unverified` のままです。`kyoso doctor` は alias が無いことを警告して書き換え先の spec を示します。setup はこの登録を保持するため、修復は手動編集になります。
 

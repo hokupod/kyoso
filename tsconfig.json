@@ -9,8 +9,6 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "types": ["bun-types"],
-    "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
       "@kyo-so/cli": ["./src/index.ts"]
     }

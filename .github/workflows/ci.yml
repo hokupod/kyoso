@@ -82,6 +82,8 @@ jobs:
             runtime: node
           - node: "24"
             runtime: node
+          - node: "26"
+            runtime: node
           - node: "24"
             runtime: bun
     steps:

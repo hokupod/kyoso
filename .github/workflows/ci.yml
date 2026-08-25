@@ -18,6 +18,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node 22 for packed config smoke
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Capture Node 22 binary
+        run: |
+          NODE22="$(realpath "$(command -v node)")"
+          echo "KYOSO_NODE22=$NODE22" >> "$GITHUB_ENV"
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -68,9 +78,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - node: "20"
+          - node: "22"
             runtime: node
           - node: "24"
+            runtime: node
+          - node: "26"
             runtime: node
           - node: "24"
             runtime: bun

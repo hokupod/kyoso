@@ -420,6 +420,28 @@ export default defineConfig({
     expect(changed.config.network.allowUnrestricted).toBe(true);
   });
 
+  test("transpiles TypeScript-only syntax in trusted legacy config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "kyoso-config-"));
+    const configPath = join(cwd, "kyoso.config.ts");
+    await writeFile(
+      configPath,
+      `import { defineConfig } from "@kyo-so/cli";
+const mode: "unrestricted" = "unrestricted";
+export default defineConfig({ network: { defaultMode: mode } });
+`,
+      "utf8",
+    );
+
+    const loaded = await loadConfig({
+      cwd,
+      trustStorePath: join(cwd, "trusted-configs.json"),
+      trustConfig: true,
+    });
+
+    expect(loaded.configTrustStatus).toBe("trusted_by_flag");
+    expect(loaded.config.network.defaultMode).toBe("unrestricted");
+  });
+
   test("loads layered TOML config from XDG global and project files", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "kyoso-project-toml-"));
     const home = await mkdtemp(join(tmpdir(), "kyoso-home-"));

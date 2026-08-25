@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, sep } from "node:path";
+import { isAbsolute, join, sep } from "node:path";
 import {
   assertMcpHandshake,
   buildMcpHandshakeInput,
@@ -47,6 +47,12 @@ const secretPatterns = [
   /"private_key"\s*:\s*"-----BEGIN PRIVATE KEY-----\\n[^"]+\\n-----END PRIVATE KEY-----\\n?"/,
   /-----BEGIN (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----\r?\n[\s\S]{16,}?\r?\n-----END (?:RSA |OPENSSH |DSA |EC |PGP )?PRIVATE KEY-----/,
 ];
+const packedTypeScriptEntrypoints = [
+  "package/dist/index.js",
+  "package/dist/bin/kyoso.js",
+];
+const unresolvedTypeScriptSpecifierPattern =
+  /\b(?:from|import|require|__require)\s*(?:\(\s*)?["'](?:typescript|@typescript\/typescript6|@typescript\/old)(?:\/[^"'\s)]*)?["']\s*\)?/g;
 
 const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 const kyosoVersion = readFileSync("src/core/constants.ts", "utf8").match(
@@ -195,6 +201,26 @@ try {
 
   if (failures.length === 0) {
     try {
+      verifyPackedTypeScriptBundle(tarballPath);
+    } catch (error) {
+      failures.push(
+        `packed TypeScript bundle invariant failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (failures.length === 0) {
+    try {
+      verifyPackedProductionTypeScriptConfig(tarballPath, tempDir);
+    } catch (error) {
+      failures.push(
+        `packed production TypeScript config smoke failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (failures.length === 0) {
+    try {
       verifyPackedBudgetReport(tarballPath, tempDir);
     } catch (error) {
       failures.push(
@@ -227,6 +253,217 @@ try {
   console.log(`pack verify ok: ${archives[0]} (${filePaths.length} files)`);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
+}
+
+function verifyPackedTypeScriptBundle(tarballPath) {
+  for (const entry of packedTypeScriptEntrypoints) {
+    const content = readTarEntry(tarballPath, entry);
+    unresolvedTypeScriptSpecifierPattern.lastIndex = 0;
+    const match = content.match(unresolvedTypeScriptSpecifierPattern);
+    if (match) {
+      throw new Error(`${entry} contains unresolved specifier: ${match[0]}`);
+    }
+  }
+}
+
+function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
+  const consumerDir = join(tempDir, "production-consumer");
+  const npmCacheDir = join(tempDir, "production-npm-cache");
+  const configuredNode22 = process.env.KYOSO_NODE22?.trim();
+  let node22Path;
+  if (configuredNode22) {
+    if (!isAbsolute(configuredNode22)) {
+      throw new Error(
+        `KYOSO_NODE22 must be an absolute path; got ${configuredNode22}`,
+      );
+    }
+    try {
+      node22Path = realpathSync(configuredNode22);
+    } catch (error) {
+      throw new Error(
+        `KYOSO_NODE22 path could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const versionProbe = spawnSync(node22Path, ["--version"], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    if (versionProbe.error) {
+      throw new Error(
+        `KYOSO_NODE22 binary version probe failed to start: ${versionProbe.error.message}`,
+      );
+    }
+    if (versionProbe.status !== 0) {
+      throw new Error(
+        `KYOSO_NODE22 binary version probe exited ${String(versionProbe.status)}${versionProbe.stderr ? `; stderr: ${versionProbe.stderr.trim().slice(0, 400)}` : ""}`,
+      );
+    }
+    const reportedVersion = versionProbe.stdout.trim();
+    if (!/^v22\.\d+\.\d+$/.test(reportedVersion)) {
+      throw new Error(
+        `KYOSO_NODE22 must report exact Node 22 semver v22.x.y; got ${reportedVersion || "no version"}`,
+      );
+    }
+  } else if (process.env.CI === "true") {
+    throw new Error(
+      "KYOSO_NODE22 is required in CI; capture the Node 22 setup-node binary before pack:verify",
+    );
+  }
+  mkdirSync(consumerDir, { recursive: true });
+  const install = spawnSync(
+    "npm",
+    [
+      "--cache",
+      npmCacheDir,
+      "install",
+      "--prefix",
+      consumerDir,
+      "--omit=dev",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      tarballPath,
+    ],
+    {
+      encoding: "utf8",
+      timeout: 60_000,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (install.error || install.status !== 0) {
+    throw new Error(
+      `production-only npm install failed: ${(install.error?.message ?? install.stderr ?? install.stdout ?? "unknown error").trim()}`,
+    );
+  }
+
+  const nodeModulesDir = join(consumerDir, "node_modules");
+  const installedPackageDir = join(nodeModulesDir, "@kyo-so", "cli");
+  if (!existsSync(installedPackageDir)) {
+    throw new Error("production-only install did not resolve @kyo-so/cli");
+  }
+  for (const packagePath of [
+    join(nodeModulesDir, "@typescript", "typescript6"),
+    join(nodeModulesDir, "@typescript", "old"),
+    join(nodeModulesDir, "typescript"),
+  ]) {
+    if (existsSync(packagePath)) {
+      throw new Error(
+        `production-only install unexpectedly included ${packagePath}`,
+      );
+    }
+  }
+
+  const configPath = join(consumerDir, "kyoso.config.ts");
+  writeFileSync(
+    configPath,
+    'import { defineConfig } from "@kyo-so/cli";\nconst mode: "unrestricted" = "unrestricted";\nexport default defineConfig({ network: { defaultMode: mode } });\n',
+    "utf8",
+  );
+
+  const homeDir = join(tempDir, "production-home-node22");
+  const xdgConfigDir = join(tempDir, "production-xdg-node22");
+  const codexHomeDir = join(tempDir, "production-codex-home-node22");
+  const trustStorePath = join(
+    tempDir,
+    "production-trust-node22",
+    "trusted.json",
+  );
+  mkdirSync(homeDir, { recursive: true });
+  mkdirSync(xdgConfigDir, { recursive: true });
+  mkdirSync(codexHomeDir, { recursive: true });
+
+  const cliPath = join(installedPackageDir, "dist", "bin", "kyoso.js");
+  const smokeEnv = {
+    ...process.env,
+    HOME: homeDir,
+    XDG_CONFIG_HOME: xdgConfigDir,
+    CODEX_HOME: codexHomeDir,
+    KYOSO_TRUST_STORE_PATH: trustStorePath,
+    npm_config_cache: npmCacheDir,
+  };
+  if (!node22Path) {
+    const fallbackProbe = spawnSync(
+      "npx",
+      ["--yes", "--package=node@22.23.2", "node", "--version"],
+      {
+        cwd: consumerDir,
+        env: smokeEnv,
+        encoding: "utf8",
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    const fallbackProbeStderr = (fallbackProbe.stderr ?? "").trim();
+    if (fallbackProbe.error) {
+      throw new Error(
+        `Node 22 fallback acquisition failed to start (npx --package=node@22.23.2): ${fallbackProbe.error.message}${fallbackProbeStderr ? `; stderr: ${fallbackProbeStderr.slice(0, 400)}` : ""}`,
+      );
+    }
+    if (fallbackProbe.signal || fallbackProbe.status !== 0) {
+      throw new Error(
+        `Node 22 fallback acquisition exited ${String(fallbackProbe.status)}${fallbackProbe.signal ? ` by ${fallbackProbe.signal}` : ""}${fallbackProbeStderr ? `; stderr: ${fallbackProbeStderr.slice(0, 400)}` : ""}`,
+      );
+    }
+    const fallbackVersion = (fallbackProbe.stdout ?? "").trim();
+    if (fallbackVersion !== "v22.23.2") {
+      throw new Error(
+        `Node 22 fallback version mismatch: expected v22.23.2 from npx --package=node@22.23.2, got ${fallbackVersion || "no version"}${fallbackProbeStderr ? `; stderr: ${fallbackProbeStderr.slice(0, 400)}` : ""}`,
+      );
+    }
+  }
+  const node22Command = node22Path ?? "npx";
+  const node22Args = node22Path
+    ? [cliPath, "doctor", "--trust-config"]
+    : [
+        "--yes",
+        "--package=node@22.23.2",
+        "node",
+        cliPath,
+        "doctor",
+        "--trust-config",
+      ];
+  const run = spawnSync(node22Command, node22Args, {
+    cwd: consumerDir,
+    env: smokeEnv,
+    encoding: "utf8",
+    timeout: 60_000,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const stderr = (run.stderr ?? "").trim();
+  if (run.error) {
+    throw new Error(
+      node22Path
+        ? `KYOSO_NODE22 binary failed to start packed config smoke: ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
+        : `Node 22 fallback acquisition/start failed (npx --package=node@22.23.2): ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
+    );
+  }
+  if (run.signal || run.status !== 0) {
+    throw new Error(
+      node22Path
+        ? `KYOSO_NODE22 binary exited ${String(run.status)}${run.signal ? ` by ${run.signal}` : ""}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
+        : `Node 22 fallback acquisition/start exited ${String(run.status)}${run.signal ? ` by ${run.signal}` : ""}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
+    );
+  }
+
+  const output = run.stdout ?? "";
+  const absoluteConfigPath = realpathSync(configPath);
+  if (
+    !output.includes(
+      `kyoso.config.ts: found ${absoluteConfigPath} (deprecated)`,
+    )
+  ) {
+    throw new Error(
+      "Node 22 packed config smoke did not report the exact config path",
+    );
+  }
+  if (!output.includes("trusted config: trusted by --trust-config")) {
+    throw new Error("Node 22 packed config smoke did not report flag trust");
+  }
+  if (!output.includes("network default: unrestricted")) {
+    throw new Error(
+      "Node 22 packed config smoke did not report unrestricted network default",
+    );
+  }
 }
 
 // Parse `tar -tvf` lines (mode is the first column, the entry name the last

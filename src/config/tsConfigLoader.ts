@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import { dirname, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 import { defineConfig as localDefineConfig } from "./defineConfig.js";
 
 type ConfigModule = {

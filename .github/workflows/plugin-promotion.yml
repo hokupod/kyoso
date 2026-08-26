@@ -59,7 +59,7 @@ jobs:
         run: bun run plugin:verify:published-cli
 
       - name: Install safe-chain
-        run: npm install -g @aikidosec/safe-chain@1.5.14
+        run: npm install -g @aikidosec/safe-chain@1.5.15
 
       - name: Setup safe-chain shims
         run: safe-chain setup-ci

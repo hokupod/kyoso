@@ -269,44 +269,44 @@ function verifyPackedTypeScriptBundle(tarballPath) {
 function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
   const consumerDir = join(tempDir, "production-consumer");
   const npmCacheDir = join(tempDir, "production-npm-cache");
-  const configuredNode22 = process.env.KYOSO_NODE22?.trim();
-  let node22Path;
-  if (configuredNode22) {
-    if (!isAbsolute(configuredNode22)) {
+  const configuredSmokeNode = process.env.KYOSO_PACK_SMOKE_NODE?.trim();
+  let smokeNodePath;
+  if (configuredSmokeNode) {
+    if (!isAbsolute(configuredSmokeNode)) {
       throw new Error(
-        `KYOSO_NODE22 must be an absolute path; got ${configuredNode22}`,
+        `KYOSO_PACK_SMOKE_NODE must be an absolute path; got ${configuredSmokeNode}`,
       );
     }
     try {
-      node22Path = realpathSync(configuredNode22);
+      smokeNodePath = realpathSync(configuredSmokeNode);
     } catch (error) {
       throw new Error(
-        `KYOSO_NODE22 path could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
+        `KYOSO_PACK_SMOKE_NODE path could not be resolved: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    const versionProbe = spawnSync(node22Path, ["--version"], {
+    const versionProbe = spawnSync(smokeNodePath, ["--version"], {
       encoding: "utf8",
       timeout: 5_000,
     });
     if (versionProbe.error) {
       throw new Error(
-        `KYOSO_NODE22 binary version probe failed to start: ${versionProbe.error.message}`,
+        `KYOSO_PACK_SMOKE_NODE binary version probe failed to start: ${versionProbe.error.message}`,
       );
     }
     if (versionProbe.status !== 0) {
       throw new Error(
-        `KYOSO_NODE22 binary version probe exited ${String(versionProbe.status)}${versionProbe.stderr ? `; stderr: ${versionProbe.stderr.trim().slice(0, 400)}` : ""}`,
+        `KYOSO_PACK_SMOKE_NODE binary version probe exited ${String(versionProbe.status)}${versionProbe.stderr ? `; stderr: ${versionProbe.stderr.trim().slice(0, 400)}` : ""}`,
       );
     }
     const reportedVersion = versionProbe.stdout.trim();
-    if (!/^v22\.\d+\.\d+$/.test(reportedVersion)) {
+    if (!/^v(?:22|24|26)\.\d+\.\d+$/.test(reportedVersion)) {
       throw new Error(
-        `KYOSO_NODE22 must report exact Node 22 semver v22.x.y; got ${reportedVersion || "no version"}`,
+        `KYOSO_PACK_SMOKE_NODE must report an exact supported Node semver (v22.x.y, v24.x.y, or v26.x.y); got ${reportedVersion || "no version"}`,
       );
     }
   } else if (process.env.CI === "true") {
     throw new Error(
-      "KYOSO_NODE22 is required in CI; capture the Node 22 setup-node binary before pack:verify",
+      "KYOSO_PACK_SMOKE_NODE is required in CI; capture the packed config smoke setup-node binary before pack:verify",
     );
   }
   mkdirSync(consumerDir, { recursive: true });
@@ -360,12 +360,12 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
     "utf8",
   );
 
-  const homeDir = join(tempDir, "production-home-node22");
-  const xdgConfigDir = join(tempDir, "production-xdg-node22");
-  const codexHomeDir = join(tempDir, "production-codex-home-node22");
+  const homeDir = join(tempDir, "production-home-pack-smoke");
+  const xdgConfigDir = join(tempDir, "production-xdg-pack-smoke");
+  const codexHomeDir = join(tempDir, "production-codex-home-pack-smoke");
   const trustStorePath = join(
     tempDir,
-    "production-trust-node22",
+    "production-trust-pack-smoke",
     "trusted.json",
   );
   mkdirSync(homeDir, { recursive: true });
@@ -381,7 +381,7 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
     KYOSO_TRUST_STORE_PATH: trustStorePath,
     npm_config_cache: npmCacheDir,
   };
-  if (!node22Path) {
+  if (!smokeNodePath) {
     const fallbackProbe = spawnSync(
       "npx",
       ["--yes", "--package=node@22.23.2", "node", "--version"],
@@ -411,8 +411,8 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
       );
     }
   }
-  const node22Command = node22Path ?? "npx";
-  const node22Args = node22Path
+  const smokeNodeCommand = smokeNodePath ?? "npx";
+  const smokeNodeArgs = smokeNodePath
     ? [cliPath, "doctor", "--trust-config"]
     : [
         "--yes",
@@ -422,7 +422,7 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
         "doctor",
         "--trust-config",
       ];
-  const run = spawnSync(node22Command, node22Args, {
+  const run = spawnSync(smokeNodeCommand, smokeNodeArgs, {
     cwd: consumerDir,
     env: smokeEnv,
     encoding: "utf8",
@@ -432,15 +432,15 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
   const stderr = (run.stderr ?? "").trim();
   if (run.error) {
     throw new Error(
-      node22Path
-        ? `KYOSO_NODE22 binary failed to start packed config smoke: ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
+      smokeNodePath
+        ? `KYOSO_PACK_SMOKE_NODE binary failed to start packed config smoke: ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
         : `Node 22 fallback acquisition/start failed (npx --package=node@22.23.2): ${run.error.message}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
     );
   }
   if (run.signal || run.status !== 0) {
     throw new Error(
-      node22Path
-        ? `KYOSO_NODE22 binary exited ${String(run.status)}${run.signal ? ` by ${run.signal}` : ""}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
+      smokeNodePath
+        ? `KYOSO_PACK_SMOKE_NODE binary exited ${String(run.status)}${run.signal ? ` by ${run.signal}` : ""}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`
         : `Node 22 fallback acquisition/start exited ${String(run.status)}${run.signal ? ` by ${run.signal}` : ""}${stderr ? `; stderr: ${stderr.slice(0, 400)}` : ""}`,
     );
   }
@@ -452,16 +452,14 @@ function verifyPackedProductionTypeScriptConfig(tarballPath, tempDir) {
       `kyoso.config.ts: found ${absoluteConfigPath} (deprecated)`,
     )
   ) {
-    throw new Error(
-      "Node 22 packed config smoke did not report the exact config path",
-    );
+    throw new Error("Packed config smoke did not report the exact config path");
   }
   if (!output.includes("trusted config: trusted by --trust-config")) {
-    throw new Error("Node 22 packed config smoke did not report flag trust");
+    throw new Error("Packed config smoke did not report flag trust");
   }
   if (!output.includes("network default: unrestricted")) {
     throw new Error(
-      "Node 22 packed config smoke did not report unrestricted network default",
+      "Packed config smoke did not report unrestricted network default",
     );
   }
 }

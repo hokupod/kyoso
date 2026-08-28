@@ -2297,7 +2297,7 @@ manifest uses `interface.composerIcon` and `interface.logo` to point to the
 same bundled `./assets/kyoso-icon.png`; the Claude manifest does not declare
 these Codex-specific fields.
 
-Marketplace Plugin `0.7.19` pins `@kyo-so/cli@0.16.10` and uses `npx --package` with the `kyoso-cli` npm alias to select the `kyoso` executable explicitly. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`. Its Claude MCP definition declares optional empty-default placeholders for `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENROUTER_API_KEY`, because Claude Code does not implicitly inherit its own OAuth token into an MCP subprocess. These surfaces expose variable names without storing credential values. Kyoso applies the configured Claude auth preference before launching the Claude child, forwards the OpenRouter value only to a Codex child that explicitly selects OpenRouter, and treats an empty optional expansion or a recognized unexpanded credential placeholder as missing.
+Marketplace Plugin `0.7.20` pins `@kyo-so/cli@0.16.11` and uses `npx --package` with the `kyoso-cli` npm alias to select the `kyoso` executable explicitly. Its Codex MCP definition allowlists `OPENROUTER_API_KEY`. Its Claude MCP definition declares optional empty-default placeholders for `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENROUTER_API_KEY`, because Claude Code does not implicitly inherit its own OAuth token into an MCP subprocess. These surfaces expose variable names without storing credential values. Kyoso applies the configured Claude auth preference before launching the Claude child, forwards the OpenRouter value only to a Codex child that explicitly selects OpenRouter, and treats an empty optional expansion or a recognized unexpanded credential placeholder as missing.
 
 The distribution contract has these required invariants, checked by
 `plugin:verify` in normal CI and promotion verification:
@@ -2339,7 +2339,7 @@ reintroduction of the root file.
 
 ## 23. Client configuration examples
 
-These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. The `--with-openrouter` additions below therefore apply only when `kyoso setup` creates a new manual entry; Marketplace Plugin `0.7.19` has its separate pinned `@kyo-so/cli@0.16.10` contract described in §22.4.
+These are user-managed manual client-registration templates, not Marketplace Plugin manifest templates. The `--with-openrouter` additions below therefore apply only when `kyoso setup` creates a new manual entry; Marketplace Plugin `0.7.20` has its separate pinned `@kyo-so/cli@0.16.11` contract described in §22.4.
 
 ### 23.1 Codex config example
 

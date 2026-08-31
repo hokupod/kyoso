@@ -154,7 +154,7 @@ Use Kyoso diff_review on the current diff. I need a second opinion before mergin
 
 ## CLI
 
-package-runner 执行路径会把 npm package 安装为本地 alias `kyoso-cli`：`npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso` 与 `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso`。两种形式都分别指定 package 和 executable，因此都不依赖 multi-bin package 的 binary 推断；alias 还能防止 package 名同为 `@kyo-so/cli` 的 checkout 遮蔽已发布的 package。需要固定 workflow 时，在真实 package 名后加 complete SemVer pin，例如 `kyoso-cli@npm:@kyo-so/cli@0.16.11`。下面的示例把已安装 executable 简写为 `kyoso`。Naming note: npm package 是 `@kyo-so/cli` (对应产品名 Kyo-so)，package-runner alias 是 `kyoso-cli`，安装后的 CLI command 是更短的 `kyoso`。
+package-runner 执行路径会把 npm package 安装为本地 alias `kyoso-cli`：`npx -y --package=kyoso-cli@npm:@kyo-so/cli kyoso` 与 `bunx --package kyoso-cli@npm:@kyo-so/cli kyoso`。两种形式都分别指定 package 和 executable，因此都不依赖 multi-bin package 的 binary 推断；alias 还能防止 package 名同为 `@kyo-so/cli` 的 checkout 遮蔽已发布的 package。需要固定 workflow 时，在真实 package 名后加 complete SemVer pin，例如 `kyoso-cli@npm:@kyo-so/cli@0.16.12`。下面的示例把已安装 executable 简写为 `kyoso`。Naming note: npm package 是 `@kyo-so/cli` (对应产品名 Kyo-so)，package-runner alias 是 `kyoso-cli`，安装后的 CLI command 是更短的 `kyoso`。
 
 alias 之前写入的注册仍然受支持，并被分类为 `current`。npx 可用时 npx 注册保持 `ready`；bunx 注册在 setup 验证其所需的 Bun capability 之前保持 `unverified`。`kyoso doctor` 会警告缺少 alias 并给出应写入的 spec；setup 会保留该 entry，因此这项修复需手动编辑。
 

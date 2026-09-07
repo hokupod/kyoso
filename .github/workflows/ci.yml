@@ -10,6 +10,48 @@ permissions:
   contents: read
 
 jobs:
+  codex-startup-diagnostic:
+    if: github.event_name == 'pull_request' && github.head_ref == 'diagnose/codex-acp-startup'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [native, wrapped]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.19.0"
+      - name: Capture native npx
+        run: echo "DIAGNOSTIC_NATIVE_NPX=$(command -v npx)" >> "$GITHUB_ENV"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - name: Install safe-chain
+        run: npm install -g @aikidosec/safe-chain@1.5.15
+      - name: Setup safe-chain shims
+        run: safe-chain setup-ci
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Diagnose cold and warm ACP startup
+        env:
+          DIAGNOSTIC_RUNNER: ${{ matrix.runner }}
+        run: |
+          node --version
+          bun --version
+          "$DIAGNOSTIC_NATIVE_NPX" --version
+          if [ "$DIAGNOSTIC_RUNNER" = native ]; then
+            bun scripts/diagnose-codex-startup.ts "$DIAGNOSTIC_NATIVE_NPX"
+          else
+            bun scripts/diagnose-codex-startup.ts "$(command -v npx)"
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:

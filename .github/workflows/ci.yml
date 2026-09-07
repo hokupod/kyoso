@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [native, wrapped]
+        runner: [native, wrapped, original]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -40,6 +40,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Diagnose cold and warm ACP startup
+        if: matrix.runner != 'original'
         env:
           DIAGNOSTIC_RUNNER: ${{ matrix.runner }}
         run: |
@@ -51,6 +52,23 @@ jobs:
           else
             bun scripts/diagnose-codex-startup.ts "$(command -v npx)"
           fi
+      - name: Run original release gate unchanged
+        if: matrix.runner == 'original'
+        env:
+          KYOSO_CODEX_ACP_MOCK_SSE: "1"
+        run: bun test test/integration/codexAcpMockSse.test.ts test/unit/mockResponsesServer.test.ts
+      - name: Print original gate npm fetch timing
+        if: always() && matrix.runner == 'original'
+        run: |
+          node --input-type=module -e '
+            import { readdirSync, readFileSync } from "node:fs";
+            import { join } from "node:path";
+            const root = join(process.env.HOME, ".npm", "_logs");
+            for (const file of readdirSync(root)) {
+              const lines = readFileSync(join(root, file), "utf8").split("\n");
+              console.log(JSON.stringify({file, fetches: lines.filter(line => /^\d+ http fetch /.test(line))}));
+            }
+          '
 
   test:
     runs-on: ubuntu-latest

@@ -36,7 +36,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
@@ -100,7 +100,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain
@@ -139,7 +139,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       # Pin the version: safe-chain itself is a supply-chain trust anchor
       - name: Install safe-chain

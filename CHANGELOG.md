@@ -7,10 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.14] - 2026-09-10
+
 ### Changed
 
 - Promote the Marketplace Plugin to `0.7.22` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.13`.
+- Update Zod to `4.5.4`, Bun CI to `1.4.2`, and Bun type definitions to `1.4.1`.
+- Update Safe Chain to `1.5.16`.
+- Update the default Codex ACP adapter to `1.10.0` and Claude ACP adapter to
+  `0.75.1`.
+- Keep the reviewed checkout pin synchronized with Renovate workflow updates.
 
 ## [0.16.13] - 2026-09-01
 

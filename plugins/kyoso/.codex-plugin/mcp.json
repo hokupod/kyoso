@@ -3,7 +3,7 @@
     "command": "npx",
     "args": [
       "-y",
-      "--package=kyoso-cli@npm:@kyo-so/cli@0.16.13",
+      "--package=kyoso-cli@npm:@kyo-so/cli@0.16.14",
       "kyoso",
       "mcp"
     ],

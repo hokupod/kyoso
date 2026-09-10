@@ -32,6 +32,9 @@ const pluginIconRelativePath = `${pluginRootRelativePath}/assets/kyoso-icon.png`
 const pluginSkillInstructionsRelativePath = "SKILL.md";
 const pluginOpenAiMetadataRelativePath = "agents/openai.yaml";
 const promotionWorkflowRelativePath = ".github/workflows/plugin-promotion.yml";
+// Renovate updates this reviewed pin together with the workflow references.
+const promotionCheckout =
+  "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"; // v7
 const promotionWorkflowPullRequestPaths = [
   ".agents/plugins/**",
   ".agents/skills/kyoso-review/**",
@@ -1351,8 +1354,7 @@ function validatePromotionCloseJob(workflow, failures) {
   const [checkoutStep, setupNodeStep, reconcileStep] = closeJob.steps;
   if (
     closeJob.steps.length !== 3 ||
-    stripWorkflowComment(checkoutStep?.uses) !==
-      "actions/checkout@" + "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0" ||
+    stripWorkflowComment(checkoutStep?.uses) !== promotionCheckout ||
     !checkoutStep.lines.includes("          persist-credentials: false") ||
     stripWorkflowComment(setupNodeStep?.uses) !==
       "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||

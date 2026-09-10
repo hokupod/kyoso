@@ -3,7 +3,25 @@
   "extends": ["config:best-practices", ":timezone(Asia/Tokyo)"],
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "packageRules": [
+    {
+      "description": "Keep checkout workflow references and the promotion verifier pin in one PR",
+      "matchPackageNames": ["actions/checkout"],
+      "groupName": "actions/checkout"
+    }
+  ],
   "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Reviewed checkout pin used by the privileged promotion verifier",
+      "managerFilePatterns": ["/^scripts/plugin-distribution\\.mjs$/"],
+      "matchStrings": [
+        "\"(?<depName>actions/checkout)@(?<currentDigest>[a-f0-9]{40})\"; // (?<currentValue>v[0-9]+(?:\\.[0-9]+){0,2})"
+      ],
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "github-actions",
+      "depTypeTemplate": "action"
+    },
     {
       "customType": "regex",
       "description": "ACP adapter versions pinned in the default config",

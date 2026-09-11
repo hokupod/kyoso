@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.15] - 2026-09-11
+
 ### Changed
+
+- Update Safe Chain to `1.5.17`.
 
 - Promote the Marketplace Plugin to `0.7.23` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.14`.

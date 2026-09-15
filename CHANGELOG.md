@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.16] - 2026-09-15
+
 ### Changed
+
+- Update Bun type definitions to `1.4.2`.
+- Update the pinned CI supply-chain guard `@aikidosec/safe-chain` to `1.5.20`.
 
 - Promote the Marketplace Plugin to `0.7.24` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.15`.

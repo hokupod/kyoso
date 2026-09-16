@@ -1,6 +1,6 @@
 {
   "name": "kyoso",
-  "version": "0.7.25",
+  "version": "0.7.26",
   "description": "Multi-agent review gates powered by Codex and Claude.",
   "author": {
     "name": "hokupod",

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.20] - 2026-09-24
+
 ### Changed
+
+- Update Prettier to `3.9.8`.
 
 - Promote the Marketplace Plugin to `0.7.28` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.19`.

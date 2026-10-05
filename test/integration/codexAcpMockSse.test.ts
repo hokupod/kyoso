@@ -215,7 +215,12 @@ describe("Codex ACP mock Responses SSE integration", () => {
         throw scenarioFailure("HTTP 401 retry exhaustion", scenario);
       }
       expect(scenario.requests).toHaveLength(3);
-      expectObservedRetries(scenario, 2);
+      // Codex ACP v2 suppresses auth-error retry notifications and rejects
+      // prompt() with authRequired after the backend exhausts its retries.
+      expectObservedRetries(scenario, 0);
+      expect(scenario.result.error?.code).toBe("AUTH_FAILED");
+      expect(scenario.result.normalized).toBeUndefined();
+      expect(scenario.result.salvaged).toBeUndefined();
     },
     60_000,
   );

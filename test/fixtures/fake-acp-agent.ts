@@ -273,6 +273,22 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       residualRisks: ["fake ACP subprocess residual risk"],
       openQuestions: [],
     };
+    if (mode === "notice_then_final") {
+      await ctx.client.notify(methods.client.session.update, {
+        sessionId: ctx.params.sessionId,
+        update: {
+          sessionUpdate: "notice",
+          severity: "warning",
+          title: "Model metadata unavailable",
+          description: "Using fallback metadata.",
+        },
+      });
+    }
+    if (mode === "retry_then_auth_error") {
+      await notifyMessageChunk('{"summary":"par', "msg-a");
+      await notifyRetry("Reconnecting... 1/3");
+      throw RequestError.authRequired({ message: "Authentication failed" });
+    }
     if (mode === "retry_partial_then_final") {
       await notifyMessageChunk('{"summary":"par', "msg-a");
       await notifyRetry("Reconnecting... 1/3");

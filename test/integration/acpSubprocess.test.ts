@@ -48,6 +48,30 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(result.normalized?.testsToAdd).toContain("fake ACP subprocess test");
   });
 
+  test("keeps advisory notices out of review text and byte counts", async () => {
+    const result = await new SubprocessAcpAgentManager(
+      fakeAcpConfig("notice_then_final"),
+    ).runAgent(agentInput(await fakeWorkspace()));
+    expect(result.status).toBe("completed");
+    expect(result.rawText).not.toContain("Model metadata");
+    expect(result.warnings).toEqual([
+      "Model metadata unavailable: Using fallback metadata.",
+    ]);
+    expect(result.messageBytes).toBe(Buffer.byteLength(result.rawText ?? ""));
+  });
+
+  test("preserves retry metrics when prompt rejects with an auth error", async () => {
+    const result = await new SubprocessAcpAgentManager(
+      fakeAcpConfig("retry_then_auth_error"),
+    ).runAgent(agentInput(await fakeWorkspace()));
+    expect(result.status).toBe("failed");
+    expect(result.observedStreamRetries).toBe(1);
+    expect(result.discardedRetryMessageBytes).toBe(15);
+    expect(result.rawText).toBe("");
+    expect(result.error?.message).toContain("authentication failed");
+    expect(result.salvaged).toBeUndefined();
+  });
+
   test("does not settle a spawned agent before asynchronous start tracing completes", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(fakeAcpConfig("happy"));
@@ -674,6 +698,8 @@ type FakeAcpMode =
   | "invalid_then_thought"
   | "partial_then_thought"
   | "valid_with_overflow_suffix"
+  | "notice_then_final"
+  | "retry_then_auth_error"
   | "retry_partial_then_final"
   | "retry_twice_then_final"
   | "retry_then_unknown_final"

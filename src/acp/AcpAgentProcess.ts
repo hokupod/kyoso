@@ -363,7 +363,7 @@ async function runSubprocessAgent(
           });
           return;
         }
-        if (error instanceof CodexTerminalSystemError) {
+        if (error instanceof AcpTerminalError) {
           stdout = error.rawText;
           const failureText = [stderr, formatAgentErrorDetail(error)]
             .filter((part) => part.trim().length > 0)
@@ -521,6 +521,7 @@ async function runAcpClientWorkflow(
           readTextFile: true,
           writeTextFile: false,
         },
+        session: { notices: {} },
       },
     });
 
@@ -648,7 +649,7 @@ async function runAcpClientWorkflow(
             if (message.kind === "stop") {
               await promptCompletion;
               if (codexReportedSystemError) {
-                throw new CodexTerminalSystemError(
+                throw new AcpTerminalError(
                   accumulator.finalRawText(),
                   messageBytes,
                   thoughtBytes,
@@ -677,6 +678,14 @@ async function runAcpClientWorkflow(
 
             const update = message.update;
             accumulator.noteUpdate();
+            if (update.sessionUpdate === "notice") {
+              const notice = sanitizeTextForDisplay(
+                [update.title, update.description].filter(Boolean).join(": "),
+              );
+              if (notice && warnings.length < 16)
+                warnings.push(notice.slice(0, 1000));
+              continue;
+            }
             const retry = parseCodexRetryUpdate(update);
             if (retry) {
               codexReportedSystemError = false;
@@ -775,6 +784,24 @@ async function runAcpClientWorkflow(
               });
             }
           }
+        } catch (error) {
+          if (
+            error instanceof AcpTerminalError ||
+            error instanceof KyosoCancellationError ||
+            error instanceof AcpNdJsonLineLimitError ||
+            abortController.signal.aborted
+          ) {
+            throw error;
+          }
+          throw new AcpTerminalError(
+            accumulator.finalRawText(),
+            messageBytes,
+            thoughtBytes,
+            outputBytes,
+            outputWarningTriggered,
+            accumulator.metrics(),
+            formatAgentErrorDetail(error),
+          );
         } finally {
           stopHeartbeat();
           input.signal?.removeEventListener("abort", stopHeartbeat);
@@ -812,7 +839,7 @@ class AgentOutputLimitError extends Error {
   }
 }
 
-class CodexTerminalSystemError extends Error {
+class AcpTerminalError extends Error {
   constructor(
     readonly rawText: string,
     readonly messageBytes: number,
@@ -820,12 +847,13 @@ class CodexTerminalSystemError extends Error {
     readonly outputBytes: number,
     readonly outputWarningTriggered: boolean,
     readonly metrics: AgentOutputMetrics,
+    failureMessage?: string,
   ) {
     super(
-      sanitizeTextForDisplay(rawText) ||
+      sanitizeTextForDisplay(failureMessage ?? rawText) ||
         "Codex ACP reported a terminal system error.",
     );
-    this.name = "CodexTerminalSystemError";
+    this.name = "AcpTerminalError";
   }
 }
 

@@ -586,7 +586,8 @@ export default defineConfig({
       cwd,
       ignoreConfig: true,
       env: {
-        PATH: process.env.PATH ?? "",
+        PATH: cwd,
+        HOME: cwd,
         CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
       },
     });
@@ -602,7 +603,8 @@ export default defineConfig({
       cwd,
       ignoreConfig: true,
       env: {
-        PATH: process.env.PATH ?? "",
+        PATH: cwd,
+        HOME: cwd,
         ANTHROPIC_API_KEY: "api-key",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth-token",
       },

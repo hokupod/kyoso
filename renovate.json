@@ -3,6 +3,10 @@
   "extends": ["config:best-practices", ":timezone(Asia/Tokyo)"],
   "labels": ["dependencies"],
   "minimumReleaseAge": "3 days",
+  "lockFileMaintenance": {
+    "schedule": ["* 0-3 1 * *"],
+    "updateNotScheduled": false
+  },
   "packageRules": [
     {
       "description": "Keep checkout workflow references and the promotion verifier pin in one PR",

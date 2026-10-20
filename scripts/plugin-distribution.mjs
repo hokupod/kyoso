@@ -35,6 +35,8 @@ const promotionWorkflowRelativePath = ".github/workflows/plugin-promotion.yml";
 // Renovate updates this reviewed pin together with the workflow references.
 const promotionCheckout =
   "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"; // v7
+const promotionSetupNode =
+  "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1"; // v7
 const promotionWorkflowPullRequestPaths = [
   ".agents/plugins/**",
   ".agents/skills/kyoso-review/**",
@@ -1356,8 +1358,7 @@ function validatePromotionCloseJob(workflow, failures) {
     closeJob.steps.length !== 3 ||
     stripWorkflowComment(checkoutStep?.uses) !== promotionCheckout ||
     !checkoutStep.lines.includes("          persist-credentials: false") ||
-    stripWorkflowComment(setupNodeStep?.uses) !==
-      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
+    stripWorkflowComment(setupNodeStep?.uses) !== promotionSetupNode ||
     !setupNodeStep.lines.includes('          node-version: "24"') ||
     reconcileStep?.run !== "node scripts/plugin-promotion-issues.mjs"
   ) {

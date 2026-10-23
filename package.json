@@ -61,7 +61,7 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.9.0",
+    "@agentclientprotocol/sdk": "2.0.0",
     "@modelcontextprotocol/server": "2.3.1",
     "smol-toml": "1.9.1",
     "zod": "4.6.5"

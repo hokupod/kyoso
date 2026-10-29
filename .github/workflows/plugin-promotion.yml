@@ -51,7 +51,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: "1.4.2"
+          bun-version: "1.4.4"
 
       # Verify the exact first-party artifact before Safe-chain shims can alter
       # package metadata or write wrapper notices into the MCP stdout stream.
@@ -59,7 +59,7 @@ jobs:
         run: bun run plugin:verify:published-cli
 
       - name: Install safe-chain
-        run: npm install -g @aikidosec/safe-chain@1.5.24
+        run: npm install -g @aikidosec/safe-chain@1.5.26
 
       - name: Setup safe-chain shims
         run: safe-chain setup-ci
@@ -103,7 +103,7 @@ jobs:
         run: bun run plugin:runtime:verify
 
       - name: Upload compatibility record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-plugin-runtime-compatibility
           path: docs/compatibility/codex-plugin-runtime.json

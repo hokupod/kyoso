@@ -1,6 +1,6 @@
 {
   "name": "kyoso",
-  "version": "0.7.29",
+  "version": "0.7.30",
   "description": "Multi-agent review gates powered by Codex and Claude.",
   "author": {
     "name": "hokupod",
@@ -16,7 +16,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "--package=kyoso-cli@npm:@kyo-so/cli@0.16.20",
+        "--package=kyoso-cli@npm:@kyo-so/cli@0.16.21",
         "kyoso",
         "mcp"
       ],

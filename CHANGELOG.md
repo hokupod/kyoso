@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.21] - 2026-10-29
+
+### Security
+
+- Update Zod to `4.6.7`, including the `4.6.6` fix for excessive memory use
+  while validating oversized arrays, maps, and sets (GHSA-mrhx-c7xc-m3w5).
+
 ### Changed
+
+- Update the MCP server SDK to `2.4.0` and the ACP SDK to `1.9.0`.
+- Update the default pinned Codex ACP adapter to `2.2.2` and Claude ACP adapter
+  to `0.86.0`.
+- Update smol-toml to `1.9.1`, Prettier to `3.9.10`, Bun CI and type definitions
+  to `1.4.4`, and the pinned Safe Chain guard to `1.5.26`.
+- Update the setup-node digest and upload-artifact action, and keep the reviewed
+  setup-node verifier pin synchronized with Renovate workflow updates.
+- Preserve ACP terminal error diagnostics and surface supported session notices.
 
 - Promote the Marketplace Plugin to `0.7.29` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to `@kyo-so/cli@0.16.20`.

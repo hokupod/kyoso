@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.22] - 2026-10-30
+
 ### Changed
 
+- Update the default pinned Codex ACP adapter to `2.3.0` and Claude ACP adapter
+  to `0.97.0`, following each adapter's own CLI and SDK dependencies.
 - Promote the Marketplace Plugin to `0.7.30` and pin its Codex and Claude Code
   MCP definitions and Skill fallbacks to the published `@kyo-so/cli@0.16.21`.
 

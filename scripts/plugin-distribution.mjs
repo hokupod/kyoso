@@ -1359,11 +1359,11 @@ function validatePromotionCloseJob(workflow, failures) {
     stripWorkflowComment(checkoutStep?.uses) !== promotionCheckout ||
     !checkoutStep.lines.includes("          persist-credentials: false") ||
     stripWorkflowComment(setupNodeStep?.uses) !== promotionSetupNode ||
-    !setupNodeStep.lines.includes('          node-version: "24"') ||
+    !setupNodeStep.lines.includes('          node-version: "26"') ||
     reconcileStep?.run !== "node scripts/plugin-promotion-issues.mjs"
   ) {
     failures.push(
-      "Plugin promotion close job steps must be checkout, Node 24 setup, and reconciliation only",
+      "Plugin promotion close job steps must be checkout, Node 26 setup, and reconciliation only",
     );
   }
   if (

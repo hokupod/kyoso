@@ -960,7 +960,7 @@ describe("Codex Plugin fixture", () => {
                 workflow.value +=
                   "\\n      - name: Extra issue writer\\n        run: gh issue close 1\\n";
               },
-              expected: "close job steps must be checkout, Node 24 setup, and reconciliation only",
+              expected: "close job steps must be checkout, Node 26 setup, and reconciliation only",
             },
             {
               name: "inert safe-chain verification",

@@ -6,7 +6,7 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   RequestError,
-} from "@agentclientprotocol/sdk";
+} from "@agentclientprotocol/sdk/unstable";
 import { writeFileSync } from "node:fs";
 
 let initialized = false;

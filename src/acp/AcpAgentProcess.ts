@@ -8,7 +8,7 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   RequestError,
-} from "@agentclientprotocol/sdk";
+} from "@agentclientprotocol/sdk/unstable";
 import type { KyosoConfig } from "../config/schema.js";
 import type {
   AgentName,

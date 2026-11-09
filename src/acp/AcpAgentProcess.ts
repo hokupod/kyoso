@@ -546,6 +546,14 @@ async function runAcpClientWorkflow(
         };
         onSessionReady(cancelSession);
         throwIfAborted(input.signal);
+        abortController.signal.throwIfAborted();
+        if (input.agent === "claude") {
+          await ctx.request(
+            methods.agent.session.setMode,
+            { sessionId: session.sessionId, modeId: "default" },
+            { cancellationSignal: abortController.signal },
+          );
+        }
         const warnings: string[] = [];
         if (configOption) {
           // Backend agents throw the same error both when a model doesn't
@@ -622,6 +630,8 @@ async function runAcpClientWorkflow(
         input.signal?.addEventListener("abort", stopHeartbeat, { once: true });
 
         try {
+          throwIfAborted(input.signal);
+          abortController.signal.throwIfAborted();
           const promptResponse = session.prompt(input.prompt, {
             cancellationSignal: abortController.signal,
           });

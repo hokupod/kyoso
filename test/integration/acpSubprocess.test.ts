@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -569,6 +569,168 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(startEvents).toBe(0);
   });
 
+  test("manual mode acknowledgement precedes every Claude prompt", async () => {
+    const cwd = await fakeWorkspace();
+    const events = join(cwd, "setup-events");
+    const release = join(cwd, "mode-release");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig(
+        "happy",
+        {
+          FAKE_ACP_REQUIRE_MANUAL: "1",
+          FAKE_ACP_SETUP_EVENTS_FILE: events,
+          FAKE_ACP_MODE_RELEASE_FILE: release,
+        },
+        { agent: "claude" },
+      ),
+    );
+    const result = manager.runAgent(agentInput(cwd, { agent: "claude" }));
+    try {
+      await waitFor(() => setupEvents(events).includes("mode-request:default"));
+      expect(setupEvents(events)).toEqual(["mode-request:default"]);
+    } finally {
+      await writeFile(release, "release");
+      await result;
+    }
+    expect((await result).status).toBe("completed");
+    expect(setupEvents(events)).toEqual([
+      "mode-request:default",
+      "mode-acknowledged",
+      "prompt",
+    ]);
+  });
+
+  test("manual mode rejection prevents the Claude prompt", async () => {
+    const cwd = await fakeWorkspace();
+    const events = join(cwd, "setup-events");
+    const pidPath = join(cwd, "agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig(
+        "happy",
+        {
+          FAKE_ACP_SETUP_EVENTS_FILE: events,
+          FAKE_ACP_REJECT_MODE: "1",
+          FAKE_ACP_PID_FILE: pidPath,
+        },
+        { agent: "claude" },
+      ),
+    );
+    const result = await manager.runAgent(agentInput(cwd, { agent: "claude" }));
+    expect(result.status).toBe("failed");
+    await waitFor(() => !isProcessAlive(Number(readFileSync(pidPath, "utf8"))));
+    expect(setupEvents(events)).toEqual(["mode-request:default"]);
+  });
+
+  test.each(["mode", "effort"] as const)(
+    "manual mode setup cancellation during %s prevents the Claude prompt",
+    async (step) => {
+      const cwd = await fakeWorkspace();
+      const events = join(cwd, "setup-events");
+      const pidPath = join(cwd, "agent.pid");
+      const manager = new SubprocessAcpAgentManager(
+        fakeAcpConfig(
+          "happy",
+          {
+            FAKE_ACP_SETUP_EVENTS_FILE: events,
+            FAKE_ACP_PID_FILE: pidPath,
+            [step === "mode"
+              ? "FAKE_ACP_MODE_RELEASE_FILE"
+              : "FAKE_ACP_EFFORT_RELEASE_FILE"]: join(cwd, "unreleased"),
+          },
+          { agent: "claude", ...(step === "effort" ? { effort: "high" } : {}) },
+        ),
+      );
+      const controller = new AbortController();
+      const result = manager.runAgent(
+        agentInput(cwd, {
+          agent: "claude",
+          signal: controller.signal,
+        }),
+      );
+      const settled = result.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await waitFor(() =>
+        setupEvents(events).includes(
+          step === "mode" ? "mode-request:default" : "effort-request",
+        ),
+      );
+      controller.abort(new KyosoCancellationError("cancel held setup"));
+      expect(await settled).toMatchObject({
+        error: { code: "REQUEST_CANCELLED" },
+      });
+      await waitFor(
+        () => !isProcessAlive(Number(readFileSync(pidPath, "utf8"))),
+      );
+      expect(setupEvents(events)).not.toContain("prompt");
+      if (step === "effort")
+        expect(setupEvents(events)).toContain("mode-acknowledged");
+    },
+  );
+
+  test("manual mode setup timeout prevents the Claude prompt", async () => {
+    const cwd = await fakeWorkspace();
+    const events = join(cwd, "setup-events");
+    const pidPath = join(cwd, "agent.pid");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig(
+        "happy",
+        {
+          FAKE_ACP_SETUP_EVENTS_FILE: events,
+          FAKE_ACP_PID_FILE: pidPath,
+          FAKE_ACP_MODE_RELEASE_FILE: join(cwd, "unreleased"),
+        },
+        { agent: "claude" },
+      ),
+    );
+    const result = await manager.runAgent(
+      agentInput(cwd, { agent: "claude", timeoutMs: 1_000 }),
+    );
+    expect(result.status).toBe("timeout");
+    expect(result.error?.code).toBe("AGENT_TIMEOUT");
+    await waitFor(() => !isProcessAlive(Number(readFileSync(pidPath, "utf8"))));
+    expect(setupEvents(events)).toEqual(["mode-request:default"]);
+  });
+
+  test("manual mode selection leaves Codex protocol unchanged", async () => {
+    const cwd = await fakeWorkspace();
+    const events = join(cwd, "setup-events");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig("happy", {
+        FAKE_ACP_SETUP_EVENTS_FILE: events,
+        FAKE_ACP_REJECT_MODE: "1",
+      }),
+    );
+    expect((await manager.runAgent(agentInput(cwd))).status).toBe("completed");
+    expect(setupEvents(events)).toEqual(["prompt"]);
+  });
+
+  test("manual mode remains required when optional Claude effort is rejected", async () => {
+    const cwd = await fakeWorkspace();
+    const events = join(cwd, "setup-events");
+    const manager = new SubprocessAcpAgentManager(
+      fakeAcpConfig(
+        "happy",
+        {
+          FAKE_ACP_REQUIRE_MANUAL: "1",
+          FAKE_ACP_SETUP_EVENTS_FILE: events,
+          FAKE_ACP_REJECT_CONFIG_OPTION: "1",
+        },
+        { agent: "claude", effort: "high" },
+      ),
+    );
+    const result = await manager.runAgent(agentInput(cwd, { agent: "claude" }));
+    expect(result.status).toBe("completed");
+    expect(result.warnings).toHaveLength(1);
+    expect(setupEvents(events)).toEqual([
+      "mode-request:default",
+      "mode-acknowledged",
+      "effort-request",
+      "prompt",
+    ]);
+  });
+
   test("forwards codex effort as reasoning_effort before prompting", async () => {
     const cwd = await fakeWorkspace();
     const manager = new SubprocessAcpAgentManager(
@@ -802,4 +964,8 @@ async function waitFor(condition: () => boolean): Promise<void> {
     await Bun.sleep(10);
   }
   throw new Error("Timed out waiting for condition");
+}
+
+function setupEvents(path: string): string[] {
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n") : [];
 }

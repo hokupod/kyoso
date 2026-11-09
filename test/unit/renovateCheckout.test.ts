@@ -68,7 +68,7 @@ test.each(["checkout", "setup-node"])(
         verifyPromotionWorkflow: true,
       };
       expect(() => stale.verifyPluginDistribution(options)).toThrow(
-        "close job steps must be checkout, Node 24 setup, and reconciliation only",
+        "close job steps must be checkout, Node 26 setup, and reconciliation only",
       );
       const updatedPath = join(fixture, "scripts/updated.mjs");
       await writeFile(

@@ -18,6 +18,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify Actions lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-actions-lock --pin "$(jq -r '.constraints.ghActionsLock' renovate.json)"
+          gh actions-lock --verify --no-narrow
+
       - name: Setup Node for packed config smoke
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:

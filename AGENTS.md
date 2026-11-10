@@ -18,6 +18,13 @@
 - `safe-chain bun run build`: build the library, CLI binary, and declaration files into `dist/`.
 - `safe-chain bun run format`: format the repository with Prettier.
 
+## GitHub Actions dependencies
+
+- Keep full-SHA `uses:` references and their version comments. Do not relax the privileged Plugin promotion verifier's reviewed pins.
+- After changing workflow action references, run `gh actions-lock --no-narrow` with the `ghActionsLock` version pinned in `renovate.json`, then run `gh actions-lock --verify --no-narrow`.
+- Commit `.github/workflows/actions.lock` together with the workflows and any matching verifier pin. Never edit the generated lockfile by hand or use `--accept-moved` in automation.
+- See `docs/actions-lockfile.md` for the update and review procedure.
+
 ## Coding Style & Naming Conventions
 
 - Use TypeScript ES modules with explicit `.js` import suffixes for local runtime imports.

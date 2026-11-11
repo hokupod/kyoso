@@ -7,10 +7,11 @@ import {
   PROTOCOL_VERSION,
   RequestError,
 } from "@agentclientprotocol/sdk/unstable";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 let initialized = false;
 const mode = process.env.FAKE_ACP_MODE ?? "happy";
+let manualAcknowledged = false;
 let receivedConfigOption: { configId: string; value: unknown } | undefined;
 
 if (process.env.FAKE_ACP_PID_FILE) {
@@ -52,7 +53,23 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
       sessionId: "fake-session",
     };
   })
-  .onRequest(methods.agent.session.setConfigOption, (ctx) => {
+  .onRequest(methods.agent.session.setMode, async (ctx) => {
+    recordSetupEvent(`mode-request:${ctx.params.modeId}`);
+    if (
+      ctx.params.sessionId !== "fake-session" ||
+      ctx.params.modeId !== "default" ||
+      process.env.FAKE_ACP_REJECT_MODE === "1"
+    ) {
+      throw RequestError.invalidRequest({ policy: "fake ACP mode rejected" });
+    }
+    await waitForSetupRelease(process.env.FAKE_ACP_MODE_RELEASE_FILE);
+    manualAcknowledged = true;
+    recordSetupEvent("mode-acknowledged");
+    return {};
+  })
+  .onRequest(methods.agent.session.setConfigOption, async (ctx) => {
+    recordSetupEvent("effort-request");
+    await waitForSetupRelease(process.env.FAKE_ACP_EFFORT_RELEASE_FILE);
     if (process.env.FAKE_ACP_REJECT_CONFIG_OPTION === "1") {
       throw RequestError.invalidRequest({
         policy: "fake ACP config option rejected",
@@ -65,6 +82,10 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     return { configOptions: [] };
   })
   .onRequest(methods.agent.session.prompt, async (ctx) => {
+    recordSetupEvent("prompt");
+    if (process.env.FAKE_ACP_REQUIRE_MANUAL === "1" && !manualAcknowledged) {
+      throw RequestError.invalidRequest({ policy: "Manual mode required" });
+    }
     const notifyMessageChunk = async (
       text: string,
       messageId: string,
@@ -432,4 +453,14 @@ function readCodexConfigMetadata(): {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function recordSetupEvent(event: string): void {
+  if (process.env.FAKE_ACP_SETUP_EVENTS_FILE) {
+    appendFileSync(process.env.FAKE_ACP_SETUP_EVENTS_FILE, `${event}\n`);
+  }
+}
+
+async function waitForSetupRelease(path: string | undefined): Promise<void> {
+  while (path && !existsSync(path)) await Bun.sleep(10);
 }

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Promote both Marketplace plugins to `0.7.32` and pin MCP and Skill fallbacks
+  to the published `@kyo-so/cli@0.16.23`.
+
 ## [0.16.23] - 2026-11-18
 
 ### Changed

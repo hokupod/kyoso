@@ -24,6 +24,8 @@ Kyoso does not apply code changes.
 
 All three review tools run the same pipeline: scan for secrets, snapshot the workspace read-only, run the reviewer ensemble in parallel over ACP, then aggregate findings, apply gates, and decide.
 
+Claude sessions preserve an existing `plan` or `default` (Manual) mode. Other modes must advertise `default` and acknowledge the switch before receiving a prompt; missing or unsupported mode information fails with `AGENT_MODE_UNAVAILABLE`. Manual mode still honors Claude's existing user allow rules. These checks do not sandbox native tools or replace operating-system isolation.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/hokupod/kyoso/main/docs/assets/kyoso-review-flow.en.svg" alt="Kyo-so review execution flow, from MCP/CLI request through secret scan, snapshot, ensemble review, aggregation, gates, and final decision" width="640">
 </p>

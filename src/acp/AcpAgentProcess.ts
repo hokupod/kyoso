@@ -424,7 +424,10 @@ async function runSubprocessAgent(
           rawText: stdout,
           startedAt,
           completedAt: new Date().toISOString(),
-          error: buildAgentFailure(failureText, "Agent process failed."),
+          error:
+            error instanceof AcpModeError
+              ? { code: "AGENT_MODE_UNAVAILABLE", message: error.message }
+              : buildAgentFailure(failureText, "Agent process failed."),
         });
       })
       .finally(() => {
@@ -548,11 +551,29 @@ async function runAcpClientWorkflow(
         throwIfAborted(input.signal);
         abortController.signal.throwIfAborted();
         if (input.agent === "claude") {
-          await ctx.request(
-            methods.agent.session.setMode,
-            { sessionId: session.sessionId, modeId: "default" },
-            { cancellationSignal: abortController.signal },
-          );
+          const modes = session.modes;
+          if (
+            modes?.currentModeId !== "plan" &&
+            modes?.currentModeId !== "default"
+          ) {
+            if (!modes?.availableModes.some((mode) => mode.id === "default")) {
+              throw new AcpModeError(
+                "Claude adapter did not report a supported plan/default mode or an available default mode.",
+              );
+            }
+            try {
+              await ctx.request(
+                methods.agent.session.setMode,
+                { sessionId: session.sessionId, modeId: "default" },
+                { cancellationSignal: abortController.signal },
+              );
+            } catch (error) {
+              if (abortController.signal.aborted) throw error;
+              throw new AcpModeError(
+                "Claude adapter rejected the required default mode.",
+              );
+            }
+          }
         }
         const warnings: string[] = [];
         if (configOption) {
@@ -1146,3 +1167,5 @@ function stringifyErrorData(data: unknown): string {
     return String(data);
   }
 }
+
+class AcpModeError extends Error {}

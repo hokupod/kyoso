@@ -569,6 +569,55 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     expect(startEvents).toBe(0);
   });
 
+  test.each(["plan", "default"])(
+    "preserves existing Claude %s mode",
+    async (mode) => {
+      const cwd = await fakeWorkspace();
+      const events = join(cwd, "setup-events");
+      const manager = new SubprocessAcpAgentManager(
+        fakeAcpConfig(
+          "happy",
+          {
+            FAKE_ACP_CURRENT_MODE: mode,
+            FAKE_ACP_REJECT_MODE: "1",
+            FAKE_ACP_SETUP_EVENTS_FILE: events,
+          },
+          { agent: "claude" },
+        ),
+      );
+      expect(
+        (await manager.runAgent(agentInput(cwd, { agent: "claude" }))).status,
+      ).toBe("completed");
+      expect(setupEvents(events)).toEqual(["prompt"]);
+    },
+  );
+
+  test.each(["missing", "unknown"])(
+    "rejects %s Claude mode without prompting",
+    async (mode) => {
+      const cwd = await fakeWorkspace();
+      const events = join(cwd, "setup-events");
+      const manager = new SubprocessAcpAgentManager(
+        fakeAcpConfig(
+          "happy",
+          {
+            FAKE_ACP_OMIT_MODES: mode === "missing" ? "1" : "0",
+            FAKE_ACP_CURRENT_MODE: "custom",
+            FAKE_ACP_AVAILABLE_MODES: "custom",
+            FAKE_ACP_SETUP_EVENTS_FILE: events,
+          },
+          { agent: "claude" },
+        ),
+      );
+      const result = await manager.runAgent(
+        agentInput(cwd, { agent: "claude" }),
+      );
+      expect(result.status).toBe("failed");
+      expect(result.error?.code).toBe("AGENT_MODE_UNAVAILABLE");
+      expect(setupEvents(events)).toEqual([]);
+    },
+  );
+
   test("manual mode acknowledgement precedes every Claude prompt", async () => {
     const cwd = await fakeWorkspace();
     const events = join(cwd, "setup-events");
@@ -617,6 +666,7 @@ describe("SubprocessAcpAgentManager ACP integration", () => {
     );
     const result = await manager.runAgent(agentInput(cwd, { agent: "claude" }));
     expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("AGENT_MODE_UNAVAILABLE");
     await waitFor(() => !isProcessAlive(Number(readFileSync(pidPath, "utf8"))));
     expect(setupEvents(events)).toEqual(["mode-request:default"]);
   });

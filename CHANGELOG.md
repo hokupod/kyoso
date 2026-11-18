@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update the ACP SDK to `2.4.0` and the pinned Codex ACP adapter to `2.6.0`
   and Claude ACP adapter to `0.101.0`. Each adapter follows its own CLI and
   SDK dependencies.
-- Select Claude's default permission mode before sending a prompt and preserve
-  cancellation checks around session setup.
+- Preserve Claude's existing Plan or Manual mode. Otherwise require an
+  advertised Manual mode and its acknowledgement before prompting. Unsupported
+  modes fail explicitly, and setup cancellation prevents prompts.
 - Support Node.js 26 and update the CI runtime accordingly.
 - Update Prettier to `3.10.1` and add the GitHub Actions dependency lockfile.
 - Update the CI supply-chain guard Safe Chain to `1.5.27`.

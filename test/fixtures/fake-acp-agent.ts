@@ -51,6 +51,18 @@ const app = agent({ name: "kyoso-fake-acp-agent" })
     }
     return {
       sessionId: "fake-session",
+      ...(process.env.FAKE_ACP_OMIT_MODES === "1"
+        ? {}
+        : {
+            modes: {
+              currentModeId: process.env.FAKE_ACP_CURRENT_MODE ?? "auto",
+              availableModes: (
+                process.env.FAKE_ACP_AVAILABLE_MODES ?? "auto,default,plan"
+              )
+                .split(",")
+                .map((id) => ({ id, name: id })),
+            },
+          }),
     };
   })
   .onRequest(methods.agent.session.setMode, async (ctx) => {

@@ -5,7 +5,7 @@
     "": {
       "name": "@kyoso/cli",
       "dependencies": {
-        "@agentclientprotocol/sdk": "2.7.0",
+        "@agentclientprotocol/sdk": "2.8.0",
         "@modelcontextprotocol/server": "2.4.0",
         "smol-toml": "1.9.1",
         "zod": "4.6.7",
@@ -19,7 +19,7 @@
     },
   },
   "packages": {
-    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@2.7.0", "", { "peerDependencies": { "@modelcontextprotocol/server": "^2.4.0", "zod": "^3.25.76 || ^4.0.0" }, "optionalPeers": ["@modelcontextprotocol/server"] }, "sha512-oXdQq0plWv3iOg01zJghNZRSuyWeMYxOgWIaSdwg1BZe2ZAC9LRhNDi023lNYxXq1zVIpQjIp8P6AfsxpvxF6g=="],
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@2.8.0", "", { "peerDependencies": { "@modelcontextprotocol/server": "^2.4.0", "zod": "^3.25.76 || ^4.0.0" }, "optionalPeers": ["@modelcontextprotocol/server"] }, "sha512-EjsvoRX8nEH2z3PAVI2ILsVXAefVcSlLPeXGjlQoFgkJE71F2J0Fj7N6oL/k7SnP0vY+9hmONPFz/K2zalnTiw=="],
 
     "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.4.0", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q=="],
 

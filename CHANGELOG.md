@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.24] - 2026-11-25
+
 ### Changed
 
+- Update the ACP SDK to `2.9.1` and the default Claude ACP adapter to
+  `0.107.3`. The default Codex ACP adapter remains at `2.6.0`.
+- Update the pinned Bun toolchain to `1.4.5`.
 - Promote both Marketplace plugins to `0.7.32` and pin MCP and Skill fallbacks
   to the published `@kyo-so/cli@0.16.23`.
 
